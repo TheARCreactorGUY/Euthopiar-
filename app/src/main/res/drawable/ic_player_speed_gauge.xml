@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <!-- Speedometer Gauge Outer Arc (240-degree sweep from bottom-left to bottom-right) -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M5.5,17.2C4.3,15.2 3.8,12.8 4.2,10.3C4.8,6.8 7.6,3.9 11.2,3.5C15.8,3.0 19.8,6.6 19.8,11.2C19.8,13.4 19.0,15.5 17.5,17.2"
+        android:strokeWidth="1.6"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round" />
+
+    <!-- Center Pivot Pin -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,14.5A1.5,1.5 0,1 1,12 11.5A1.5,1.5 0,1 1,12 14.5Z" />
+
+    <!-- Dynamic Speed Needle (Pointed up-right to 2 o'clock, high speed) -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M12.9,12.1L17.2,7.8"
+        android:strokeWidth="1.8"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round" />
+
+    <!-- Speed Ticks -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M7.2,7.8L8.2,8.8M12,4.8V6.2M16.8,7.8L15.8,8.8"
+        android:strokeWidth="1.4"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round" />
+
+    <!-- Wind / Motion Streaks Under Gauge -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M3.5,20.5H11.5M7.5,18.5H13.5"
+        android:strokeWidth="1.4"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round" />
+
+</vector>

@@ -1,0 +1,76 @@
+{
+  "rules": {
+    "Color(0x)": "Raw hex colors are forbidden. Use semantic tokens from ui/theme/Color.kt.",
+    "Color.(White|Black|Gray|Red)": "Raw Color constants are forbidden. Use TextPrimary, Background, Error, etc.",
+    "RoundedCornerShape()": "Raw shapes are forbidden. Use ShapeS, ShapeM, ShapeL, or ShapeFull from ui/theme/Shape.kt.",
+    "fontSize =": "Raw font sizes are forbidden. Use AppTypography styles from ui/theme/Type.kt.",
+    "n.sp": "Raw sp dimensions are forbidden. Use AppTypography styles from ui/theme/Type.kt.",
+    "MaterialTheme.typography": "Use AppTypography.* tokens directly instead of MaterialTheme.typography.",
+    "Toast.makeText": "Toasts are forbidden. Use AppSnackbarHost and AppSnackbar with optional Undo.",
+    "bouncyClickable": "Deprecated bouncyClickable is forbidden. Use Modifier.pressable instead.",
+    "deprecatedAliases": "Deprecated color aliases (VelvetBlack, PureWhite, etc.) are forbidden outside incognito.",
+    "clickableWithoutContentDescription": "Clickable elements must have an accessible contentDescription."
+  },
+  "allowlist": [
+    {
+      "file": "app/src/main/java/com/euthopiar/ui/player/SkipIntroOverlay.kt",
+      "pattern": "Color.White",
+      "reason": "Skip Intro 6-second perimeter countdown (protected by hard boundary: must remain unchanged)"
+    },
+    {
+      "file": "app/src/main/java/com/euthopiar/ui/player/SkipIntroOverlay.kt",
+      "pattern": "MaterialTheme.typography",
+      "reason": "Skip Intro 6-second perimeter countdown (protected by hard boundary: must remain unchanged)"
+    },
+    {
+      "file": "app/src/main/java/com/euthopiar/ui/player/PlayerScreen.kt",
+      "pattern": "fontSize = effectiveSize.sp",
+      "reason": "Dynamic subtitle user font size preview (user content, not UI chrome)"
+    },
+    {
+      "file": "app/src/main/java/com/euthopiar/ui/player/PlayerScreen.kt",
+      "pattern": "letterSpacing = 0.2.sp",
+      "reason": "Subtitle letter spacing in subtitle preview (user content, not UI chrome)"
+    },
+    {
+      "file": "app/src/main/java/com/euthopiar/ui/player/PlayerSidePanel.kt",
+      "pattern": "fontSize = subtitleSizeSp.sp",
+      "reason": "Dynamic subtitle user font size preview in player side panel (user content, not UI chrome)"
+    },
+    {
+      "file": "app/src/main/java/com/euthopiar/ui/player/CastPickerSheet.kt",
+      "pattern": "MaterialTheme.typography",
+      "reason": "Pending Phase 2.3 Cast sheet cleanup and Phase 3 Screen Polish pass"
+    },
+    {
+      "file": "app/src/main/java/com/euthopiar/ui/settings/PluginManagerScreen.kt",
+      "pattern": "MaterialTheme.typography",
+      "reason": "Pending Phase 3 Screen Polish pass (Plugin Manager screen)"
+    },
+    {
+      "file": "app/src/main/java/com/euthopiar/ui/search/InPluginSearchOverlay.kt",
+      "pattern": "MaterialTheme.typography",
+      "reason": "Pending Phase 3 Screen Polish pass (Search screen)"
+    },
+    {
+      "file": "app/src/main/java/com/euthopiar/ui/search/SearchScreen.kt",
+      "pattern": "MaterialTheme.typography",
+      "reason": "Pending Phase 3 Screen Polish pass (Search screen)"
+    },
+    {
+      "file": "app/src/main/java/com/euthopiar/ui/profile/ProfileManagementSheet.kt",
+      "pattern": "MaterialTheme.typography",
+      "reason": "Pending Phase 3 Screen Polish pass (Profile sheets)"
+    },
+    {
+      "file": "app/src/main/java/com/euthopiar/ui/profile/ProfileSelectorSheet.kt",
+      "pattern": "MaterialTheme.typography",
+      "reason": "Pending Phase 3 Screen Polish pass (Profile sheets)"
+    },
+    {
+      "file": "app/src/main/java/com/euthopiar/ui/library/LibraryScreen.kt",
+      "pattern": "MaterialTheme.typography",
+      "reason": "Pending Phase 3 Screen Polish pass (Library screen)"
+    }
+  ]
+}

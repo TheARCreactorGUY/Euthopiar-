@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Euthopiar</string>
+    <string name="download_channel_name">Downloads</string>
+    <string name="download_channel_description">Media download progress and status</string>
+
+    <!-- Error mapping strings (Phase 2.1) -->
+    <string name="error_offline_title">You\'re offline</string>
+    <string name="error_offline_hint">Check your connection and try again.</string>
+    <string name="error_source_failed_title">This source isn\'t working</string>
+    <string name="error_source_failed_hint">Try another source.</string>
+    <string name="error_no_sources_title">No sources yet</string>
+    <string name="error_no_sources_hint">Add a source to start watching.</string>
+    <string name="error_generic_title">Something went wrong</string>
+    <string name="error_generic_hint">Try again in a moment.</string>
+    <string name="error_no_results_title">No results</string>
+    <string name="error_no_results_query_title">No results for \"%1$s\"</string>
+    <string name="error_no_results_hint">Check the spelling or try another source.</string>
+
+    <!-- Actions -->
+    <string name="action_retry">Retry</string>
+    <string name="action_try_another_source">Try another source</string>
+    <string name="action_go_back">Go back</string>
+    <string name="action_add_source">Add source</string>
+    <string name="action_connect">Connect</string>
+    <string name="action_disconnect">Disconnect</string>
+    <string name="action_save">Save</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_done">Done</string>
+    <string name="action_clear">Clear</string>
+
+    <!-- Settings Sections -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_section_account">Account &amp; profiles</string>
+    <string name="settings_section_sources">Content sources</string>
+    <string name="settings_section_accounts">Connected accounts</string>
+    <string name="settings_section_playback">Playback</string>
+    <string name="settings_section_subtitles">Subtitles &amp; audio</string>
+    <string name="settings_section_downloads">Downloads &amp; storage</string>
+    <string name="settings_section_privacy">Privacy</string>
+    <string name="settings_section_network_privacy">Network &amp; privacy</string>
+    <string name="settings_section_advanced">Advanced preferences</string>
+    <string name="settings_section_about">About</string>
+
+    <!-- Settings Items -->
+    <string name="settings_sources_title">Sources</string>
+    <string name="settings_sources_subtitle">Add, update or remove sources</string>
+    <string name="settings_sources_active_count">%1$d active</string>
+    <string name="settings_active_source_title">Active source</string>
+    <string name="settings_active_source_subtitle">Default source used for catalog and search</string>
+    <string name="settings_trakt_title">Sync watch history</string>
+    <string name="settings_trakt_subtitle_connected">Connected as @%1$s</string>
+    <string name="settings_trakt_subtitle_disconnected">Sync watch progress and history</string>
+    <string name="settings_trakt_connected">Connected</string>
+    <string name="settings_trakt_not_connected">Not connected</string>
+    <string name="settings_trakt_auto_scrobble_title">Sync automatically</string>
+    <string name="settings_trakt_auto_scrobble_subtitle">Keep Trakt up to date as you watch</string>
+    <string name="settings_simkl_title">Simkl account</string>
+    <string name="settings_simkl_subtitle_connected">Connected to Simkl</string>
+    <string name="settings_simkl_subtitle_disconnected">Sync anime, TV shows, and movies to Simkl</string>
+    <string name="settings_simkl_auto_scrobble_title">Sync automatically</string>
+    <string name="settings_simkl_auto_scrobble_subtitle">Keep Simkl up to date as you watch</string>
+    <string name="settings_whats_new_title">What\'s new</string>
+    <string name="settings_whats_new_subtitle">Explore the latest features and improvements</string>
+    <string name="settings_debrid_title">Premium link services</string>
+    <string name="settings_debrid_subtitle">High-speed streaming links with Real-Debrid, AllDebrid, or TorBox</string>
+    <string name="settings_default_quality_title">Streaming quality</string>
+    <string name="settings_default_quality_subtitle">Preferred video resolution</string>
+    <string name="settings_autoplay_next_title">Auto-play next episode</string>
+    <string name="settings_autoplay_next_subtitle">Queue the next episode automatically</string>
+    <string name="settings_seek_interval_title">Double-tap seek interval</string>
+    <string name="settings_seek_interval_subtitle">Seconds to jump forward or backward</string>
+    <string name="settings_subtitle_size_title">Subtitle size</string>
+    <string name="settings_subtitle_color_title">Subtitle color</string>
+    <string name="settings_subtitle_preview_text">Preview subtitle text</string>
+    <string name="settings_wifi_only_title">Download on Wi-Fi only</string>
+    <string name="settings_wifi_only_subtitle">Conserve cellular mobile data</string>
+    <string name="settings_storage_cache_title">Storage &amp; cache</string>
+    <string name="settings_storage_cache_subtitle">Cached artwork and data: %1$s</string>
+    <string name="settings_clear_cache_action">Clear cache</string>
+    <string name="settings_doh_title">Secure DNS</string>
+    <string name="settings_doh_subtitle">Encrypted domain name resolution</string>
+    <string name="settings_extra_content_title">Additional sources</string>
+    <string name="settings_extra_content_subtitle">Show optional supplemental catalog sources</string>
+    <string name="settings_card_scale_title">Poster size</string>
+    <string name="settings_card_scale_subtitle">Scale size of media posters across catalog rows</string>
+
+    <!-- Cast & External Playback -->
+    <string name="cast_title">Cast &amp; external playback</string>
+    <string name="cast_subtitle">Stream to smart TVs or external video players</string>
+    <string name="cast_external_player_header">Open in external player</string>
+    <string name="cast_network_header">Cast to TV</string>
+    <string name="cast_searching_devices">Searching for devices…</string>
+    <string name="cast_no_devices_found">No devices found on this Wi-Fi network. Tap refresh to scan.</string>
+    <string name="cast_copy_stream_link">Copy video link</string>
+    <string name="cast_stream_link_copied">Video link copied to clipboard</string>
+
+    <!-- Player Controls -->
+    <string name="player_speed">Speed</string>
+    <string name="player_audio_subtitles">Audio &amp; subtitles</string>
+    <string name="player_settings">Settings</string>
+    <string name="player_next_episode">Next episode</string>
+    <string name="player_connecting">Connecting to stream…</string>
+    <string name="player_finding_source">Finding a source…</string>
+    <string name="player_starting">Starting…</string>
+    <string name="player_taking_longer">Taking longer than usual</string>
+    <string name="player_skip_recap">Skip recap</string>
+    <string name="player_skip_outro">Skip outro</string>
+    <string name="player_episodes">Episodes</string>
+    <string name="player_sources">Sources</string>
+    <string name="player_quality">Quality</string>
+    <string name="player_skip_intro">Skip intro</string>
+
+    <!-- Media Details -->
+    <string name="details_play">Play</string>
+    <string name="details_resume">Resume</string>
+    <string name="details_trailer">Trailer</string>
+    <string name="details_add_to_watchlist">Watchlist</string>
+    <string name="details_in_watchlist">In watchlist</string>
+    <string name="details_episodes">Episodes</string>
+    <string name="details_cast">Cast &amp; crew</string>
+    <string name="details_similar">Similar titles</string>
+    <string name="details_overview">Overview</string>
+
+    <!-- Home Screen -->
+    <string name="home_continue_watching">Continue watching</string>
+    <string name="home_trending">Trending now</string>
+    <string name="home_popular_movies">Popular movies</string>
+    <string name="home_popular_series">Popular series</string>
+    <string name="home_top_10">Top 10</string>
+
+    <!-- Navigation Bar Style -->
+    <string name="settings_navbar_style_title">Navigation bar style</string>
+    <string name="settings_navbar_style_subtitle">Choose docked edge-to-edge bar or floating pill</string>
+    <string name="settings_navbar_style_docked">Edge-to-edge bar</string>
+    <string name="settings_navbar_style_floating">Floating glass pill</string>
+
+    <!-- Accessibility -->
+    <string name="settings_section_accessibility">Accessibility</string>
+    <string name="settings_reduce_motion_title">Reduce motion</string>
+    <string name="settings_reduce_motion_subtitle">Minimize animations, carousels, and transitions across the app</string>
+</resources>

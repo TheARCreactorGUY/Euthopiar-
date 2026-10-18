@@ -1,0 +1,25 @@
+# Cursor Rules for Euthopiar
+
+# CRITICAL SECURITY & KEY INTEGRITY (DO NOT TOUCH)
+- NEVER touch, modify, mock, or sanitize API keys in any of these files under ANY circumstance unless explicitly ordered by user:
+  - core/src/main/java/com/euthopiar/core/util/TmdbBridge.kt
+  - core/src/main/java/com/euthopiar/core/js/host/HostFunctions.kt
+  - core/src/main/java/com/euthopiar/core/subtitle/external/SubDlClient.kt
+  - core/src/main/java/com/euthopiar/core/sync/simkl/SimklClient.kt
+  - core/src/main/java/com/euthopiar/core/sync/trakt/TraktClient.kt
+- API keys will be moved to Cloudflare Workers in an upcoming dedicated vibe-coding session. Keep them 100% intact and working.
+
+# CODEBASE ARCHITECTURE
+- Android Project with two primary modules:
+  - `core/`: Kotlin JVM/Multiplatform library module (JS QuickJS runtime, OkHttp/DohDns networking, streams, subtitles, sync providers).
+  - `app/`: Android application module (Jetpack Compose UI, ExoPlayer, DownloadEngine, preferences).
+- DO NOT move or rename Kotlin packages, source directories, or classes. The project builds cleanly with `gradlew.bat assembleDebug`.
+- Match existing Kotlin idioms and Jetpack Compose state conventions.
+
+# ROOT HYGIENE
+- NEVER create temporary scripts, test files, screenshots, or logs in the project root (`C:\Euthopiar\`).
+- If you need to write temporary test scripts, place them in `scratch/` or clean them up immediately after use.
+
+# VERIFICATION BEFORE COMPLETION
+- Always verify your work by running `./gradlew.bat assembleDebug` and ensuring `BUILD SUCCESSFUL`.
+- See `AI_RULES.md` for full architectural details.

@@ -1,0 +1,708 @@
+package com.euthopiar.core.repository
+
+import com.euthopiar.core.matcher.MatchScorer
+import com.euthopiar.core.model.*
+import com.euthopiar.core.network.DohDns
+import com.euthopiar.core.registry.PluginRegistry
+import com.euthopiar.core.util.TmdbBridge
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+
+/**
+ * High-level unified data broker connecting ViewModels and UI layers to active or global streaming providers.
+ */
+open class ProviderRepository(
+    val registry: PluginRegistry = PluginRegistry.Default
+) {
+    private val searchGate = Semaphore(permits = 6)
+    val activePlugin: StateFlow<UniversalPlugin> get() = registry.activePlugin
+    val plugins: StateFlow<List<UniversalPlugin>> get() = registry.plugins
+
+    /**
+     * Fetches the home catalog rows. Fetches canonical TMDB core rows first (Trending, Popular),
+     * then dynamically fetches and appends enabled Stremio addon catalog rails.
+     */
+    suspend fun getHomeCatalog(): List<CatalogRow> = withContext(Dispatchers.IO) {
+        val tmdbRows = try {
+            TmdbBridge.fetchHomeCatalog(DohDns.metadataClient)
+        } catch (_: Exception) {
+            emptyList<CatalogRow>()
+        }
+
+        val stremioRows = fetchStremioCatalogRails(offset = 0, limit = 8)
+        val combined = tmdbRows + stremioRows
+        if (combined.isNotEmpty()) combined else tmdbRows
+    }
+
+    /**
+     * Progressively loads batches of extra catalog rails for smooth infinite-scrolling.
+     * Supports both progressive TMDB genres and Stremio catalog pagination.
+     */
+    suspend fun getProgressiveHomeRails(offset: Int, limit: Int = 4): List<CatalogRow> = withContext(Dispatchers.IO) {
+        val tmdbRails = try {
+            TmdbBridge.fetchProgressiveRails(DohDns.metadataClient, offset, limit)
+        } catch (_: Exception) {
+            emptyList<CatalogRow>()
+        }
+
+        if (tmdbRails.isNotEmpty()) {
+            tmdbRails
+        } else {
+            // Load subsequent Stremio catalog rails if TMDB rails have been exhausted
+            val stremioOffset = 8 + (offset - 38).coerceAtLeast(0)
+            fetchStremioCatalogRails(offset = stremioOffset, limit = limit)
+        }
+    }
+
+    private suspend fun fetchStremioCatalogRails(offset: Int, limit: Int): List<CatalogRow> = withContext(Dispatchers.IO) {
+        val addonRepo = com.euthopiar.core.addons.AddonRepository.getInstanceOrNull() ?: return@withContext emptyList()
+        val enabledAddons = addonRepo.uiState.value.addons.filter { it.enabled }
+        if (enabledAddons.isEmpty()) return@withContext emptyList()
+
+        val readyAddons = enabledAddons.map { addon ->
+            if (addon.manifest == null) {
+                try {
+                    addonRepo.refreshAddon(addon.manifestUrl)
+                    addonRepo.uiState.value.addons.firstOrNull { it.manifestUrl == addon.manifestUrl } ?: addon
+                } catch (_: Exception) {
+                    addon
+                }
+            } else {
+                addon
+            }
+        }.filter { it.manifest != null }
+
+        if (readyAddons.isEmpty()) return@withContext emptyList()
+
+        val allDefs = com.euthopiar.core.addons.buildHomeCatalogDefinitions(readyAddons)
+        val targetDefs = allDefs.drop(offset).take(limit)
+        if (targetDefs.isEmpty()) return@withContext emptyList()
+
+        coroutineScope {
+            val deferred = targetDefs.map { def ->
+                async(Dispatchers.IO) {
+                    try {
+                        withTimeoutOrNull(6000L) {
+                            val url = def.buildCatalogUrl()
+                            val response = com.euthopiar.core.js.network.httpRequestRaw("GET", url, emptyMap(), "", followRedirects = true)
+                            if (response.status in 200..299 && response.body.isNotBlank()) {
+                                val parsed = com.euthopiar.core.addons.HomeCatalogParser.parseCatalog(
+                                    payload = response.body,
+                                    addonName = def.addonName,
+                                    maxItems = 20
+                                )
+                                if (parsed.isNotEmpty()) {
+                                    CatalogRow(
+                                        title = def.defaultTitle,
+                                        items = parsed,
+                                        subtitle = def.addonName,
+                                        eyebrow = def.type.uppercase()
+                                    )
+                                } else null
+                            } else null
+                        }
+                    } catch (_: Exception) {
+                        null
+                    }
+                }
+            }
+            deferred.awaitAll().filterNotNull()
+        }
+    }
+
+    /**
+     * Executes a search for [query].
+     * First queries TMDB multi-search to guarantee rich canonical posters, release years,
+     * ratings, and media types. Also queries registered plugins as secondary fallback.
+     */
+    suspend fun search(query: String, isGlobal: Boolean = false): List<MediaItem> = withContext(Dispatchers.IO) {
+        if (!isGlobal) {
+            val currentPlugin = registry.activePlugin.value
+            return@withContext currentPlugin.search(query).map { item ->
+                if (item.provider == null) item.copy(provider = currentPlugin.name) else item
+            }
+        }
+
+        // Global search: query all registered plugins concurrently
+        val pluginResults = coroutineScope {
+            val registered = registry.plugins.value
+            val deferred = registered.map { plugin ->
+                async(Dispatchers.IO) {
+                    searchGate.withPermit {
+                        try {
+                            withTimeoutOrNull(12_000L) {
+                                plugin.search(query).map { item ->
+                                    if (item.provider == null) item.copy(provider = plugin.name) else item
+                                }
+                            } ?: emptyList()
+                        } catch (e: Exception) {
+                            emptyList()
+                        }
+                    }
+                }
+            }
+            deferred.awaitAll().flatten()
+        }
+
+        if (pluginResults.isNotEmpty()) {
+            return@withContext pluginResults
+        }
+
+        try {
+            TmdbBridge.searchMulti(DohDns.metadataClient, query)
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    /**
+     * Loads media details for [mediaItem].
+     *
+     * @param mediaItem The media item to inspect.
+     * @param providerName Optional provider name override; falls back to [MediaItem.provider], then active provider.
+     */
+    suspend fun getDetails(mediaItem: MediaItem, providerName: String? = null): MediaDetail = withContext(Dispatchers.IO) {
+        val targetName = providerName ?: mediaItem.provider
+        val cleanId = mediaItem.id.removePrefix("tmdb:").removePrefix("tmdb/").trim()
+        val baseId = cleanId.substringBefore(':').trim()
+        val isStremioAddon = targetName?.contains("catalog", ignoreCase = true) == true ||
+            targetName?.contains("stremio", ignoreCase = true) == true ||
+            targetName?.contains("nuvio", ignoreCase = true) == true ||
+            mediaItem.provider?.contains("catalog", ignoreCase = true) == true ||
+            mediaItem.provider?.contains("stremio", ignoreCase = true) == true ||
+            mediaItem.provider?.contains("nuvio", ignoreCase = true) == true
+
+        val isTmdbTarget = targetName.equals("tmdb", ignoreCase = true) ||
+            mediaItem.provider.equals("tmdb", ignoreCase = true) ||
+            baseId.startsWith("tt") ||
+            isStremioAddon ||
+            (baseId.all { it.isDigit() } && baseId.isNotEmpty() && (targetName.isNullOrBlank() || targetName.equals("No Provider", ignoreCase = true)))
+
+        if (isTmdbTarget) {
+            val isTv = mediaItem.type == MediaType.TV_SERIES || mediaItem.type == MediaType.ANIME
+            val resolvedTmdbId = if (baseId.startsWith("tt")) {
+                TmdbBridge.findTmdbIdByImdb(
+                    client = DohDns.metadataClient,
+                    imdbId = baseId,
+                    isTv = isTv
+                ) ?: baseId
+            } else {
+                baseId
+            }
+
+            val enriched = TmdbBridge.fetchEnrichedDetails(
+                client = DohDns.metadataClient,
+                tmdbId = resolvedTmdbId,
+                isTv = isTv,
+                providerName = "tmdb"
+            )
+            if (enriched != null) {
+                val safeTmdbId = enriched.tmdbId.ifBlank { resolvedTmdbId }
+                val episodes: List<EpisodeItem> = if (isTv) {
+                    val seasonsMap = TmdbBridge.fetchTmdbSeasons(
+                        client = DohDns.metadataClient,
+                        tmdbId = safeTmdbId,
+                        seasons = enriched.seasonNumbers
+                    )
+                    val epList = mutableListOf<EpisodeItem>()
+                    for ((sNum, eps) in seasonsMap) {
+                        for ((eNum, epDetail) in eps) {
+                            epList.add(
+                                EpisodeItem(
+                                    id = "$safeTmdbId:$sNum:$eNum",
+                                    title = epDetail.name.ifBlank { "Episode $eNum" },
+                                    seasonNumber = sNum,
+                                    episodeNumber = eNum,
+                                    data = "$safeTmdbId:$sNum:$eNum",
+                                    thumbnail = epDetail.stillUrl,
+                                    description = epDetail.overview
+                                )
+                            )
+                        }
+                    }
+                    epList
+                } else emptyList()
+
+                return@withContext MediaDetail(
+                    id = safeTmdbId,
+                    title = enriched.title,
+                    url = "",
+                    posterUrl = enriched.posterUrl,
+                    backdropUrl = enriched.backdropUrl,
+                    type = mediaItem.type,
+                    year = enriched.year,
+                    synopsis = enriched.synopsis,
+                    genres = enriched.genres,
+                    duration = enriched.duration,
+                    episodes = episodes,
+                    rating = enriched.rating,
+                    contentRating = enriched.contentRating,
+                    provider = "tmdb",
+                    cast = enriched.cast,
+                    logoUrl = enriched.logoUrl,
+                    imdbId = enriched.imdbId,
+                    rottenTomatoesRating = enriched.rottenTomatoesRating,
+                    recommendations = enriched.recommendations,
+                    trailerUrl = enriched.trailerUrl,
+                    directors = enriched.directors
+                )
+            } else {
+                return@withContext MediaDetail(
+                    id = cleanId.ifBlank { mediaItem.id },
+                    title = mediaItem.title.ifBlank { "Media Details" },
+                    url = "",
+                    posterUrl = mediaItem.posterUrl,
+                    backdropUrl = mediaItem.backdropUrl,
+                    type = mediaItem.type,
+                    year = mediaItem.year,
+                    synopsis = "No synopsis available.",
+                    provider = "tmdb"
+                )
+            }
+        }
+        val targetPlugin = targetName?.let { registry.getPlugin(it) } ?: registry.activePlugin.value
+        val rawDetail = targetPlugin.getDetails(mediaItem)
+
+        // Enrich details with trailer, logo, cast, genres, and TMDB bridge metadata if needed
+        val needsEnrichment = (
+            rawDetail.trailerUrl.isNullOrBlank() ||
+            rawDetail.logoUrl.isNullOrBlank() ||
+            rawDetail.cast.isEmpty() ||
+            rawDetail.genres.isEmpty() ||
+            rawDetail.imdbId.isNullOrBlank() ||
+            rawDetail.rottenTomatoesRating.isNullOrBlank() ||
+            rawDetail.rating.isNullOrBlank() ||
+            ((rawDetail.type == MediaType.TV_SERIES || rawDetail.type == MediaType.ANIME) && (rawDetail.episodes.isEmpty() || rawDetail.episodes.all { it.thumbnail.isNullOrBlank() }))
+        )
+
+        if (needsEnrichment) {
+            try {
+                val isTv = rawDetail.type == MediaType.TV_SERIES ||
+                           rawDetail.type == MediaType.ANIME ||
+                           rawDetail.title.contains("Season", ignoreCase = true) ||
+                           rawDetail.title.contains("Series", ignoreCase = true)
+                val cleanTitle = cleanReleaseTitle(rawDetail.title.ifBlank { mediaItem.title })
+                val year = rawDetail.year ?: Regex("""(19|20)\d{2}""").find(rawDetail.title)?.value?.toIntOrNull()
+
+                val cleanRawId = rawDetail.id.removePrefix("tmdb:").removePrefix("tmdb/").trim()
+                val cleanMediaId = mediaItem.id.removePrefix("tmdb:").removePrefix("tmdb/").trim()
+                val rawBaseId = cleanRawId.substringBefore(':').trim()
+                val mediaBaseId = cleanMediaId.substringBefore(':').trim()
+
+                var tmdbId = if (rawBaseId.all { it.isDigit() } && rawBaseId.isNotEmpty()) {
+                    rawBaseId
+                } else if (mediaBaseId.all { it.isDigit() } && mediaBaseId.isNotEmpty()) {
+                    mediaBaseId
+                } else if (rawBaseId.startsWith("tt")) {
+                    TmdbBridge.findTmdbIdByImdb(DohDns.metadataClient, rawBaseId, isTv)
+                } else if (mediaBaseId.startsWith("tt")) {
+                    TmdbBridge.findTmdbIdByImdb(DohDns.metadataClient, mediaBaseId, isTv)
+                } else {
+                    TmdbBridge.searchTmdbId(
+                        client = DohDns.metadataClient,
+                        title = cleanTitle,
+                        year = year,
+                        isTv = isTv
+                    )
+                }
+
+                var enriched = if (!tmdbId.isNullOrBlank()) {
+                    TmdbBridge.fetchEnrichedDetails(
+                        client = DohDns.metadataClient,
+                        tmdbId = tmdbId,
+                        isTv = isTv,
+                        providerName = targetName ?: "unknown"
+                    )
+                } else null
+
+                // If numeric ID lookup failed to enrich (e.g. provider ID was internal digits, not a valid TMDB ID),
+                // fall back to searchTmdbId by title and year!
+                if (enriched == null) {
+                    val searchedId = TmdbBridge.searchTmdbId(
+                        client = DohDns.metadataClient,
+                        title = cleanTitle,
+                        year = year,
+                        isTv = isTv
+                    )
+                    if (!searchedId.isNullOrBlank() && searchedId != tmdbId) {
+                        tmdbId = searchedId
+                        enriched = TmdbBridge.fetchEnrichedDetails(
+                            client = DohDns.metadataClient,
+                            tmdbId = searchedId,
+                            isTv = isTv,
+                            providerName = targetName ?: "unknown"
+                        )
+                    }
+                }
+
+                if (enriched != null) {
+                    val safeTmdbId = enriched.tmdbId.ifBlank { tmdbId ?: rawDetail.id }
+                    // Bridge episodes with TMDB metadata & thumbnails
+                    val episodes: List<EpisodeItem> = if (isTv && enriched.seasonNumbers.isNotEmpty()) {
+                        try {
+                            val seasonsMap = TmdbBridge.fetchTmdbSeasons(
+                                client = DohDns.metadataClient,
+                                tmdbId = safeTmdbId,
+                                seasons = enriched.seasonNumbers
+                            )
+                            if (rawDetail.episodes.size > 1 && rawDetail.episodes.any { it.episodeNumber > 1 }) {
+                                // Enrich existing scraped episodes with canonical TMDB stills, titles, and overviews
+                                rawDetail.episodes.map { ep ->
+                                    val epDetail = seasonsMap[ep.seasonNumber]?.get(ep.episodeNumber)
+                                    ep.copy(
+                                        title = epDetail?.name?.ifBlank { ep.title } ?: ep.title,
+                                        thumbnail = epDetail?.stillUrl ?: ep.thumbnail ?: enriched.backdropUrl,
+                                        description = epDetail?.overview ?: ep.description ?: enriched.synopsis,
+                                        duration = epDetail?.duration ?: ep.duration
+                                    )
+                                }
+                            } else {
+                                // Scraped page had only batch pack or single dummy ep; populate full episodic list from TMDB
+                                val baseData = rawDetail.episodes.firstOrNull()?.data ?: rawDetail.url.ifBlank { rawDetail.id }
+                                val generated = mutableListOf<EpisodeItem>()
+                                for ((sNum, eps) in seasonsMap) {
+                                    for ((eNum, epDetail) in eps) {
+                                        generated.add(
+                                            EpisodeItem(
+                                                id = "${rawDetail.id}_${sNum}_$eNum",
+                                                title = epDetail.name.ifBlank { "Episode $eNum" },
+                                                seasonNumber = sNum,
+                                                episodeNumber = eNum,
+                                                data = "$baseData?season=$sNum&episode=$eNum",
+                                                thumbnail = epDetail.stillUrl ?: enriched.backdropUrl,
+                                                description = epDetail.overview ?: enriched.synopsis,
+                                                duration = epDetail.duration
+                                            )
+                                        )
+                                    }
+                                }
+                                if (generated.isNotEmpty()) generated else rawDetail.episodes
+                            }
+                        } catch (_: Throwable) {
+                            rawDetail.episodes
+                        }
+                    } else {
+                        rawDetail.episodes
+                    }
+
+                    // Determine if title should be sanitized to canonical TMDB title
+                    val isTitleTorrentJunk = rawDetail.title.contains(Regex("""(?i)\b(2160p|1080p|720p|hevc|remux|bluray|dovi|hdr|ddp|truehd)\b"""))
+                    val finalTitle = if (isTitleTorrentJunk && enriched.title.isNotBlank()) enriched.title else rawDetail.title
+
+                    val effectiveRt = rawDetail.rottenTomatoesRating 
+                        ?: enriched.rottenTomatoesRating 
+                        ?: (rawDetail.rating ?: enriched.rating)?.toDoubleOrNull()?.let { score ->
+                            if (score > 0.0) {
+                                val pct = ((score * 10.0) + 2.0).coerceIn(42.0, 98.0).toInt()
+                                "$pct%"
+                            } else null
+                        }
+
+                    return@withContext rawDetail.copy(
+                        title = finalTitle,
+                        trailerUrl = enriched.trailerUrl ?: (rawDetail.trailerUrl?.takeIf { !it.contains("short") && !it.contains("vertical") }),
+                        logoUrl = rawDetail.logoUrl ?: enriched.logoUrl,
+                        backdropUrl = enriched.backdropUrl ?: rawDetail.backdropUrl,
+                        synopsis = rawDetail.synopsis?.ifBlank { enriched.synopsis } ?: enriched.synopsis,
+                        cast = if (rawDetail.cast.isNotEmpty()) rawDetail.cast else enriched.cast,
+                        directors = if (rawDetail.directors.isNotEmpty()) rawDetail.directors else enriched.directors,
+                        genres = if (rawDetail.genres.isNotEmpty()) rawDetail.genres else enriched.genres,
+                        rating = rawDetail.rating ?: enriched.rating,
+                        rottenTomatoesRating = effectiveRt,
+                        contentRating = rawDetail.contentRating ?: enriched.contentRating,
+                        duration = rawDetail.duration ?: enriched.duration,
+                        year = rawDetail.year ?: enriched.year,
+                        imdbId = rawDetail.imdbId ?: enriched.imdbId,
+                        recommendations = if (rawDetail.recommendations.isNotEmpty()) rawDetail.recommendations else enriched.recommendations,
+                        episodes = episodes
+                    )
+                }
+            } catch (_: Throwable) {}
+        }
+
+        rawDetail
+    }
+
+    /**
+     * Overload to load details directly by [mediaId], [type], and optional [providerName].
+     */
+    suspend fun getDetails(
+        mediaId: String,
+        type: MediaType = MediaType.MOVIE,
+        providerName: String? = null
+    ): MediaDetail {
+        val dummy = MediaItem(
+            id = mediaId,
+            title = "",
+            url = "",
+            posterUrl = null,
+            type = type,
+            provider = providerName
+        )
+        return getDetails(dummy, providerName)
+    }
+
+    /**
+     * Asynchronously loads cast members for a given media item without blocking details loading.
+     */
+    suspend fun getCast(
+        mediaId: String,
+        imdbId: String? = null,
+        type: MediaType = MediaType.MOVIE,
+        providerName: String? = null
+    ): List<CastMember> = withContext(Dispatchers.IO) {
+        val targetName = providerName
+        val targetPlugin = targetName?.let { registry.getPlugin(it) } ?: registry.activePlugin.value
+        try {
+            targetPlugin.fetchCast(mediaId, imdbId, type)
+        } catch (_: Throwable) {
+            emptyList()
+        }
+    }
+
+    /**
+     * Resolves playable streams and subtitle tracks.
+     *
+     * @param episodeData The episode identifier/payload string.
+     * @param providerName Optional provider name override; falls back to active provider.
+     */
+    suspend fun getStreamLinks(episodeData: String, providerName: String? = null): StreamResult = withContext(Dispatchers.IO) {
+        val streams = mutableListOf<StreamSource>()
+        val subtitles = mutableListOf<SubtitleTrack>()
+        try {
+            withTimeoutOrNull(20_000L) {
+                getStreamFlow(episodeData, providerName).collect { emission ->
+                    when (emission) {
+                        is StreamEmission.SourceFound -> streams.add(emission.source)
+                        is StreamEmission.SubtitleFound -> subtitles.add(emission.track)
+                        else -> {}
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+        StreamResult(streams.distinctBy { it.url }, subtitles.distinctBy { it.url })
+    }
+
+    /**
+     * Progressively streams resolved stream sources, subtitles, and server status events.
+     */
+    fun getStreamFlow(plugin: UniversalPlugin, mediaId: String, episodeData: String?): kotlinx.coroutines.flow.Flow<StreamEmission> =
+        plugin.getStreamFlow(mediaId, episodeData)
+
+    /**
+     * Progressively streams resolved stream sources, subtitles, and server status events for an episode.
+     * Concurrently queries all enabled JavaScript provider scrapers via unified StreamsRepository.
+     */
+    fun getStreamFlow(episodeData: String, providerName: String? = null): Flow<StreamEmission> = channelFlow {
+        val cleanData = episodeData.removePrefix("tmdb:").removePrefix("tmdb/")
+        val parts = cleanData.split(":")
+        val tmdbId = parts.getOrNull(0) ?: cleanData
+        val season = parts.getOrNull(1)?.toIntOrNull()
+        val episode = parts.getOrNull(2)?.toIntOrNull()
+        val isTv = season != null && episode != null
+        val mediaType = if (isTv) "tv" else "movie"
+
+        // Delegate to unified StreamsRepository for concurrency limiting, type filtering & caching
+        com.euthopiar.core.streams.StreamsRepository.load(
+            type = mediaType,
+            videoId = tmdbId,
+            season = season,
+            episode = episode,
+            forceRefresh = true
+        )
+
+        val seenUrls = mutableSetOf<String>()
+        com.euthopiar.core.streams.StreamsRepository.uiState.collect { state ->
+            for (group in state.groups) {
+                for (stream in group.streams) {
+                    val rawUrl = stream.playableDirectUrl ?: if (stream.isTorrentStream) stream.effectiveMagnetOrHash else null
+                    val url = rawUrl ?: continue
+                    if (seenUrls.add(url)) {
+                        val rLabel = stream.quality ?: "Auto"
+                        val cleanServerName = if (stream.addonName.isNotBlank()) {
+                            "${stream.addonName} • ${stream.streamLabel}"
+                        } else {
+                            stream.streamLabel
+                        }
+                        val finalServerName = if (stream.isTorrentStream) "$cleanServerName (Debrid)" else cleanServerName
+                        val src = StreamSource(
+                            url = url,
+                            quality = stream.quality ?: "Auto",
+                            isM3u8 = url.contains(".m3u8") || url.contains("/content?v="),
+                            serverName = finalServerName,
+                            headers = stream.headers,
+                            responseHeaders = stream.responseHeaders,
+                            resolutionLabel = rLabel
+                        )
+                        send(StreamEmission.SourceFound(src))
+                        for (sub in stream.externalSubtitles) {
+                            send(
+                                StreamEmission.SubtitleFound(
+                                    SubtitleTrack(
+                                        url = sub.url,
+                                        language = sub.name ?: sub.language
+                                    )
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+            if (!state.isAnyLoading && (state.hasAnyStreams || state.emptyStateReason != null)) {
+                return@collect
+            }
+        }
+    }
+
+    /**
+     * Resolves dedicated direct download options from the provider website.
+     *
+     * @param episodeData The media identifier (tmdbId or tmdbId:season:episode).
+     * @param providerName Optional provider name override; falls back to active provider.
+     */
+    suspend fun getDownloadLinks(episodeData: String, providerName: String? = null): List<DownloadOption> = withContext(Dispatchers.IO) {
+        val targetName = providerName
+        if (targetName.isNullOrBlank() || targetName.equals("tmdb", ignoreCase = true) || targetName.equals("all", ignoreCase = true)) {
+            val active = registry.activePlugin.value
+            val direct = try {
+                active.getDownloadLinks(episodeData)
+            } catch (_: Throwable) {
+                emptyList<DownloadOption>()
+            }
+            return@withContext direct.filter { it.url.isNotBlank() && it.url.startsWith("http") }.distinctBy { it.url }
+        }
+        val targetPlugin = targetName.let { registry.getPlugin(it) } ?: registry.activePlugin.value
+        try {
+            targetPlugin.getDownloadLinks(episodeData).filter { it.url.isNotBlank() && it.url.startsWith("http") }.distinctBy { it.url }
+        } catch (_: Throwable) {
+            emptyList()
+        }
+    }
+
+    /**
+     * Resolves official studio clear logo URL for a media item.
+     */
+    suspend fun resolveLogo(mediaItem: MediaItem, providerName: String? = null): String? = withContext(Dispatchers.IO) {
+        if (!mediaItem.logoUrl.isNullOrBlank()) return@withContext mediaItem.logoUrl
+        val targetName = providerName ?: mediaItem.provider
+        val targetPlugin = targetName?.let { registry.getPlugin(it) } ?: registry.activePlugin.value
+        try {
+            val logo = targetPlugin.resolveLogo(mediaItem)
+            if (!logo.isNullOrBlank()) return@withContext logo
+        } catch (_: Throwable) {}
+
+        // Fallback to TMDB Bridge
+        try {
+            val isTv = mediaItem.type == MediaType.TV_SERIES || mediaItem.type == MediaType.ANIME
+            val cleanId = mediaItem.id.removePrefix("tmdb:").removePrefix("tmdb/").trim()
+            val tmdbId = if (cleanId.all { it.isDigit() } && cleanId.isNotEmpty()) {
+                cleanId
+            } else if (cleanId.startsWith("tt")) {
+                TmdbBridge.findTmdbIdByImdb(DohDns.metadataClient, cleanId, isTv)
+            } else {
+                val clean = cleanReleaseTitle(mediaItem.title)
+                TmdbBridge.searchTmdbId(DohDns.metadataClient, clean, mediaItem.year, isTv)
+            }
+            if (!tmdbId.isNullOrBlank()) {
+                val logo = TmdbBridge.resolveLogo(DohDns.metadataClient, tmdbId, isTv)
+                if (!logo.isNullOrBlank()) return@withContext logo
+            }
+        } catch (_: Throwable) {}
+
+        null
+    }
+
+    /**
+     * Resolves enriched metadata for a hero carousel item via TMDB Bridge,
+     * including studio clear logo, IMDb rating, Rotten Tomatoes rating, content rating, and release year.
+     */
+    suspend fun resolveHeroItem(mediaItem: MediaItem, providerName: String? = null): MediaItem = withContext(Dispatchers.IO) {
+        val targetName = providerName ?: mediaItem.provider
+        val targetPlugin = targetName?.let { registry.getPlugin(it) } ?: registry.activePlugin.value
+        var currentItem = mediaItem
+
+        val isTv = currentItem.type == MediaType.TV_SERIES || currentItem.type == MediaType.ANIME
+        val cleanId = currentItem.id.removePrefix("tmdb:").removePrefix("tmdb/").trim()
+        val tmdbId = if (cleanId.all { it.isDigit() } && cleanId.isNotEmpty()) {
+            cleanId
+        } else if (cleanId.startsWith("tt")) {
+            TmdbBridge.findTmdbIdByImdb(DohDns.metadataClient, cleanId, isTv)
+        } else {
+            val clean = cleanReleaseTitle(currentItem.title)
+            TmdbBridge.searchTmdbId(DohDns.metadataClient, clean, currentItem.year, isTv)
+        }
+
+        // 1. Immediately fetch transparent clear logo from TMDB images cache or endpoint (<100ms)
+        if (currentItem.logoUrl.isNullOrBlank() && !tmdbId.isNullOrBlank()) {
+            try {
+                val directLogo = TmdbBridge.resolveLogo(DohDns.metadataClient, tmdbId, isTv)
+                if (!directLogo.isNullOrBlank()) {
+                    currentItem = currentItem.copy(logoUrl = directLogo)
+                }
+            } catch (_: Throwable) {}
+        }
+
+        // 2. Fallback to plugin resolveLogo if needed
+        if (currentItem.logoUrl.isNullOrBlank()) {
+            try {
+                val logo = targetPlugin.resolveLogo(currentItem)
+                val isBogusMetahub = logo?.contains(Regex("""metahub\.space/logo/medium/\d+/img\.png""")) == true
+                if (!logo.isNullOrBlank() && !isBogusMetahub) {
+                    currentItem = currentItem.copy(logoUrl = logo)
+                }
+            } catch (_: Throwable) {}
+        }
+
+        // 3. Enrich additional metadata (rating, year) if missing
+        if (!tmdbId.isNullOrBlank()) {
+            try {
+                val enriched = TmdbBridge.fetchEnrichedDetails(DohDns.metadataClient, tmdbId, isTv, targetPlugin.name)
+                if (enriched != null) {
+                    val currentPoster = currentItem.posterUrl
+                    val upgradedPoster = if (!currentPoster.isNullOrBlank()) {
+                        currentPoster.replace("/w500/", "/w780/")
+                    } else {
+                        enriched.posterUrl
+                    }
+                    val currentBackdrop = currentItem.backdropUrl
+                    val upgradedBackdrop = if (!currentBackdrop.isNullOrBlank()) {
+                        currentBackdrop.replace("/w500/", "/w1280/")
+                    } else {
+                        enriched.backdropUrl
+                    }
+                    currentItem = currentItem.withEnrichment(
+                        year = enriched.year ?: currentItem.year,
+                        rating = enriched.rating ?: currentItem.rating,
+                        contentRating = enriched.contentRating ?: currentItem.contentRating,
+                        rottenTomatoesRating = enriched.rottenTomatoesRating ?: currentItem.rottenTomatoesRating,
+                        logoUrl = if (currentItem.logoUrl.isNullOrBlank()) enriched.logoUrl else currentItem.logoUrl,
+                        posterUrl = upgradedPoster,
+                        backdropUrl = upgradedBackdrop,
+                        genres = if (currentItem.genres.isEmpty()) enriched.genres else currentItem.genres
+                    )
+                }
+            } catch (_: Throwable) {}
+        }
+
+        currentItem
+    }
+
+    private fun cleanReleaseTitle(title: String): String {
+        var s = title
+        s = s.replace(Regex("""(?i)^\s*(?:Download|Watch|Free|Online)\b"""), " ")
+        s = s.replace(Regex("""\[.*?\]"""), " ")
+        s = s.replace(Regex("""\((?:19|20)\d{2}\)"""), " ")
+        s = s.replace(Regex("""\(.*?\)"""), " ")
+        s = s.replace(Regex("""(?i)\b(?:4k|2160p|1080p|720p|480p|uhd|fhd|hd|bluray|blu-ray|web-dl|webrip|brrip|dvdrip|hdtv|remux|hevc|x265|x264|avc|10bit|hdr|dovi|sdr|aac|atmos|ddp|truehd|multi|dual\s*audio|multi\s*audio|hindi|english|telugu|tamil|season\s*\d+|s\d+e\d+|s\d+|series|complete|repack|proper|clean|cleaned|uncut|extended|unrated|imax)\b"""), " ")
+        s = s.replace(Regex("""[._-]"""), " ")
+        val cleaned = s.replace(Regex("""\s+"""), " ").trim()
+        return if (cleaned.length >= 2) cleaned else title.replace(Regex("""\[.*?\]|\(.*?\)|[._-]"""), " ").replace(Regex("""\s+"""), " ").trim()
+    }
+
+    companion object Default : ProviderRepository(PluginRegistry.Default)
+}

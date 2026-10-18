@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <!-- TV Frame / Cabinet -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M5.5,7.5H18.5C19.6,7.5 20.5,8.4 20.5,9.5V18.5C20.5,19.6 19.6,20.5 18.5,20.5H5.5C4.4,20.5 3.5,19.6 3.5,18.5V9.5C3.5,8.4 4.4,7.5 5.5,7.5Z"
+        android:strokeWidth="1.6"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+
+    <!-- TV Screen Inner Border -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M6.2,10.2H14.5C15.0,10.2 15.5,10.7 15.5,11.2V16.8C15.5,17.3 15.0,17.8 14.5,17.8H6.2C5.7,17.8 5.2,17.3 5.2,16.8V11.2C5.2,10.7 5.7,10.2 6.2,10.2Z"
+        android:strokeWidth="1.2"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+
+    <!-- Centered Play Arrow Inside Screen -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M9.5,12.2L12.5,14.0L9.5,15.8Z" />
+
+    <!-- Right Control Panel Knobs -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M18.0,12.0A0.9,0.9 0,1 1,18.0 10.2A0.9,0.9 0,1 1,18.0 12.0Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M18.0,15.8A0.9,0.9 0,1 1,18.0 14.0A0.9,0.9 0,1 1,18.0 15.8Z" />
+
+    <!-- Rabbit Ear Antenna with Spark -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M9.0,3.8L11.5,7.5L14.0,3.8"
+        android:strokeWidth="1.4"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M8.2,3.0L9.0,3.8M14.0,3.8L14.8,3.0"
+        android:strokeWidth="1.2"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round" />
+
+</vector>

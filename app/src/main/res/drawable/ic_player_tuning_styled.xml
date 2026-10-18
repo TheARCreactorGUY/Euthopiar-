@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <!-- Vertical Slider 1 (Left) -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M6.5,4V20"
+        android:strokeWidth="1.6"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round" />
+    <!-- Slider 1 Knob (At y = 14) -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M6.5,15.5A2,2 0,1 1,6.5 11.5A2,2 0,1 1,6.5 15.5Z" />
+
+    <!-- Vertical Slider 2 (Middle) -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M12,4V20"
+        android:strokeWidth="1.6"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round" />
+    <!-- Slider 2 Knob (At y = 8) -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,10.0A2,2 0,1 1,12 6.0A2,2 0,1 1,12 10.0Z" />
+
+    <!-- Vertical Slider 3 (Right) -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M17.5,4V20"
+        android:strokeWidth="1.6"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round" />
+    <!-- Slider 3 Knob (At y = 16) -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M17.5,17.5A2,2 0,1 1,17.5 13.5A2,2 0,1 1,17.5 17.5Z" />
+
+    <!-- Energy Sound Sparks on Top -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M11.0,2.0L12.0,2.8M13.0,2.0L12.0,2.8"
+        android:strokeWidth="1.3"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round" />
+
+</vector>

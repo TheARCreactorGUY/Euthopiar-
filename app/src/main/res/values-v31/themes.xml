@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Euthopiar" parent="@android:style/Theme.Material.NoActionBar">
+        <!-- Cold start background: Pure Velvet Black (#0A0C0F) -->
+        <item name="android:windowBackground">@color/velvet_black</item>
+        <item name="android:colorBackground">@color/velvet_black</item>
+        <item name="android:statusBarColor">@color/velvet_black</item>
+        <item name="android:navigationBarColor">@color/velvet_black</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+
+        <!-- Android 12+ (API 31+) System Splash Screen override: eliminates grey flash -->
+        <item name="android:windowSplashScreenBackground">@color/velvet_black</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@android:color/transparent</item>
+        <item name="android:windowSplashScreenAnimationDuration">0</item>
+    </style>
+</resources>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Euthopiar" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/velvet_black</item>
+        <item name="android:colorBackground">@color/velvet_black</item>
+        <item name="android:statusBarColor">@color/velvet_black</item>
+        <item name="android:navigationBarColor">@color/velvet_black</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:windowDisablePreview">false</item>
+    </style>
+</resources>

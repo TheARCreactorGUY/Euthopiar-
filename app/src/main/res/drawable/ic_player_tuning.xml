@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <!-- Split Horizontal Slider Tracks -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M3,6H7M11,6H21M3,12H13M17,12H21M3,18H8M12,18H21"
+        android:strokeWidth="1.75"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+
+    <!-- Precision Circular Adjustment Knobs (r = 2.0) -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M9,4A2,2 0,1 1,9 8A2,2 0,1 1,9 4ZM15,10A2,2 0,1 1,15 14A2,2 0,1 1,15 10ZM10,16A2,2 0,1 1,10 20A2,2 0,1 1,10 16Z"
+        android:strokeWidth="1.75"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+
+</vector>

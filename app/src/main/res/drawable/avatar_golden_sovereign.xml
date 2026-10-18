@@ -1,0 +1,56 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="128dp"
+    android:height="128dp"
+    android:viewportWidth="128"
+    android:viewportHeight="128">
+
+    <!-- Background circle in deep velvet black -->
+    <path
+        android:pathData="M64,0 A64,64 0 1,0 64,128 A64,64 0 1,0 64,0 Z"
+        android:fillColor="#0A0C0F"/>
+
+    <path
+        android:pathData="M64,2 A62,62 0 1,0 64,126 A62,62 0 1,0 64,2 Z"
+        android:strokeColor="#26FFFFFF"
+        android:strokeWidth="1.5"/>
+
+    <!-- Golden Laurel Crown / Wreath -->
+    <path
+        android:pathData="M40,36 C42,28 52,24 64,24 C76,24 86,28 88,36"
+        android:strokeColor="#FFD700"
+        android:strokeWidth="2"/>
+    <path
+        android:pathData="M48,27 L44,22 M56,25 L54,19 M64,24 L64,18 M72,25 L74,19 M80,27 L84,22"
+        android:strokeColor="#FFD700"
+        android:strokeWidth="2"/>
+
+    <!-- Noble Human Profile Head -->
+    <path
+        android:pathData="M46,42 C46,28 82,28 82,42 C88,52 86,76 80,88 C74,94 54,94 48,88 C42,76 40,52 46,42 Z"
+        android:fillColor="#171A23"
+        android:strokeColor="#FFD700"
+        android:strokeWidth="1"/>
+
+    <!-- Refined Minimalist Face Silhouette -->
+    <path
+        android:pathData="M52,56 C56,54 62,54 66,56"
+        android:strokeColor="#80FFFFFF"
+        android:strokeWidth="1.2"/>
+    <path
+        android:pathData="M58,68 C62,70 66,70 70,68"
+        android:strokeColor="#FFD700"
+        android:strokeWidth="1.2"/>
+
+    <!-- Regal Toga / Obsidian Cloak with Golden Clasp -->
+    <path
+        android:pathData="M48,92 L80,92 L84,106 L44,106 Z"
+        android:fillColor="#11131A"/>
+    <path
+        android:pathData="M24,116 L46,102 L64,116 L82,102 L104,116 L114,128 L14,128 Z"
+        android:fillColor="#151822"
+        android:strokeColor="#40FFD700"
+        android:strokeWidth="1.2"/>
+    <path
+        android:pathData="M64,114 A3,3 0 1,0 64,120 A3,3 0 1,0 64,114 Z"
+        android:fillColor="#FFD700"/>
+</vector>
