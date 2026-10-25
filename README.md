@@ -38,6 +38,13 @@ https://raw.githubusercontent.com/TheARCreactorGUY/Plugins/main/manifest.json
 
 ---
 
+## 📱 Platform Availability
+
+| Platform | Status |
+|---|---|
+| 📱 **Android Smartphone App** | ✅ **Available now** — [Download](https://github.com/TheARCreactorGUY/Euthopiar-/releases/latest) |
+| 📺 **Android TV App** | 🚧 **Coming soon** — stay tuned! |
+
 ## 📖 What is Euthopiar?
 
 **Euthopiar** is a modern, Netflix-style Android app for discovering and watching **movies, TV series and anime**. It has a clean dark design, big cinematic posters, and a smooth, easy-to-use interface — so you can find something to watch in seconds.
