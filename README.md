@@ -97,9 +97,23 @@ The APK will be in `app/build/outputs/apk/debug/`.
 
 Euthopiar does not host or store any media. Content is provided by third-party plugins/sources added by the user. Please respect copyright laws in your country.
 
-## ⭐ Support
+## ☕ Support the Project
 
-If you like the project, give it a **star ⭐** on GitHub — it really helps!
+Euthopiar is free and open source. If you enjoy it, you can support its development by buying me a coffee — it helps keep the app alive and growing!
+
+<div align="center">
+
+[![Buy Me A Coffee](https://img.shields.io/badge/☕%20%20BUY%20ME%20A%20COFFEE-FFDD00?style=for-the-badge&logoColor=black&labelColor=000000)](https://buymeacoffee.com/TheARCreactorGUY)
+
+<a href="https://buymeacoffee.com/TheARCreactorGUY"><img src="screenshots/bmc-qr.png" width="200" alt="Buy Me A Coffee QR code"/></a>
+
+*Scan the QR code or click the button above.*
+
+</div>
+
+## ⭐ Star the Repo
+
+Can't donate? Give the project a **star ⭐** on GitHub — it really helps too!
 
 <div align="center">
 
