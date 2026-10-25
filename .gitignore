@@ -19,6 +19,8 @@ local.properties
 *.jpeg
 !app/src/main/res/**
 !app/src/main/assets/**
+!screenshots/**
+!App logo/**
 cinemaos_line_*.json
 *.html
 *.sqlite
