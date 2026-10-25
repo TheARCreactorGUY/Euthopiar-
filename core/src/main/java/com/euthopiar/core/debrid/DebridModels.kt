@@ -56,10 +56,19 @@ data class RealDebridAddMagnetResponse(
 )
 
 @Serializable
+data class RealDebridTorrentFile(
+    val id: Int = 0,
+    val path: String = "",
+    val bytes: Long = 0L,
+    val selected: Int = 0
+)
+
+@Serializable
 data class RealDebridTorrentInfo(
     val id: String = "",
     val filename: String = "",
     val status: String = "",
+    val files: List<RealDebridTorrentFile> = emptyList(),
     val links: List<String> = emptyList()
 )
 

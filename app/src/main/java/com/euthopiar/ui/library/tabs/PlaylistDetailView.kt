@@ -1,9 +1,15 @@
 package com.euthopiar.ui.library.tabs
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -22,6 +28,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DeleteOutline
@@ -34,6 +41,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,6 +49,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -160,117 +169,64 @@ fun PlaylistDetailView(
 
     val isAmoled = com.euthopiar.ui.theme.LocalAmoledMode.current
     val pageBg = if (isAmoled) Color.Black else LibraryColors.Background
+    val listState = rememberLazyListState()
+    val isScrolled by remember {
+        derivedStateOf {
+            listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 80
+        }
+    }
+    val topBarBgAlpha by animateFloatAsState(
+        targetValue = if (isScrolled) 0.88f else 0f,
+        animationSpec = tween(220, easing = FastOutSlowInEasing),
+        label = "topBarBgAlpha"
+    )
+    val topBarBorderAlpha by animateFloatAsState(
+        targetValue = if (isScrolled) 0.16f else 0f,
+        animationSpec = tween(220, easing = FastOutSlowInEasing),
+        label = "topBarBorderAlpha"
+    )
 
-    LazyColumn(
+    Box(
         modifier = modifier
             .fillMaxSize()
-            .background(pageBg),
-        contentPadding = PaddingValues(bottom = 110.dp)
+            .background(pageBg)
     ) {
-        // 1. Full-width Hero Collage header (~150dp tall, dimmed ~75%, soft bottom fade)
-        item(key = "playlist_hero_mosaic") {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(156.dp)
-            ) {
-                PlaylistMosaic(
-                    posters = posters,
-                    cornerRadius = 0.dp,
-                    overlayAlpha = 0.75f,
-                    modifier = Modifier.fillMaxSize()
-                )
-
-                // Soft opacity fade to background at bottom edge (no colored gradient)
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 110.dp)
+        ) {
+            // 1. Full-width Hero Collage header (~150dp tall, dimmed ~75%, soft bottom fade)
+            item(key = "playlist_hero_mosaic") {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(72.dp)
-                        .align(Alignment.BottomCenter)
-                        .background(
-                            Brush.verticalGradient(
-                                colors = listOf(
-                                    Color.Transparent,
-                                    pageBg
-                                )
-                            )
-                        )
-                )
-
-                // Top navigation bar: back button left, overflow button right
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .statusBarsPadding()
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                        .height(156.dp)
                 ) {
-                    LibraryGlassBackButton(
-                        onClick = onBack,
-                        hazeState = hazeState
+                    PlaylistMosaic(
+                        posters = posters,
+                        cornerRadius = 0.dp,
+                        overlayAlpha = 0.75f,
+                        modifier = Modifier.fillMaxSize()
                     )
 
-                    if (!playlist.isSystem && onDeletePlaylist != null) {
-                        Box {
-                            LibraryGlassOverflowButton(
-                                onClick = { showOverflowMenu = true },
-                                hazeState = hazeState
-                            )
-
-                            val menuBg = if (isAmoled) Color.Black.copy(alpha = 0.88f) else Color(0xFF0F101B).copy(alpha = 0.72f)
-                            val borderBrush = Brush.verticalGradient(
-                                listOf(
-                                    Color.White.copy(alpha = 0.35f),
-                                    Color.White.copy(alpha = 0.08f)
-                                )
-                            )
-
-                            DropdownMenu(
-                                expanded = showOverflowMenu,
-                                onDismissRequest = { showOverflowMenu = false },
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(menuBg)
-                                    .background(
-                                        Brush.verticalGradient(
-                                            listOf(
-                                                Color.White.copy(alpha = 0.08f),
-                                                Color.Transparent
-                                            )
-                                        )
+                    // Soft opacity fade to background at bottom edge (no colored gradient)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(72.dp)
+                            .align(Alignment.BottomCenter)
+                            .background(
+                                Brush.verticalGradient(
+                                    colors = listOf(
+                                        Color.Transparent,
+                                        pageBg
                                     )
-                                    .border(LibraryDimens.hairline, borderBrush, RoundedCornerShape(12.dp))
-                            ) {
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            text = "Delete playlist",
-                                            style = LibraryTypography.metadata11.copy(
-                                                fontSize = 13.sp,
-                                                color = Color.White
-                                            )
-                                        )
-                                    },
-                                    leadingIcon = {
-                                        Icon(
-                                            imageVector = Icons.Outlined.DeleteOutline,
-                                            contentDescription = null,
-                                            tint = Color.White.copy(alpha = 0.70f),
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    },
-                                    onClick = {
-                                        showOverflowMenu = false
-                                        showDeleteConfirm = true
-                                    }
                                 )
-                            }
-                        }
-                    }
+                            )
+                    )
                 }
             }
-        }
 
         // 2. Headline Block & Action Row
         item(key = "playlist_caption") {
@@ -341,6 +297,119 @@ fun PlaylistDetailView(
                     { itemToRemove = item }
                 } else null
             )
+        }
+    }
+
+    // Pinned Sticky Frosted Glass Top Bar (Back button + Overflow always accessible)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.TopCenter)
+                .background(
+                    if (isAmoled) Color.Black.copy(alpha = topBarBgAlpha)
+                    else Color(0xFF0F101B).copy(alpha = topBarBgAlpha)
+                )
+                .drawBehind {
+                    if (topBarBorderAlpha > 0f) {
+                        val stroke = 0.5.dp.toPx()
+                        drawLine(
+                            color = Color.White.copy(alpha = topBarBorderAlpha),
+                            start = androidx.compose.ui.geometry.Offset(0f, size.height - stroke / 2),
+                            end = androidx.compose.ui.geometry.Offset(size.width, size.height - stroke / 2),
+                            strokeWidth = stroke
+                        )
+                    }
+                }
+                .statusBarsPadding()
+                .padding(horizontal = 12.dp, vertical = 6.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                LibraryGlassBackButton(
+                    onClick = onBack,
+                    hazeState = hazeState
+                )
+
+                AnimatedVisibility(
+                    visible = isScrolled,
+                    enter = fadeIn(tween(180)) + slideInVertically(tween(180)) { it / 2 },
+                    exit = fadeOut(tween(140)) + slideOutVertically(tween(140)) { it / 2 },
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 12.dp)
+                ) {
+                    Text(
+                        text = com.euthopiar.ui.library.sanitizeTitle(playlist.title),
+                        style = LibraryTypography.title15,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                }
+
+                if (!playlist.isSystem && onDeletePlaylist != null) {
+                    Box {
+                        LibraryGlassOverflowButton(
+                            onClick = { showOverflowMenu = true },
+                            hazeState = hazeState
+                        )
+
+                        val menuBg = if (isAmoled) Color.Black.copy(alpha = 0.88f) else Color(0xFF0F101B).copy(alpha = 0.72f)
+                        val borderBrush = Brush.verticalGradient(
+                            listOf(
+                                Color.White.copy(alpha = 0.35f),
+                                Color.White.copy(alpha = 0.08f)
+                            )
+                        )
+
+                        DropdownMenu(
+                            expanded = showOverflowMenu,
+                            onDismissRequest = { showOverflowMenu = false },
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(menuBg)
+                                .background(
+                                    Brush.verticalGradient(
+                                        listOf(
+                                            Color.White.copy(alpha = 0.08f),
+                                            Color.Transparent
+                                        )
+                                    )
+                                )
+                                .border(LibraryDimens.hairline, borderBrush, RoundedCornerShape(12.dp))
+                        ) {
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        text = "Delete playlist",
+                                        style = LibraryTypography.metadata11.copy(
+                                            fontSize = 13.sp,
+                                            color = Color.White
+                                        )
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Outlined.DeleteOutline,
+                                        contentDescription = null,
+                                        tint = Color.White.copy(alpha = 0.70f),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    showDeleteConfirm = true
+                                }
+                            )
+                        }
+                    }
+                } else {
+                    Spacer(modifier = Modifier.size(36.dp))
+                }
+            }
         }
     }
 }

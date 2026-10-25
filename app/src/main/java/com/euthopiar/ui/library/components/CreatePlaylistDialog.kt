@@ -2,6 +2,7 @@ package com.euthopiar.ui.library.components
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -41,6 +43,9 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -89,14 +94,24 @@ fun CreatePlaylistDialog(
         trimmed.isNotEmpty() && existingPlaylists.any { it.title.equals(trimmed, ignoreCase = true) }
     }
 
+    val density = LocalDensity.current
+    val haptic = LocalHapticFeedback.current
+    val shakeAmplitudePx = with(density) { 8.dp.toPx() }
+
     fun triggerShake() {
         if (!reduceMotion) {
+            try {
+                haptic.performHapticFeedback(HapticFeedbackType.Reject)
+            } catch (_: Exception) {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            }
             scope.launch {
-                shakeOffset.animateTo(4f, tween(40))
-                shakeOffset.animateTo(-4f, tween(40))
-                shakeOffset.animateTo(3f, tween(40))
-                shakeOffset.animateTo(-3f, tween(40))
-                shakeOffset.animateTo(0f, tween(40))
+                shakeOffset.snapTo(0f)
+                shakeOffset.animateTo(shakeAmplitudePx, tween(40, easing = LinearEasing))
+                shakeOffset.animateTo(-shakeAmplitudePx, tween(40, easing = LinearEasing))
+                shakeOffset.animateTo(shakeAmplitudePx * 0.6f, tween(35, easing = LinearEasing))
+                shakeOffset.animateTo(-shakeAmplitudePx * 0.4f, tween(35, easing = LinearEasing))
+                shakeOffset.animateTo(0f, tween(30, easing = LinearEasing))
             }
         }
     }
@@ -127,6 +142,7 @@ fun CreatePlaylistDialog(
             modifier = Modifier
                 .fillMaxWidth()
                 .navigationBarsPadding()
+                .imePadding()
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 24.dp)
         ) {

@@ -7,6 +7,7 @@ import com.nuvio.engine.NuvioEngine
 import com.nuvio.engine.NuvioEngineConfig
 import com.nuvio.engine.NuvioEventType
 import com.nuvio.engine.NuvioStream
+import com.nuvio.engine.NuvioTorrentFile
 import com.nuvio.engine.NuvioTorrentProfile
 import com.nuvio.engine.NuvioUploadMode
 import java.io.File
@@ -134,6 +135,10 @@ object P2pStreamingEngine {
     private var currentTorrentId: String? = null
     @Volatile
     private var currentStreamId: String? = null
+    @Volatile
+    private var activeRequest: P2pStreamRequest? = null
+    @Volatile
+    private var activeStreamUrl: String? = null
     private var appContext: Context? = null
     @Volatile
     private var engine: NuvioEngine? = null
@@ -160,6 +165,224 @@ object P2pStreamingEngine {
             } catch (e: Throwable) {
                 Log.w(TAG, "P2P engine pre-warm ignored: ${e.message}")
             }
+        }
+    }
+
+    fun selectTargetFileIndex(
+        files: List<NuvioTorrentFile>,
+        season: Int? = null,
+        episode: Int? = null,
+    ): Int? {
+        if (files.isEmpty()) return null
+        if (files.size == 1) return files[0].index
+
+        val videoExtensions = listOf(".mp4", ".mkv", ".avi", ".webm", ".ts", ".m4v", ".mov")
+        val videoFiles = files.filter { file ->
+            val lower = file.path.lowercase()
+            videoExtensions.any { ext -> lower.endsWith(ext) }
+        }.ifEmpty { files }
+
+        val junkRegex = Regex("""(?i)\b(sample|trailer|teaser|ncop|nced|pv|menu|extra|bonus)\b""")
+        val candidates = videoFiles.filterNot { junkRegex.containsMatchIn(it.path) }.ifEmpty { videoFiles }
+
+        // Tier 1: Strict Season + Episode Matching
+        if (season != null && episode != null) {
+            val strictPatterns = listOf(
+                Regex("""(?i)\bs0*${season}\s*e0*${episode}\b"""),
+                Regex("""(?i)\b0*${season}x0*${episode}\b"""),
+                Regex("""(?i)\b(?:season|s)[\s._-]*0*${season}[\s._-]+(?:episode|ep|e)[\s._-]*0*${episode}\b"""),
+                Regex("""(?i)\b(?:season|s)[\s._-]*0*${season}[/\\][^/\\]*?\b(?:episode|ep|e)?[\s._-]*0*${episode}\b""")
+            )
+            for (pattern in strictPatterns) {
+                val matched = candidates.filter { pattern.containsMatchIn(it.path) }
+                if (matched.isNotEmpty()) return matched.maxByOrNull { it.size }?.index
+            }
+        }
+
+        // Tier 2: Episode Fallback (Independent fallback, even if season is specified)
+        // Guardrail: Exclude files that explicitly mention a DIFFERENT season number
+        if (episode != null) {
+            val epCandidates = if (season != null) {
+                val seasonRegex = Regex("""(?i)\b(?:season|s)[\s._-]*0*([0-9]+)(?:\b|(?=[eE\D]))""")
+                candidates.filterNot { file ->
+                    val seasonNums = seasonRegex.findAll(file.path).mapNotNull { m ->
+                        m.groupValues[1].toIntOrNull()
+                    }.toList()
+                    val lastSeason = seasonNums.lastOrNull()
+                    lastSeason != null && lastSeason != season
+                }
+            } else {
+                candidates
+            }
+
+            val epPatterns = listOf(
+                Regex("""(?i)(?:^|[^a-zA-Z]|[sS]\d+)[eE][pP]?\.?\s*0*${episode}(?:\D|$)"""),
+                Regex("""(?i)\b(?:episode|ep)[\s._-]*0*${episode}(?:\D|$)"""),
+                Regex("""(?i)(?:\bep?\.?\s*0*${episode}\b|-\s*0*${episode}\b|\b0*${episode}\s*(?:v\d)?\s*[\[\(])"""),
+                Regex("""(?i)(?:^|[\s._\-\[/])0*${episode}(?:v\d)?[\s._\-\]\).]""")
+            )
+            for (pattern in epPatterns) {
+                val matched = epCandidates.filter { pattern.containsMatchIn(it.path) }
+                if (matched.isNotEmpty()) return matched.maxByOrNull { it.size }?.index
+            }
+        }
+
+        // Tier 3: Largest non-junk video file fallback
+        return candidates.maxByOrNull { it.size }?.index ?: videoFiles.maxByOrNull { it.size }?.index
+    }
+
+    suspend fun downloadFileDirect(
+        request: P2pStreamRequest,
+        destinationFile: File,
+        onProgress: (bytesDownloaded: Long, totalBytes: Long, percent: Float, speed: String) -> Unit,
+        isCancelled: () -> Boolean = { false },
+    ): File = withContext(Dispatchers.IO) {
+        val context = requireContext()
+        val uniqueId = "p2p_direct_${System.currentTimeMillis()}_${java.util.UUID.randomUUID().toString().take(6)}"
+        val stateDir = File(context.noBackupFilesDir, "nuvio-direct/$uniqueId/state").apply { mkdirs() }
+        val cacheDir = File(context.cacheDir, "nuvio-direct/$uniqueId/cache").apply { mkdirs() }
+
+        val config = buildNuvioEngineConfig(
+            stateDirectory = stateDir,
+            cacheDirectory = cacheDir,
+            uploadEnabled = false,
+            torrentProfile = P2pTorrentProfile.FAST,
+            diskCacheCapacityBytes = 0L,
+        )
+        val directEngine = NuvioEngine.create(config)
+        var preparedStreamId: String? = null
+
+        try {
+            val magnetUri = buildP2pMagnetUri(
+                request.infoHash,
+                (DEFAULT_TRACKERS + request.trackers).distinct(),
+            )
+            val torrentId = directEngine.addMagnet(magnetUri)
+
+            val targetFileIndex = if (request.fileIdx != null && request.fileIdx >= 0) {
+                request.fileIdx
+            } else {
+                try {
+                    val torrentFiles = directEngine.files(torrentId)
+                    selectTargetFileIndex(torrentFiles, request.season, request.episode)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Direct download: failed to list files: ${e.message}")
+                    null
+                }
+            }
+
+            val stream = directEngine.prepareStream(
+                torrentId = torrentId,
+                fileIndex = targetFileIndex,
+                filenameHint = request.filename,
+            )
+            preparedStreamId = stream.id
+
+            destinationFile.parentFile?.mkdirs()
+            val tempFile = File(destinationFile.parentFile, "${destinationFile.name}.download")
+            var existingBytes = if (tempFile.exists()) tempFile.length() else 0L
+
+            val client = OkHttpClient.Builder()
+                .connectTimeout(30, TimeUnit.SECONDS)
+                .readTimeout(0, TimeUnit.MILLISECONDS)
+                .build()
+
+            val reqBuilder = Request.Builder()
+                .url(stream.url)
+                .header("User-Agent", "Euthopiar/1.0")
+
+            if (existingBytes > 0L) {
+                reqBuilder.header("Range", "bytes=$existingBytes-")
+            }
+
+            var resp = client.newCall(reqBuilder.build()).execute()
+            if ((resp.code == 403 || resp.code == 416) && existingBytes > 0L) {
+                resp.close()
+                tempFile.delete()
+                existingBytes = 0L
+                resp = client.newCall(Request.Builder().url(stream.url).header("User-Agent", "Euthopiar/1.0").build()).execute()
+            }
+
+            if (!resp.isSuccessful && resp.code != 206) {
+                val code = resp.code
+                resp.close()
+                throw java.io.IOException("Direct download failed with HTTP $code")
+            }
+
+            val body = resp.body ?: run {
+                resp.close()
+                throw java.io.IOException("Direct download received empty body")
+            }
+
+            val isPartial = resp.code == 206
+            val contentLength = body.contentLength()
+            val totalBytes = if (isPartial && contentLength > 0) {
+                existingBytes + contentLength
+            } else if (contentLength > 0) {
+                contentLength
+            } else {
+                stream.fileSize.takeIf { it > 0 } ?: 0L
+            }
+
+            val appendMode = isPartial && existingBytes > 0L
+            val outputStream = java.io.BufferedOutputStream(java.io.FileOutputStream(tempFile, appendMode), 256 * 1024)
+            val inputStream = body.byteStream()
+            val buffer = ByteArray(128 * 1024)
+            var bytesReadTotal = if (appendMode) existingBytes else 0L
+            var lastProgressUpdateMs = System.currentTimeMillis()
+            var bytesReadSinceLastUpdate = 0L
+
+            try {
+                inputStream.use { input ->
+                    outputStream.use { output ->
+                        var read: Int
+                        while (input.read(buffer).also { read = it } != -1) {
+                            if (isCancelled()) {
+                                output.flush()
+                                throw CancellationException("Download cancelled")
+                            }
+                            output.write(buffer, 0, read)
+                            bytesReadTotal += read
+                            bytesReadSinceLastUpdate += read
+
+                            val now = System.currentTimeMillis()
+                            val elapsed = now - lastProgressUpdateMs
+                            if (elapsed >= 500L) {
+                                val speedBytesPerSec = if (elapsed > 0) (bytesReadSinceLastUpdate * 1000L) / elapsed else 0L
+                                val speedStr = formatP2pSpeed(speedBytesPerSec)
+                                val percent = if (totalBytes > 0L) {
+                                    (bytesReadTotal.toFloat() / totalBytes * 100f).coerceIn(0f, 100f)
+                                } else 0f
+                                onProgress(bytesReadTotal, totalBytes, percent, speedStr)
+                                lastProgressUpdateMs = now
+                                bytesReadSinceLastUpdate = 0L
+                            }
+                        }
+                        output.flush()
+                    }
+                }
+            } finally {
+                resp.close()
+            }
+
+            if (destinationFile.exists()) destinationFile.delete()
+            val renamed = tempFile.renameTo(destinationFile)
+            if (!renamed) {
+                java.nio.file.Files.move(
+                    tempFile.toPath(),
+                    destinationFile.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING
+                )
+            }
+            destinationFile
+        } finally {
+            preparedStreamId?.let { sId ->
+                try { directEngine.stopStream(sId) } catch (_: Throwable) {}
+            }
+            try { directEngine.shutdown() } catch (_: Throwable) {}
+            try { directEngine.close() } catch (_: Throwable) {}
+            try { stateDir.parentFile?.deleteRecursively() } catch (_: Throwable) {}
+            try { cacheDir.parentFile?.deleteRecursively() } catch (_: Throwable) {}
         }
     }
 
@@ -194,6 +417,20 @@ object P2pStreamingEngine {
     }
 
     private suspend fun startStreamLocked(request: P2pStreamRequest): String {
+        val canonicalHash = canonicalP2pInfoHash(request.infoHash)
+        if (_state.value is P2pStreamingState.Streaming) {
+            val curReq = activeRequest
+            val curUrl = activeStreamUrl
+            val sameHash = curReq != null && canonicalP2pInfoHash(curReq.infoHash) == canonicalHash
+            val sameFile = request.fileIdx == null || curReq?.fileIdx == request.fileIdx
+            val sameSeasonEp = (request.season == null || curReq?.season == request.season) &&
+                               (request.episode == null || curReq?.episode == request.episode)
+            if (sameHash && sameFile && sameSeasonEp && !curUrl.isNullOrBlank()) {
+                Log.i(DIAGNOSTIC_TAG, "Reusing active P2P stream url=$curUrl for hash=${diagnosticId(canonicalHash)}")
+                return curUrl
+            }
+        }
+
         val requestSequence = nextDiagnosticRequestSequence()
         val startedAtMs = SystemClock.elapsedRealtime()
         val phase = AtomicReference("stop_previous")
@@ -235,7 +472,6 @@ object P2pStreamingEngine {
             )
 
             phase.set("add_magnet")
-            val canonicalHash = canonicalP2pInfoHash(request.infoHash)
             val metaDir = File(requireContext().cacheDir, "torrent_meta").apply { if (!exists()) mkdirs() }
             val metaFile = File(metaDir, "$canonicalHash.meta")
             val reusedTorrent = canonicalHash in knownTorrentIds
@@ -267,9 +503,21 @@ object P2pStreamingEngine {
                 "start request=$requestSequence phase=${phase.get()} begin elapsedMs=${elapsedSince(startedAtMs)} " +
                     "fileIndex=${request.fileIdx ?: -1}",
             )
+            val targetFileIndex = if (request.fileIdx != null && request.fileIdx >= 0) {
+                request.fileIdx
+            } else {
+                try {
+                    val torrentFiles = resolvedEngine.files(torrentId)
+                    selectTargetFileIndex(torrentFiles, request.season, request.episode)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to retrieve torrent files for index selection: ${e.message}")
+                    null
+                }
+            }
+
             val stream = resolvedEngine.prepareStream(
                 torrentId = torrentId,
-                fileIndex = request.fileIdx,
+                fileIndex = targetFileIndex,
                 filenameHint = request.filename,
             )
             preparedStream = stream
@@ -321,6 +569,8 @@ object P2pStreamingEngine {
                 )) {
                 throw CancellationException("P2P stream start was cancelled")
             }
+            activeRequest = request.copy(fileIdx = targetFileIndex ?: request.fileIdx)
+            activeStreamUrl = stream.url
             Log.i(TAG, "Native Engine stream ready: ${stream.url}")
             Log.i(
                 DIAGNOSTIC_TAG,
@@ -415,6 +665,8 @@ object P2pStreamingEngine {
             val job = statsJob
             currentTorrentId = null
             currentStreamId = null
+            activeRequest = null
+            activeStreamUrl = null
             statsJob = null
             _state.value = P2pStreamingState.Idle
             value to job
@@ -434,6 +686,8 @@ object P2pStreamingEngine {
             val job = statsJob
             currentTorrentId = null
             currentStreamId = null
+            activeRequest = null
+            activeStreamUrl = null
             statsJob = null
             _state.value = terminalState
             value to job
@@ -545,6 +799,8 @@ object P2pStreamingEngine {
             engine = null
             engineConfigurationKey = null
             knownTorrentIds.clear()
+            activeRequest = null
+            activeStreamUrl = null
         }
         withContext(NonCancellable) {
             try {
@@ -746,22 +1002,24 @@ object P2pStreamingEngine {
         scope.launch(Dispatchers.IO) {
             try {
                 val client = OkHttpClient.Builder()
-                    .connectTimeout(3, TimeUnit.SECONDS)
-                    .readTimeout(5, TimeUnit.SECONDS)
+                    .connectTimeout(5, TimeUnit.SECONDS)
+                    .readTimeout(15, TimeUnit.SECONDS)
                     .build()
 
-                // Piece 0 / Container Header Pre-Warming (first 64KB)
+                // Piece 0 / Container Header Pre-Warming (first 512KB)
                 launch {
                     try {
+                        val headEnd = if (fileSize > 0L) minOf(524287L, fileSize - 1L) else 524287L
                         val headerReq = Request.Builder()
                             .url(streamUrl)
-                            .header("Range", "bytes=0-65535")
+                            .header("Range", "bytes=0-$headEnd")
                             .build()
                         client.newCall(headerReq).execute().use { response ->
-                            val body = response.body
-                            if (body != null) {
-                                val buffer = ByteArray(4096)
-                                body.byteStream().read(buffer)
+                            response.body?.byteStream()?.use { input ->
+                                val buffer = ByteArray(8192)
+                                while (input.read(buffer) != -1) {
+                                    // Fully drain socket to ensure head pieces are downloaded and verified
+                                }
                             }
                         }
                     } catch (e: Throwable) {
@@ -769,21 +1027,22 @@ object P2pStreamingEngine {
                     }
                 }
 
-                // Tail Piece Pre-Warming (last 128KB)
-                if (fileSize > 131072L) {
+                // Tail Piece Pre-Warming (last 256KB)
+                if (fileSize > 262144L) {
                     launch {
                         try {
-                            val tailStart = (fileSize - 131072L).coerceAtLeast(0L)
+                            val tailStart = (fileSize - 262144L).coerceAtLeast(0L)
                             val tailEnd = fileSize - 1L
                             val tailReq = Request.Builder()
                                 .url(streamUrl)
                                 .header("Range", "bytes=$tailStart-$tailEnd")
                                 .build()
                             client.newCall(tailReq).execute().use { response ->
-                                val body = response.body
-                                if (body != null) {
-                                    val buffer = ByteArray(4096)
-                                    body.byteStream().read(buffer)
+                                response.body?.byteStream()?.use { input ->
+                                    val buffer = ByteArray(8192)
+                                    while (input.read(buffer) != -1) {
+                                        // Fully drain socket to ensure tail pieces are downloaded and verified
+                                    }
                                 }
                             }
                         } catch (e: Throwable) {

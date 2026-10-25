@@ -4,8 +4,10 @@ import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -34,8 +36,10 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -82,6 +86,7 @@ fun SeasonSheet(
 ) {
     val coroutineScope = rememberCoroutineScope()
     val reduceMotion = LocalReduceMotion.current
+    val haptic = LocalHapticFeedback.current
     val configuration = LocalConfiguration.current
     val density = LocalDensity.current
 
@@ -89,7 +94,6 @@ fun SeasonSheet(
     var dragOffsetY by remember { mutableFloatStateOf(0f) }
     var isDismissing by remember { mutableStateOf(false) }
     var locallySelectedSeason by remember { mutableIntStateOf(selectedSeason) }
-    var poppedSeason by remember { mutableStateOf<Int?>(null) }
 
     LaunchedEffect(Unit) {
         if (reduceMotion) {
@@ -111,7 +115,7 @@ fun SeasonSheet(
                 } else {
                     sheetProgress.animateTo(
                         targetValue = 0f,
-                        animationSpec = tween(durationMillis = 260, easing = FastOutSlowInEasing)
+                        animationSpec = tween(durationMillis = 160, easing = LinearOutSlowInEasing)
                     )
                     onDismiss()
                 }
@@ -295,24 +299,19 @@ fun SeasonSheet(
                         itemsIndexed(availableSeasons, key = { _, s -> s }) { index, seasonNum ->
                             val isSelected = seasonNum == locallySelectedSeason
                             val epCount = episodes.count { it.seasonNumber == seasonNum }
-                            val isPopped = poppedSeason == seasonNum
 
                             SeasonRow(
                                 seasonNumber = seasonNum,
                                 episodeCount = epCount,
                                 isSelected = isSelected,
-                                isPopped = isPopped,
                                 staggerIndex = index,
                                 animProgress = animValue,
                                 reduceMotion = reduceMotion,
                                 onSelect = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.Confirm)
                                     locallySelectedSeason = seasonNum
-                                    poppedSeason = seasonNum
-                                    coroutineScope.launch {
-                                        delay(200)
-                                        onSelectSeason(seasonNum)
-                                        dismissWithAnim()
-                                    }
+                                    onSelectSeason(seasonNum)
+                                    dismissWithAnim()
                                 }
                             )
 
@@ -353,7 +352,6 @@ private fun SeasonRow(
     seasonNumber: Int,
     episodeCount: Int,
     isSelected: Boolean,
-    isPopped: Boolean,
     staggerIndex: Int,
     animProgress: Float,
     reduceMotion: Boolean,
@@ -363,8 +361,11 @@ private fun SeasonRow(
     val isPressed by interactionSource.collectIsPressedAsState()
 
     val scaleAnim by animateFloatAsState(
-        targetValue = if (isPressed && !reduceMotion) 0.98f else 1f,
-        animationSpec = tween(durationMillis = 120, easing = FastOutSlowInEasing),
+        targetValue = if (isPressed && !reduceMotion) 0.96f else 1f,
+        animationSpec = if (reduceMotion) snap() else spring(
+            dampingRatio = Spring.DampingRatioNoBouncy,
+            stiffness = Spring.StiffnessMedium
+        ),
         label = "rowScale"
     )
 

@@ -31,7 +31,7 @@ class PluginRepositoryService(
     private val scope = CoroutineScope(Dispatchers.Default)
 
     val installedPluginsFlow: StateFlow<List<PluginManifest>> = storage.scrapersFlow.map { scrapers ->
-        scrapers.map { it.toPluginManifest() }
+        scrapers.distinctBy { it.id }.map { it.toPluginManifest() }
     }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
     val installedPublicPluginsFlow: Flow<List<PluginManifest>> = installedPluginsFlow.map { list ->
@@ -43,18 +43,6 @@ class PluginRepositoryService(
      */
     suspend fun initializePlugins() = withContext(Dispatchers.IO) {
         storage.initialize()
-        val prefs = context.getSharedPreferences("plugin_repo_prefs", Context.MODE_PRIVATE)
-        val hasSeeded = prefs.getBoolean("default_repos_seeded_v1", false)
-        if (!hasSeeded || storage.repositoriesFlow.value.isEmpty()) {
-            prefs.edit().putBoolean("default_repos_seeded_v1", true).apply()
-            for (repoUrl in DEFAULT_REPOS) {
-                try {
-                    storage.addRepository(repoUrl)
-                } catch (e: Exception) {
-                    android.util.Log.e("PluginRepositoryService", "Failed to seed default repo: $repoUrl", e)
-                }
-            }
-        }
     }
 
     /**
@@ -90,7 +78,7 @@ class PluginRepositoryService(
      * Retrieves all installed JavaScript plugins.
      */
     suspend fun getInstalledPlugins(): List<PluginManifest> = withContext(Dispatchers.IO) {
-        storage.scrapersFlow.value.map { it.toPluginManifest() }
+        storage.scrapersFlow.value.distinctBy { it.id }.map { it.toPluginManifest() }
     }
 
     suspend fun getInstalledPublicPlugins(): List<PluginManifest> = withContext(Dispatchers.IO) {
@@ -224,7 +212,7 @@ class PluginRepositoryService(
         const val DEFAULT_REPO_URL: String = "https://raw.githubusercontent.com/D3adlyRocket/All-in-One-Nuvio/refs/heads/main/manifest.json"
         const val SECONDARY_REPO_URL: String = "https://raw.githubusercontent.com/yoruix/nuvio-providers/refs/heads/main/manifest.json"
         const val TEST_EUPS_REPO_URL: String = DEFAULT_REPO_URL
-        val DEFAULT_REPOS: Set<String> = linkedSetOf(DEFAULT_REPO_URL, SECONDARY_REPO_URL)
+        val DEFAULT_REPOS: Set<String> = emptySet()
 
         @Volatile
         private var instance: PluginRepositoryService? = null

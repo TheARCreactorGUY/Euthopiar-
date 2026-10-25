@@ -151,4 +151,92 @@ class P2pMagnetTest {
         assertTrue(addrsLocalhost.isNotEmpty())
         assertTrue(addrsLocalhost.any { it.isLoopbackAddress })
     }
+
+    @Test
+    fun extractP2pStreamRequestExtractsQueryParamsAndFallbacks() {
+        val hex = "0".repeat(40)
+        val req1 = extractP2pStreamRequest("magnet:?xt=urn:btih:$hex&fileidx=3&season=2&episode=5")
+        assertNotNull(req1)
+        assertEquals(3, req1!!.fileIdx)
+        assertEquals(2, req1.season)
+        assertEquals(5, req1.episode)
+
+        val req2 = extractP2pStreamRequest("magnet:?xt=urn:btih:$hex&so=4")
+        assertNotNull(req2)
+        assertEquals(4, req2!!.fileIdx)
+
+        val req3 = extractP2pStreamRequest(
+            rawUrl = "magnet:?xt=urn:btih:$hex",
+            defaultFileIdx = 1,
+            defaultSeason = 3,
+            defaultEpisode = 7
+        )
+        assertNotNull(req3)
+        assertEquals(1, req3!!.fileIdx)
+        assertEquals(3, req3.season)
+        assertEquals(7, req3.episode)
+    }
+
+    @Test
+    fun selectTargetFileIndexExcludesSampleAndPicksLargestMatchingEpisode() {
+        val files = listOf(
+            com.nuvio.engine.NuvioTorrentFile(0, 0L, 20_000_000L, "Show.S01E01.sample.mkv", false),
+            com.nuvio.engine.NuvioTorrentFile(1, 0L, 1_500_000_000L, "Show.S01E01.1080p.mkv", false),
+        )
+
+        // Must pick index 1 (the 1.5GB episode), NOT index 0 (the 20MB sample)
+        val selected = P2pStreamingEngine.selectTargetFileIndex(files, season = 1, episode = 1)
+        assertEquals(1, selected)
+    }
+
+    @Test
+    fun selectTargetFileIndexMatchesAnimeBatch3DigitEpisode() {
+        val files = listOf(
+            com.nuvio.engine.NuvioTorrentFile(0, 0L, 400_000_000L, "[Sub] Series - 011 [1080p].mkv", false),
+            com.nuvio.engine.NuvioTorrentFile(1, 0L, 420_000_000L, "[Sub] Series - 012 [1080p].mkv", false),
+            com.nuvio.engine.NuvioTorrentFile(2, 0L, 410_000_000L, "[Sub] Series - 013 [1080p].mkv", false),
+        )
+
+        val selected = P2pStreamingEngine.selectTargetFileIndex(files, season = null, episode = 12)
+        assertEquals(1, selected)
+    }
+
+    @Test
+    fun extractUrlAndInlineHeadersDeduplicatesCaseInsensitively() {
+        val raw = "https://example.com/master.m3u8|Referer=https://foo.com&user-agent=InlineAgent&origin=https://origin.com"
+        val existing = mapOf("User-Agent" to "DefaultAgent", "cookie" to "sid=123")
+        val (cleanUrl, headers) = com.euthopiar.core.network.PlayerPlaybackNetworking.extractUrlAndInlineHeaders(raw, existing)
+
+        assertEquals("https://example.com/master.m3u8", cleanUrl)
+        assertEquals("InlineAgent", headers["User-Agent"])
+        assertNull(headers["user-agent"])
+        assertEquals("https://foo.com", headers["Referer"])
+        assertEquals("https://origin.com", headers["Origin"])
+        assertEquals("sid=123", headers["Cookie"])
+    }
+
+    @Test
+    fun extractP2pStreamRequestSupportsFallbackInfoHash() {
+        val hex = "a".repeat(40)
+        val reqFromNull = extractP2pStreamRequest(
+            rawUrl = null,
+            fallbackInfoHash = hex,
+            defaultFileIdx = 2,
+            defaultSeason = 1,
+            defaultEpisode = 4
+        )
+        assertNotNull(reqFromNull)
+        assertEquals(hex, reqFromNull!!.infoHash)
+        assertEquals(2, reqFromNull.fileIdx)
+        assertEquals(1, reqFromNull.season)
+        assertEquals(4, reqFromNull.episode)
+
+        val reqFromInvalidUrl = extractP2pStreamRequest(
+            rawUrl = "not-a-magnet-url",
+            fallbackInfoHash = hex
+        )
+        assertNotNull(reqFromInvalidUrl)
+        assertEquals(hex, reqFromInvalidUrl!!.infoHash)
+    }
 }
+

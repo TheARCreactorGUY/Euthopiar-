@@ -16,7 +16,21 @@ data class MatchHints(
     val year: Int?,
     val runtimeMin: Int? = null,
     val season: Int? = null,
-    val episode: Int? = null
+    val episode: Int? = null,
+    val originalTitle: String? = null,
+    val alternativeTitles: Set<String> = emptySet(),
+    val premiereYear: Int? = year,
+    val seasonYears: Map<Int, Int> = emptyMap(),
+    val seasonNames: Map<Int, String> = emptyMap(),
+    val tvdbId: Int? = null,
+    val absoluteEpisode: Int? = null,
+    val malId: Int? = null,
+    val anilistId: Int? = null,
+    val romajiTitle: String? = null,
+    val englishTitle: String? = null,
+    val nativeTitle: String? = null,
+    val animeSynonyms: List<String> = emptyList(),
+    val seasonSpecificTitles: Map<Int, List<String>> = emptyMap()
 )
 
 /**

@@ -33,6 +33,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.euthopiar.core.js.computeCanonicalRepoId
 import com.euthopiar.core.model.PluginManifest
 import com.euthopiar.core.model.PluginRepositoryIndex
 import com.euthopiar.ui.settings.PluginManagerViewModel
@@ -77,6 +78,7 @@ fun RepoPluginsScreen(
     var selectedCategory by remember { mutableStateOf("All") }
     var selectedPluginForSheet by remember { mutableStateOf<PluginManifest?>(null) }
     var pluginToUninstall by remember { mutableStateOf<PluginManifest?>(null) }
+    var alreadyInstalledAlert by remember { mutableStateOf<Pair<String, String>?>(null) }
     var isInstallingAll by remember { mutableStateOf(false) }
     var toastMessage by remember { mutableStateOf<String?>(null) }
 
@@ -138,8 +140,32 @@ fun RepoPluginsScreen(
     val sanitizedUrl = remember(repoUrl) {
         repoUrl.removePrefix("https://").removePrefix("http://")
     }
-    val uninstalledCount = remember(plugins, installedPlugins) {
-        plugins.count { p -> installedPlugins.none { it.id == p.id } }
+    val canonicalRepoId = remember(repoUrl) { computeCanonicalRepoId(repoUrl) }
+
+    fun isPluginInstalled(plugin: PluginManifest): Boolean {
+        val cleanId = plugin.id.substringAfter(":")
+        val namespacedId = "$canonicalRepoId:$cleanId"
+        return installedPlugins.any { installed ->
+            installed.id == namespacedId ||
+            (installed.id.startsWith("$canonicalRepoId:") && installed.id.substringAfter(":") == cleanId) ||
+            (installed.siteUrl.isNotBlank() && computeCanonicalRepoId(installed.siteUrl) == canonicalRepoId && installed.id.substringAfter(":") == cleanId) ||
+            (installed.id == plugin.id && !installed.id.contains(":") && (installed.siteUrl == repoUrl || installed.siteUrl.isBlank()))
+        }
+    }
+
+    fun findInstalledPlugin(plugin: PluginManifest): PluginManifest? {
+        val cleanId = plugin.id.substringAfter(":")
+        val namespacedId = "$canonicalRepoId:$cleanId"
+        return installedPlugins.find { installed ->
+            installed.id == namespacedId ||
+            (installed.id.startsWith("$canonicalRepoId:") && installed.id.substringAfter(":") == cleanId) ||
+            (installed.siteUrl.isNotBlank() && computeCanonicalRepoId(installed.siteUrl) == canonicalRepoId && installed.id.substringAfter(":") == cleanId) ||
+            (installed.id == plugin.id && !installed.id.contains(":") && (installed.siteUrl == repoUrl || installed.siteUrl.isBlank()))
+        }
+    }
+
+    val uninstalledCount = remember(plugins, installedPlugins, canonicalRepoId) {
+        plugins.count { p -> !isPluginInstalled(p) }
     }
     val installedCount = plugins.size - uninstalledCount
 
@@ -440,22 +466,34 @@ fun RepoPluginsScreen(
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
                     ) {
-                        items(filteredPlugins, key = { it.id }) { plugin ->
-                            val isInstalled = installedPlugins.any { it.id == plugin.id }
-                            val isInstalling = installingIds.contains(plugin.id)
+                        items(filteredPlugins.distinctBy { it.id }, key = { it.id }) { plugin ->
+                            val isInstalled = isPluginInstalled(plugin)
+                            val cleanId = plugin.id.substringAfter(":")
+                            val namespacedId = "$canonicalRepoId:$cleanId"
+                            val isInstalling = installingIds.contains(plugin.id) || installingIds.contains(namespacedId)
 
                             RepoScraperRow(
                                 plugin = plugin,
                                 isInstalled = isInstalled,
                                 isInstalling = isInstalling,
-                                onRowClick = { selectedPluginForSheet = plugin },
-                                onInstallClick = {
-                                    try { haptic.performHapticFeedback(HapticFeedbackType.LongPress) } catch (_: Exception) {}
-                                    viewModel.installPlugin(plugin) { success ->
-                                        toastMessage = if (success) "Installed ${plugin.name}" else "Failed to install ${plugin.name}"
+                                onRowClick = {
+                                    if (isInstalled) {
+                                        alreadyInstalledAlert = "Scraper Already Installed" to "\"${plugin.name}\" (v${plugin.versionName.ifBlank { plugin.version.toString() }}) is already installed on your device."
+                                    } else {
+                                        selectedPluginForSheet = plugin
                                     }
                                 },
-                                onUninstallClick = { pluginToUninstall = plugin }
+                                onInstallClick = {
+                                    if (isInstalled) {
+                                        alreadyInstalledAlert = "Scraper Already Installed" to "\"${plugin.name}\" (v${plugin.versionName.ifBlank { plugin.version.toString() }}) is already installed on your device."
+                                    } else {
+                                        try { haptic.performHapticFeedback(HapticFeedbackType.LongPress) } catch (_: Exception) {}
+                                        viewModel.installPlugin(plugin) { success ->
+                                            toastMessage = if (success) "Installed ${plugin.name}" else "Failed to install ${plugin.name}"
+                                        }
+                                    }
+                                },
+                                onUninstallClick = { pluginToUninstall = findInstalledPlugin(plugin) ?: plugin }
                             )
 
                             PluginsHairlineDivider(modifier = Modifier.padding(vertical = 12.dp))
@@ -478,10 +516,12 @@ fun RepoPluginsScreen(
 
     // Provider Details Modal Bottom Sheet
     selectedPluginForSheet?.let { plugin ->
-        val isInstalled = installedPlugins.any { it.id == plugin.id }
-        val isInstalling = installingIds.contains(plugin.id)
-        val isTesting = testingIds.contains(plugin.id)
-        val health = healthMap[plugin.id]
+        val isInstalled = isPluginInstalled(plugin)
+        val cleanId = plugin.id.substringAfter(":")
+        val namespacedId = "$canonicalRepoId:$cleanId"
+        val isInstalling = installingIds.contains(plugin.id) || installingIds.contains(namespacedId)
+        val isTesting = testingIds.contains(plugin.id) || testingIds.contains(namespacedId)
+        val health = healthMap[plugin.id] ?: healthMap[namespacedId]
 
         ProviderDetailSheet(
             plugin = plugin,
@@ -497,13 +537,26 @@ fun RepoPluginsScreen(
                 }
             },
             onUninstall = {
-                val p = plugin
+                val p = findInstalledPlugin(plugin) ?: plugin
                 viewModel.uninstallPlugin(p) {
                     toastMessage = "Uninstalled ${p.name}"
                 }
             },
             onDismiss = { selectedPluginForSheet = null },
             hazeState = repoHazeState
+        )
+    }
+
+    // Modal: Already Installed Alert Dialog
+    alreadyInstalledAlert?.let { (title, msg) ->
+        com.euthopiar.ui.components.EuthopiarGlassDialog(
+            title = title,
+            message = msg,
+            confirmText = "Got it",
+            dismissText = null,
+            icon = Icons.Outlined.CheckCircle,
+            onConfirm = { alreadyInstalledAlert = null },
+            onDismiss = { alreadyInstalledAlert = null }
         )
     }
 
@@ -515,7 +568,7 @@ fun RepoPluginsScreen(
             confirmText = "Uninstall",
             dismissText = "Cancel",
             onConfirm = {
-                val p = plugin
+                val p = findInstalledPlugin(plugin) ?: plugin
                 pluginToUninstall = null
                 viewModel.uninstallPlugin(p) {
                     toastMessage = "Uninstalled ${p.name}"

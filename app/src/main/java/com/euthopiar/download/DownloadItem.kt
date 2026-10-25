@@ -35,7 +35,10 @@ data class DownloadItem(
     val mediaType: String? = null,
     val scraperId: String? = null,
     val seasonNumber: Int? = null,
-    val episodeNumber: Int? = null
+    val episodeNumber: Int? = null,
+    val isM3u8: Boolean = false,
+    val container: com.euthopiar.core.model.StreamContainer = if (isM3u8) com.euthopiar.core.model.StreamContainer.HLS else com.euthopiar.core.model.StreamContainer.AUTO,
+    val trackers: List<String> = emptyList()
 )
 
 data class StorageStats(

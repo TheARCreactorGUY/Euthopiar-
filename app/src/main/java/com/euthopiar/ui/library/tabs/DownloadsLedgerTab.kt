@@ -4,6 +4,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -12,6 +13,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -112,8 +114,16 @@ fun DownloadsLedgerTab(
     val freeBytes = if (hasReliableStorage) storageStats!!.freeBytes else 0L
     val totalDeviceBytes = if (hasReliableStorage) storageStats!!.totalBytes else 0L
 
-    val downloadedFraction = if (totalDeviceBytes > 0L) (completedBytes.toFloat() / totalDeviceBytes.toFloat()).coerceIn(0.005f, 1f) else 0f
-    val inProgressFraction = if (totalDeviceBytes > 0L) (activeBytes.toFloat() / totalDeviceBytes.toFloat()).coerceIn(0f, 1f) else 0f
+    val downloadedFraction = if (totalDeviceBytes > 0L && completedBytes > 0L) {
+        (completedBytes.toFloat() / totalDeviceBytes.toFloat()).coerceIn(0.005f, 1f)
+    } else {
+        0f
+    }
+    val inProgressFraction = if (totalDeviceBytes > 0L && activeBytes > 0L) {
+        (activeBytes.toFloat() / totalDeviceBytes.toFloat()).coerceIn(0.005f, 1f)
+    } else {
+        0f
+    }
 
     val appGb = totalAppBytes / (1024.0 * 1024.0 * 1024.0)
     val isUnderOneGb = appGb < 1.0 && totalAppBytes > 0
@@ -139,8 +149,8 @@ fun DownloadsLedgerTab(
             heroNumberAnim.animateTo(
                 targetValue = targetHeroNumber,
                 animationSpec = tween(
-                    durationMillis = 700,
-                    easing = CubicBezierEasing(0.05f, 0.7f, 0.1f, 1.0f)
+                    durationMillis = 260,
+                    easing = CubicBezierEasing(0.23f, 1f, 0.32f, 1f)
                 )
             )
         } else {
@@ -220,7 +230,7 @@ fun DownloadsLedgerTab(
                     Row(verticalAlignment = Alignment.Bottom) {
                         Text(
                             text = displayedNum,
-                            style = LibraryTypography.storageHeroNumeral64
+                            style = LibraryTypography.storageHeroNumeral64.copy(fontFeatureSettings = "tnum")
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
@@ -232,22 +242,59 @@ fun DownloadsLedgerTab(
 
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    // Thin 2px Storage Meter: 14% track, 85% fill, min 3% width
-                    val totalFraction = (downloadedFraction + inProgressFraction).coerceIn(0.03f, 1f)
-                    Box(
+                    // Dual-Tone Storage Meter: completed downloads (white) vs active in-progress (crimson)
+                    val animDownloaded by animateFloatAsState(
+                        targetValue = downloadedFraction.coerceIn(0f, 1f),
+                        animationSpec = tween(durationMillis = if (reduceMotion) 0 else 300, easing = CubicBezierEasing(0.23f, 1f, 0.32f, 1f)),
+                        label = "animDownloaded"
+                    )
+                    val animInProgress by animateFloatAsState(
+                        targetValue = inProgressFraction.coerceIn(0f, 1f),
+                        animationSpec = tween(durationMillis = if (reduceMotion) 0 else 300, easing = CubicBezierEasing(0.23f, 1f, 0.32f, 1f)),
+                        label = "animInProgress"
+                    )
+
+                    BoxWithConstraints(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(LibraryDimens.progressBarHeight)
                             .clip(CircleShape)
                             .background(LibraryColors.ProgressTrack)
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth(totalFraction)
-                                .height(LibraryDimens.progressBarHeight)
-                                .clip(CircleShape)
-                                .background(LibraryColors.ProgressFill)
-                        )
+                        val totalWidth = maxWidth
+                        val rawReadyWidth = if (animDownloaded > 0f) (totalWidth * animDownloaded).coerceAtLeast(2.dp) else 0.dp
+                        val rawInProgressWidth = if (animInProgress > 0f) (totalWidth * animInProgress).coerceAtLeast(2.dp) else 0.dp
+                        val hasBoth = rawReadyWidth > 0.dp && rawInProgressWidth > 0.dp
+                        val maxUsableWidth = (totalWidth - (if (hasBoth) 2.dp else 0.dp)).coerceAtLeast(0.dp)
+                        val readyWidth = rawReadyWidth.coerceAtMost(maxUsableWidth)
+                        val inProgressWidth = rawInProgressWidth.coerceAtMost((maxUsableWidth - readyWidth).coerceAtLeast(0.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (readyWidth > 0.dp) {
+                                Box(
+                                    modifier = Modifier
+                                        .width(readyWidth)
+                                        .height(LibraryDimens.progressBarHeight)
+                                        .clip(CircleShape)
+                                        .background(LibraryColors.ProgressFill)
+                                )
+                            }
+                            if (inProgressWidth > 0.dp) {
+                                if (readyWidth > 0.dp) {
+                                    Spacer(modifier = Modifier.width(2.dp))
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .width(inProgressWidth)
+                                        .height(LibraryDimens.progressBarHeight)
+                                        .clip(CircleShape)
+                                        .background(LibraryColors.Crimson)
+                                )
+                            }
+                        }
                     }
 
                     Spacer(modifier = Modifier.height(8.dp))

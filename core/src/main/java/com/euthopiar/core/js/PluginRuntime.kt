@@ -7,6 +7,7 @@ import com.euthopiar.core.js.host.HostFunctions
 import com.euthopiar.core.js.network.FetchBridge
 import com.euthopiar.core.js.network.UrlBridge
 import com.euthopiar.core.js.wasm.WasmBridge
+import com.euthopiar.core.model.DrmConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
@@ -58,7 +59,17 @@ object PluginRuntime {
         absoluteEpisode: Int? = null,
         title: String? = null,
         year: Int? = null,
-        repoId: String = ""
+        repoId: String = "",
+        originalTitle: String? = null,
+        alternativeTitles: Set<String> = emptySet(),
+        tvdbId: Int? = null,
+        seasonYear: Int? = null,
+        seasonName: String? = null,
+        malId: Int? = null,
+        anilistId: Int? = null,
+        romajiTitle: String? = null,
+        englishTitle: String? = null,
+        seasonSpecificTitle: String? = null
     ): List<PluginRuntimeResult> {
         return scraperSemaphore.withPermit {
             withContext(pluginDispatcher) {
@@ -78,7 +89,17 @@ object PluginRuntime {
                         absoluteEpisode = absoluteEpisode,
                         title = title,
                         year = year,
-                        repoId = repoId
+                        repoId = repoId,
+                        originalTitle = originalTitle,
+                        alternativeTitles = alternativeTitles,
+                        tvdbId = tvdbId,
+                        seasonYear = seasonYear,
+                        seasonName = seasonName,
+                        malId = malId,
+                        anilistId = anilistId,
+                        romajiTitle = romajiTitle,
+                        englishTitle = englishTitle,
+                        seasonSpecificTitle = seasonSpecificTitle
                     )
                 }
             }
@@ -97,7 +118,17 @@ object PluginRuntime {
         absoluteEpisode: Int? = null,
         title: String? = null,
         year: Int? = null,
-        repoId: String = ""
+        repoId: String = "",
+        originalTitle: String? = null,
+        alternativeTitles: Set<String> = emptySet(),
+        tvdbId: Int? = null,
+        seasonYear: Int? = null,
+        seasonName: String? = null,
+        malId: Int? = null,
+        anilistId: Int? = null,
+        romajiTitle: String? = null,
+        englishTitle: String? = null,
+        seasonSpecificTitle: String? = null
     ): List<PluginRuntimeResult> {
         val jsRuntime = JsRuntime()
         val deferred = CompletableDeferred<String>()
@@ -111,7 +142,17 @@ object PluginRuntime {
                 "absoluteEpisode" to (absoluteEpisode?.let(::JsonPrimitive) ?: JsonNull),
                 "title" to (title?.let(::JsonPrimitive) ?: JsonNull),
                 "year" to (year?.let(::JsonPrimitive) ?: JsonNull),
-                "id" to JsonPrimitive(tmdbId)
+                "id" to JsonPrimitive(tmdbId),
+                "originalTitle" to (originalTitle?.let(::JsonPrimitive) ?: JsonNull),
+                "alternativeTitles" to kotlinx.serialization.json.JsonArray(alternativeTitles.map { JsonPrimitive(it) }),
+                "tvdbId" to (tvdbId?.let(::JsonPrimitive) ?: JsonNull),
+                "seasonYear" to (seasonYear?.let(::JsonPrimitive) ?: JsonNull),
+                "seasonName" to (seasonName?.let(::JsonPrimitive) ?: JsonNull),
+                "malId" to (malId?.let(::JsonPrimitive) ?: JsonNull),
+                "anilistId" to (anilistId?.let(::JsonPrimitive) ?: JsonNull),
+                "romajiTitle" to (romajiTitle?.let(::JsonPrimitive) ?: JsonNull),
+                "englishTitle" to (englishTitle?.let(::JsonPrimitive) ?: JsonNull),
+                "seasonSpecificTitle" to (seasonSpecificTitle?.let(::JsonPrimitive) ?: JsonNull)
             )
         ).toString()
 
@@ -140,7 +181,7 @@ object PluginRuntime {
                 evaluateCached({ JsRuntime.callBytecode(this) }, JsBindings.staticCallCode)
                 deferred.await()
             }
-            return parseJsonResults(deferred.await(), scraperId)
+            return parseJsonResults(deferred.await(), scraperId, targetTitle = title)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (e: Exception) {
@@ -171,7 +212,11 @@ object PluginRuntime {
         }
     }
 
-    fun parseJsonResults(rawJson: String, scraperId: String = "plugin"): List<PluginRuntimeResult> {
+    fun parseJsonResults(
+        rawJson: String,
+        scraperId: String = "plugin",
+        targetTitle: String? = null
+    ): List<PluginRuntimeResult> {
         if (rawJson.isBlank()) return emptyList()
         return runCatching {
             val parsedElement = json.parseToJsonElement(rawJson)
@@ -191,15 +236,33 @@ object PluginRuntime {
                     val obj = itemElement as? JsonObject ?: return@mapNotNull null
 
                     // 1. Title Coalescing
-                    val title = obj.string("title")
-                        ?: obj.string("name")
-                        ?: obj.string("label")
-                        ?: obj.string("description")
-                        ?: obj.string("filename")
+                    val rawTitle = obj.string("title")
+                    val rawName = obj.string("name")
+                    val rawLabel = obj.string("label")
+                    val rawDesc = obj.string("description")
+                    val rawFilename = obj.string("filename")
+
+                    val inferredTitle = rawTitle
+                        ?: rawName
+                        ?: rawLabel
+                        ?: rawDesc
+                        ?: rawFilename
+                        ?: targetTitle
                         ?: "$scraperId Stream"
 
-                    val cleanTitle = title.trim()
-                    val rawName = obj.string("name")?.trim()
+                    val isGeneric = rawTitle == null ||
+                            rawTitle.equals("Server", ignoreCase = true) ||
+                            rawTitle.startsWith("Server ", ignoreCase = true) ||
+                            rawTitle.equals("Auto", ignoreCase = true) ||
+                            rawTitle.equals("Direct", ignoreCase = true) ||
+                            rawTitle.equals("HLS", ignoreCase = true)
+
+                    val cleanTitle = if (!targetTitle.isNullOrBlank() && isGeneric) {
+                        targetTitle.trim()
+                    } else {
+                        inferredTitle.trim()
+                    }
+                    val finalName = rawName?.trim() ?: if (rawTitle != null && cleanTitle != rawTitle) rawTitle.trim() else null
 
                     // 2. Mutable headers & URL / infoHash extraction
                     val headersMap = mutableMapOf<String, String>()
@@ -268,11 +331,17 @@ object PluginRuntime {
                     val hintsObj = obj["behaviorHints"] as? JsonObject
                     val proxyHeaders = hintsObj?.get("proxyHeaders")
                     if (proxyHeaders is JsonObject) {
-                        val reqHeaders = (proxyHeaders["request"] as? JsonObject) ?: proxyHeaders
+                        val reqHeaders = (proxyHeaders["request"] as? JsonObject)
+                            ?: (proxyHeaders["headers"] as? JsonObject)
+                            ?: proxyHeaders
                         reqHeaders.forEach { (k, v) ->
                             (v as? JsonPrimitive)?.contentOrNull?.let { headersMap[k.trim()] = it.trim() }
                         }
                     }
+
+                    // Extract fileIdx if present
+                    val fileIdx = parseIntegerMetric(obj, "fileIdx", "file_idx", "fileIndex", "index")
+                        ?: hintsObj?.let { parseIntegerMetric(it, "fileIdx", "file_idx", "fileIndex", "index") }
 
                     // If rawUrl is missing/blank, but infoHash is present: synthesize magnet
                     if (rawUrl.isNullOrBlank() && !infoHash.isNullOrBlank()) {
@@ -315,10 +384,49 @@ object PluginRuntime {
                     // Size
                     val size = obj.string("size") ?: obj.string("fileSize")
 
-                    // Language, provider, type
+                    // Language, provider, type, format, manifestContent
                     val language = obj.string("language") ?: obj.string("lang")
                     val provider = obj.string("provider") ?: scraperId
                     val type = obj.string("type")
+                    val format = obj.string("format") ?: obj.string("container") ?: obj.string("mimeType")
+                    val manifestContent = obj.string("manifestContent") ?: obj.string("manifest")
+
+                    // Trackers extraction from trackers and sources arrays
+                    val extractedTrackers = mutableListOf<String>()
+                    (obj["trackers"] as? JsonArray)?.forEach { tElem ->
+                        (tElem as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { it.isNotBlank() }?.let {
+                            extractedTrackers.add(it)
+                        }
+                    }
+                    (obj["sources"] as? JsonArray)?.forEach { sElem ->
+                        (sElem as? JsonPrimitive)?.contentOrNull?.trim()?.let { srcStr ->
+                            if (srcStr.startsWith("tracker:", ignoreCase = true)) {
+                                val t = srcStr.substring(8).trim()
+                                if (t.isNotBlank()) extractedTrackers.add(t)
+                            } else if (srcStr.startsWith("udp://", ignoreCase = true) || srcStr.startsWith("http://", ignoreCase = true) || srcStr.startsWith("https://", ignoreCase = true)) {
+                                extractedTrackers.add(srcStr)
+                            }
+                        }
+                    }
+
+                    // DRM configuration extraction
+                    val drmObj = obj["drm"] as? JsonObject
+                    val drmConfig = if (drmObj != null) {
+                        val scheme = drmObj.string("scheme") ?: "clearkey"
+                        val licenseUrl = drmObj.string("licenseUrl") ?: drmObj.string("url")
+                        val drmHeaders = (drmObj["headers"] as? JsonObject)?.mapNotNull { (k, v) ->
+                            (v as? JsonPrimitive)?.contentOrNull?.let { k.trim() to it.trim() }
+                        }?.toMap() ?: emptyMap()
+                        val clearKeys = (drmObj["clearKeys"] as? JsonObject)?.mapNotNull { (k, v) ->
+                            (v as? JsonPrimitive)?.contentOrNull?.let { k.trim() to it.trim() }
+                        }?.toMap() ?: emptyMap()
+                        DrmConfig(
+                            scheme = scheme,
+                            licenseUrl = licenseUrl,
+                            headers = drmHeaders,
+                            clearKeys = clearKeys
+                        )
+                    } else null
 
                     // 5. Tolerant Subtitle Parsing
                     val subtitlesList = mutableListOf<PluginSubtitleResult>()
@@ -330,6 +438,7 @@ object PluginRuntime {
                             if (subUrl.isBlank()) return@forEach
                             val subLang = subObj.string("language") ?: subObj.string("lang") ?: subObj.string("label") ?: "und"
                             val subName = subObj.string("name") ?: subObj.string("title")
+                            val subMime = subObj.string("mimeType") ?: subObj.string("format")
                             val subHeaders = (subObj["headers"] as? JsonObject)?.mapNotNull { (sk, sv) ->
                                 (sv as? JsonPrimitive)?.contentOrNull?.let { sk.trim() to it.trim() }
                             }?.toMap()
@@ -338,7 +447,8 @@ object PluginRuntime {
                                     url = subUrl.trim(),
                                     language = subLang.trim(),
                                     name = subName?.trim(),
-                                    headers = subHeaders
+                                    headers = subHeaders,
+                                    mimeType = subMime?.trim()
                                 )
                             )
                         } catch (_: Exception) {}
@@ -346,7 +456,7 @@ object PluginRuntime {
 
                     PluginRuntimeResult(
                         title = cleanTitle,
-                        name = rawName,
+                        name = finalName ?: rawName,
                         url = finalUrl,
                         quality = finalQuality,
                         size = size?.trim(),
@@ -356,8 +466,13 @@ object PluginRuntime {
                         seeders = seeders,
                         peers = peers,
                         infoHash = infoHash,
+                        fileIdx = fileIdx,
                         headers = if (headersMap.isNotEmpty()) headersMap else null,
-                        subtitles = if (subtitlesList.isNotEmpty()) subtitlesList else null
+                        subtitles = if (subtitlesList.isNotEmpty()) subtitlesList else null,
+                        format = format?.trim(),
+                        trackers = if (extractedTrackers.isNotEmpty()) extractedTrackers.distinct() else null,
+                        drm = drmConfig,
+                        manifestContent = manifestContent?.trim()
                     )
                 } catch (e: Exception) {
                     android.util.Log.w("PluginRuntime", "Skipping malformed stream item from $scraperId: ${e.message}")

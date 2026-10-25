@@ -3,6 +3,10 @@ package com.euthopiar.ui.player
 import android.app.ActivityManager
 import android.app.Application
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -25,6 +29,7 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.exoplayer.dash.DashMediaSource
+import androidx.media3.exoplayer.hls.HlsManifest
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
@@ -69,8 +74,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import okhttp3.ConnectionPool
 import okhttp3.OkHttpClient
@@ -115,22 +123,36 @@ data class ServerSourceOption(
     val streamSource: StreamSource,
     val latencyMs: Long? = null,
     val healthCategory: ServerHealthCategory? = null,
-    val audioBadge: String? = null
+    val audioBadge: String? = null,
+    val size: String? = null,
+    val seeders: Int? = null,
+    val isCached: Boolean = false,
+    val isTorrent: Boolean = false,
+    val hdrType: String? = null,
+    val codec: String? = null,
+    val addonNames: List<String> = emptyList()
 )
 
 data class VideoQualityOption(
     val id: String,
     val label: String,
-    val height: Int? = null, // null indicates Auto (Adaptive)
+    val height: Int? = null,
+    val bitrate: Int? = null,
+    val groupIndex: Int = -1,
+    val trackIndex: Int = -1,
+    val isAuto: Boolean = false,
     val latencyMs: Long? = null,
-    val healthCategory: ServerHealthCategory? = null
+    val healthCategory: ServerHealthCategory? = null,
+    val linkedServerId: String? = null,
+    val isServerSwitch: Boolean = false
 )
 
 data class SubtitleOption(
     val id: String,
     val label: String,
     val language: String? = null,
-    val url: String? = null
+    val url: String? = null,
+    val headers: Map<String, String> = emptyMap()
 )
 
 data class AudioTrackOption(
@@ -163,8 +185,8 @@ data class PlayerUiState(
     val bufferedPositionMs: Long = 0L,
     val availableServers: List<ServerSourceOption> = emptyList(),
     val selectedServer: ServerSourceOption? = null,
-    val availableQualities: List<VideoQualityOption> = listOf(VideoQualityOption("auto", "Auto (Adaptive)")),
-    val selectedQuality: VideoQualityOption = VideoQualityOption("auto", "Auto (Adaptive)"),
+    val availableQualities: List<VideoQualityOption> = listOf(VideoQualityOption("auto", "Auto (Adaptive)", isAuto = true)),
+    val selectedQuality: VideoQualityOption = VideoQualityOption("auto", "Auto (Adaptive)", isAuto = true),
     val availableSubtitles: List<SubtitleOption> = listOf(SubtitleOption("off", "Off")),
     val selectedSubtitle: SubtitleOption = SubtitleOption("off", "Off"),
     val availableAudioTracks: List<AudioTrackOption> = listOf(AudioTrackOption("auto", "Auto (Default)", isAuto = true)),
@@ -206,6 +228,7 @@ data class PlayerUiState(
     val showSkipIntro: Boolean = false,
     val showSkipOutro: Boolean = false,
     val skipIntroSeconds: Int = 85,
+    val skipOutroSeconds: Int = 90,
     val skipIntroLabel: String = "Skip Intro",
     val backdropUrl: String? = null,
     val mediaFormatInfo: MediaFormatInfo = MediaFormatInfo(),
@@ -216,7 +239,8 @@ data class PlayerUiState(
     val p2pSeeds: Int = 0,
     val p2pDownloadSpeed: Long = 0L,
     val p2pBufferProgress: Float = 0f,
-    val p2pPhaseLabel: String? = null
+    val p2pPhaseLabel: String? = null,
+    val isSearchingStreams: Boolean = false
 )
 
 data class MediaFormatInfo(
@@ -263,6 +287,10 @@ class PlayerViewModel(
     private var toastJob: Job? = null
     private var subtitleJob: Job? = null
     private var p2pStateJob: Job? = null
+    private var sourcePrepJob: Job? = null
+    private var fastStartJob: Job? = null
+    private val probeSemaphore = Semaphore(permits = 3)
+    private var currentYear: Int? = null
 
     private var pre2xSpeed: Float = 1.0f
     private var videoFrameRendered: Boolean = false
@@ -296,17 +324,34 @@ class PlayerViewModel(
         .retryOnConnectionFailure(true)
         .build()
 
-    private val failedServerIds = mutableSetOf<String>()
+    @Volatile
+    private var lastReportedTracks: Tracks? = null
+    private val failedServerIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val failedAudioTrackIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private var pendingSeekTargetMs: Long? = null
+    private var seekDebounceJob: Job? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    private data class VideoTrackCandidate(
+        val groupIndex: Int,
+        val trackIndex: Int,
+        val height: Int,
+        val bitrate: Int?
+    )
     private var activeRefreshableSource: com.euthopiar.core.streams.RefreshableSource? = null
     private var bufferingStallStartTime: Long? = null
     private var userExplicitServerSelection: Boolean = false
+    private var hasStartedPlayback: Boolean = false
+    private var userPreferredAudioLanguage: String? = null
     private val audioDspManager by lazy { AudioDspManager(application) }
     private var loudnessEnhancer: android.media.audiofx.LoudnessEnhancer? = null
     private var dynamicsProcessing: android.media.audiofx.DynamicsProcessing? = null
     private var sleepTimerJob: Job? = null
     private var upNextJob: Job? = null
     private var isUpNextDismissed: Boolean = false
+    private var isAutoPlayNextEnabled: Boolean = true
     private var isAutoSkipIntroEnabled: Boolean = false
+    private var isExternalSubtitlesEnabled: Boolean = true
 
     private var totalBytesLoadedCumulative: Long = 0L
     private var lastVelocityCheckTimeMs: Long = 0L
@@ -321,10 +366,77 @@ class PlayerViewModel(
     private var pendingQualityOption: VideoQualityOption? = null
     private var pendingServerOption: ServerSourceOption? = null
     private var currentOriginalLanguage: String? = null
+    @Volatile
+    private var isUserDebridActiveCached: Boolean = false
+
+    private fun isUserDebridActive(): Boolean {
+        if (isUserDebridActiveCached) return true
+        if (com.euthopiar.core.debrid.DebridManager.hasActiveDebrid()) return true
+        return false
+    }
+
+    private suspend fun resolveUserHasDebrid(): Boolean {
+        val debridEnabled = preferencesRepository.debridEnabled.firstOrNull() ?: false
+        if (!debridEnabled) {
+            isUserDebridActiveCached = false
+            com.euthopiar.core.debrid.DebridManager.getInstance().setActiveProviders(emptyList())
+            return false
+        }
+        val providerStr = preferencesRepository.activeDebridProvider.firstOrNull() ?: "NONE"
+        val pType = com.euthopiar.core.debrid.DebridProviderType.fromId(providerStr)
+        val key = when (pType) {
+            com.euthopiar.core.debrid.DebridProviderType.REAL_DEBRID -> preferencesRepository.realDebridApiKey.firstOrNull() ?: ""
+            com.euthopiar.core.debrid.DebridProviderType.ALL_DEBRID -> preferencesRepository.allDebridApiKey.firstOrNull() ?: ""
+            com.euthopiar.core.debrid.DebridProviderType.TORBOX -> preferencesRepository.torBoxApiKey.firstOrNull() ?: ""
+            com.euthopiar.core.debrid.DebridProviderType.NONE -> ""
+        }
+        val active = pType != com.euthopiar.core.debrid.DebridProviderType.NONE && key.isNotBlank()
+        isUserDebridActiveCached = active
+        if (active) {
+            com.euthopiar.core.debrid.DebridManager.getInstance().setActiveProviders(
+                listOf(com.euthopiar.core.debrid.DebridManager.ActiveDebridProvider(pType, true))
+            )
+        } else {
+            com.euthopiar.core.debrid.DebridManager.getInstance().setActiveProviders(emptyList())
+        }
+        return active
+    }
 
     init {
         initExoPlayer()
         observeUserPreferences()
+        registerNetworkCallback()
+    }
+
+    private fun registerNetworkCallback() {
+        try {
+            val cm = getApplication<Application>().getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+            val request = NetworkRequest.Builder()
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .build()
+            val callback = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    if (failedServerIds.isNotEmpty()) {
+                        android.util.Log.i("PlayerViewModel", "Network restored: clearing ${failedServerIds.size} failed server IDs")
+                        failedServerIds.clear()
+                    }
+                }
+            }
+            cm.registerNetworkCallback(request, callback)
+            networkCallback = callback
+        } catch (_: Throwable) {
+            // Ignore in restricted sandbox or unit test
+        }
+    }
+
+    private fun unregisterNetworkCallback() {
+        try {
+            networkCallback?.let { cb ->
+                val cm = getApplication<Application>().getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                cm?.unregisterNetworkCallback(cb)
+            }
+        } catch (_: Throwable) {}
+        networkCallback = null
     }
 
     private fun observeUserPreferences() {
@@ -359,6 +471,16 @@ class PlayerViewModel(
             }
         }
         viewModelScope.launch {
+            preferencesRepository.autoPlayNextEpisode.collect { enabled ->
+                isAutoPlayNextEnabled = enabled
+                if (!enabled && upNextJob != null) {
+                    upNextJob?.cancel()
+                    upNextJob = null
+                    _uiState.update { it.copy(showUpNextCard = false) }
+                }
+            }
+        }
+        viewModelScope.launch {
             preferencesRepository.countdownNextEpisodeSeconds.collect { sec ->
                 _uiState.update { it.copy(upNextCountdownSeconds = sec) }
             }
@@ -374,9 +496,50 @@ class PlayerViewModel(
             }
         }
         viewModelScope.launch {
+            preferencesRepository.skipOutroDurationSeconds.collect { durSec ->
+                _uiState.update { it.copy(skipOutroSeconds = durSec) }
+            }
+        }
+        viewModelScope.launch {
+            preferencesRepository.externalSubtitlesEnabled.collect { enabled ->
+                isExternalSubtitlesEnabled = enabled
+            }
+        }
+        viewModelScope.launch {
             preferencesRepository.smartFailoverEnabled.collect { enabled ->
                 _uiState.update { it.copy(smartFailoverEnabled = enabled) }
             }
+        }
+        viewModelScope.launch {
+            kotlinx.coroutines.flow.combine(
+                preferencesRepository.debridEnabled,
+                preferencesRepository.activeDebridProvider,
+                preferencesRepository.realDebridApiKey,
+                preferencesRepository.allDebridApiKey,
+                preferencesRepository.torBoxApiKey
+            ) { debridEnabled, providerStr, rdKey, adKey, tbKey ->
+                if (!debridEnabled) {
+                    isUserDebridActiveCached = false
+                    com.euthopiar.core.debrid.DebridManager.getInstance().setActiveProviders(emptyList())
+                    return@combine
+                }
+                val pType = com.euthopiar.core.debrid.DebridProviderType.fromId(providerStr)
+                val key = when (pType) {
+                    com.euthopiar.core.debrid.DebridProviderType.REAL_DEBRID -> rdKey
+                    com.euthopiar.core.debrid.DebridProviderType.ALL_DEBRID -> adKey
+                    com.euthopiar.core.debrid.DebridProviderType.TORBOX -> tbKey
+                    com.euthopiar.core.debrid.DebridProviderType.NONE -> ""
+                }
+                val active = pType != com.euthopiar.core.debrid.DebridProviderType.NONE && key.isNotBlank()
+                isUserDebridActiveCached = active
+                if (active) {
+                    com.euthopiar.core.debrid.DebridManager.getInstance().setActiveProviders(
+                        listOf(com.euthopiar.core.debrid.DebridManager.ActiveDebridProvider(pType, true))
+                    )
+                } else {
+                    com.euthopiar.core.debrid.DebridManager.getInstance().setActiveProviders(emptyList())
+                }
+            }.collect { }
         }
     }
 
@@ -397,6 +560,13 @@ class PlayerViewModel(
                 true
             }
         }
+        val audioPassthrough = kotlinx.coroutines.runBlocking {
+            try {
+                preferencesRepository.audioPassthroughEnabled.first()
+            } catch (_: Throwable) {
+                false
+            }
+        }
         val seekSeconds = kotlinx.coroutines.runBlocking {
             try {
                 preferencesRepository.seekIntervalSeconds.first()
@@ -405,19 +575,24 @@ class PlayerViewModel(
             }
         }
 
-        // Clamp buffer size based on actual device memory to prevent OOM on 4K REMUX and lower-RAM devices
+        // Clamp buffer size based on user setting and device memory to prevent OOM on lower-RAM devices
         val actManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
         val memInfo = ActivityManager.MemoryInfo()
         actManager?.getMemoryInfo(memInfo)
         val totalRamMb = (memInfo.totalMem / (1024 * 1024)).toInt()
         val isHighRam = (actManager?.memoryClass ?: 192) >= 384 || totalRamMb > 4500
-        val targetBytes = if (isHighRam) 128 * 1024 * 1024 else 64 * 1024 * 1024
+        val maxRamBytes = if (isHighRam) 128 * 1024 * 1024 else 64 * 1024 * 1024
+        val requestedBytes = bufferMb.coerceIn(25, 100) * 1024 * 1024
+        val targetBytes = requestedBytes.coerceAtMost(maxRamBytes)
+        val bufferScale = bufferMb.coerceIn(25, 100) / 50f
+        val minBufferMs = (20_000 * bufferScale).toInt().coerceIn(10_000, 45_000)
+        val maxBufferMs = (50_000 * bufferScale).toInt().coerceIn(25_000, 100_000)
 
         val loadControl = DefaultLoadControl.Builder()
             .setTargetBufferBytes(targetBytes)
             .setBufferDurationsMs(
-                /* minBufferMs = */ 15_000,
-                /* maxBufferMs = */ 35_000,
+                /* minBufferMs = */ minBufferMs,
+                /* maxBufferMs = */ maxBufferMs,
                 /* bufferForPlaybackMs = */ 1_500,
                 /* bufferForPlaybackAfterRebufferMs = */ 3_000
             )
@@ -452,15 +627,17 @@ class PlayerViewModel(
 
                 // 2. Fallback: Register FfmpegAudioRenderer as software fallback for codecs
                 // not natively licensed or supported by device platform HAL (AC-3, E-AC-3, TrueHD, DTS).
-                try {
-                    val ffmpegRenderer = androidx.media3.decoder.ffmpeg.FfmpegAudioRenderer(
-                        eventHandler,
-                        eventListener,
-                        audioSink
-                    )
-                    out.add(ffmpegRenderer)
-                } catch (t: Throwable) {
-                    android.util.Log.w("PlayerViewModel", "Could not instantiate FfmpegAudioRenderer: ${t.message}")
+                if (out.none { it.javaClass.name.contains("FfmpegAudioRenderer") }) {
+                    try {
+                        val ffmpegRenderer = androidx.media3.decoder.ffmpeg.FfmpegAudioRenderer(
+                            eventHandler,
+                            eventListener,
+                            audioSink
+                        )
+                        out.add(ffmpegRenderer)
+                    } catch (t: Throwable) {
+                        android.util.Log.w("PlayerViewModel", "Could not instantiate FfmpegAudioRenderer: ${t.message}")
+                    }
                 }
             }
 
@@ -469,23 +646,96 @@ class PlayerViewModel(
                 enableFloatOutput: Boolean,
                 enableAudioTrackPlaybackParams: Boolean
             ): AudioSink {
-                // Pre-Sonic Channel Downmixing: Downmix multi-channel (5.1 / 7.1) audio to stereo
-                // BEFORE reaching SonicAudioProcessor. This cuts Sonic processing overhead by ~70%
-                // at 1.5x / 2.0x playback speeds and prevents AudioTrack buffer starvation.
-                val coef51ToStereo = floatArrayOf(
-                    1.0f, 0.0f, 0.7071f, 0.0f, 0.7071f, 0.0f,
-                    0.0f, 1.0f, 0.7071f, 0.0f, 0.0f, 0.7071f
-                )
-                val coef71ToStereo = floatArrayOf(
-                    1.0f, 0.0f, 0.7071f, 0.0f, 0.7071f, 0.0f, 0.5f, 0.0f,
-                    0.0f, 1.0f, 0.7071f, 0.0f, 0.0f, 0.7071f, 0.0f, 0.5f
-                )
+                // Register matrices for ALL channel counts 1..8 so ChannelMixingAudioProcessor
+                // NEVER throws UnhandledAudioFormatException or UnsupportedOperationException.
                 val channelMixingAudioProcessor = ChannelMixingAudioProcessor().apply {
-                    putChannelMixingMatrix(ChannelMixingMatrix(6, 2, coef51ToStereo))
-                    putChannelMixingMatrix(ChannelMixingMatrix(8, 2, coef71ToStereo))
+                    putChannelMixingMatrix(ChannelMixingMatrix.create(1, 2))
+                    putChannelMixingMatrix(ChannelMixingMatrix.create(2, 2))
+                    putChannelMixingMatrix(
+                        ChannelMixingMatrix(
+                            3, 2,
+                            floatArrayOf(
+                                1.0f, 0.0f,
+                                0.0f, 1.0f,
+                                0.7071f, 0.7071f
+                            )
+                        )
+                    )
+                    putChannelMixingMatrix(
+                        ChannelMixingMatrix(
+                            4, 2,
+                            floatArrayOf(
+                                1.0f, 0.0f,
+                                0.0f, 1.0f,
+                                0.7071f, 0.0f,
+                                0.0f, 0.7071f
+                            )
+                        )
+                    )
+                    putChannelMixingMatrix(
+                        ChannelMixingMatrix(
+                            5, 2,
+                            floatArrayOf(
+                                1.0f, 0.0f,
+                                0.0f, 1.0f,
+                                0.7071f, 0.7071f,
+                                0.7071f, 0.0f,
+                                0.0f, 0.7071f
+                            )
+                        )
+                    )
+                    putChannelMixingMatrix(
+                        ChannelMixingMatrix(
+                            6, 2,
+                            floatArrayOf(
+                                1.0f, 0.0f,
+                                0.0f, 1.0f,
+                                0.7071f, 0.7071f,
+                                0.0f, 0.0f,
+                                0.7071f, 0.0f,
+                                0.0f, 0.7071f
+                            )
+                        )
+                    )
+                    putChannelMixingMatrix(
+                        ChannelMixingMatrix(
+                            7, 2,
+                            floatArrayOf(
+                                1.0f, 0.0f,
+                                0.0f, 1.0f,
+                                0.7071f, 0.7071f,
+                                0.0f, 0.0f,
+                                0.5f, 0.5f,
+                                0.7071f, 0.0f,
+                                0.0f, 0.7071f
+                            )
+                        )
+                    )
+                    putChannelMixingMatrix(
+                        ChannelMixingMatrix(
+                            8, 2,
+                            floatArrayOf(
+                                1.0f, 0.0f,
+                                0.0f, 1.0f,
+                                0.7071f, 0.7071f,
+                                0.0f, 0.0f,
+                                0.5f, 0.0f,
+                                0.0f, 0.5f,
+                                0.7071f, 0.0f,
+                                0.0f, 0.7071f
+                            )
+                        )
+                    )
                 }
 
                 return DefaultAudioSink.Builder(context)
+                    .setAudioCapabilities(
+                        if (audioPassthrough) {
+                            androidx.media3.exoplayer.audio.AudioCapabilities.getCapabilities(context)
+                        } else {
+                            androidx.media3.exoplayer.audio.AudioCapabilities.DEFAULT_AUDIO_CAPABILITIES
+                        }
+                    )
                     .setEnableFloatOutput(enableFloatOutput)
                     .setEnableAudioTrackPlaybackParams(false)
                     .setAudioProcessors(arrayOf(channelMixingAudioProcessor))
@@ -495,7 +745,7 @@ class PlayerViewModel(
             if (hwAccel) {
                 setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
             } else {
-                setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
+                setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
             }
             setEnableDecoderFallback(true)
             // Use high-precision software Sonic WSOLA audio time-stretching for 100% jitter-free speed changes at 1.25x, 1.5x, 2x
@@ -598,8 +848,8 @@ class PlayerViewModel(
                         starvationConsecutiveSeconds = 0
                         val duration = player.duration.takeIf { it > 0 } ?: _uiState.value.durationMs
 
-                        // Honeypot Resilience: detect short warning/honeypot clips (< 95s) for full Movies/TV (only if auto-selected)
-                        if (_uiState.value.smartFailoverEnabled && !userExplicitServerSelection && duration in 1000L..95000L && _uiState.value.mediaType in listOf(MediaType.MOVIE, MediaType.TV_SERIES)) {
+                        // Honeypot Resilience: detect short warning/honeypot clips (< 95s) for full Movies/TV/Anime (only if auto-selected)
+                        if (_uiState.value.smartFailoverEnabled && !userExplicitServerSelection && duration in 1000L..95000L && _uiState.value.mediaType in listOf(MediaType.MOVIE, MediaType.TV_SERIES, MediaType.ANIME)) {
                             val badServer = _uiState.value.selectedServer
                             if (badServer != null && badServer.id !in failedServerIds) {
                                 failedServerIds.add(badServer.id)
@@ -618,9 +868,12 @@ class PlayerViewModel(
                                 isLoading = false,
                                 isBuffering = false,
                                 durationMs = duration,
-                                isPlaying = player.isPlaying
+                                isPlaying = player.isPlaying,
+                                userError = null,
+                                errorMessage = null
                             )
                         }
+                        probeAllPendingServers()
                         updateMediaFormatInfo()
                         resetAutoHideTimer()
                         applyDialogueBoost()
@@ -631,7 +884,7 @@ class PlayerViewModel(
                         if (_uiState.value.selectedSleepTimer == SleepTimerOption.END_OF_EPISODE) {
                             _uiState.update { it.copy(selectedSleepTimer = SleepTimerOption.OFF) }
                             showToast("Bedtime sleep timer: paused at end of episode")
-                        } else if (_uiState.value.hasNextEpisode) {
+                        } else if (isAutoPlayNextEnabled && _uiState.value.hasNextEpisode) {
                             playNextEpisode()
                         }
                     }
@@ -644,6 +897,7 @@ class PlayerViewModel(
             override fun onRenderedFirstFrame() {
                 android.util.Log.d("PlayerViewModel", "onRenderedFirstFrame: First video frame rendered successfully")
                 videoFrameRendered = true
+                _uiState.update { it.copy(userError = null, errorMessage = null) }
                 updateMediaFormatInfo()
             }
 
@@ -660,6 +914,70 @@ class PlayerViewModel(
 
             override fun onPlayerError(error: PlaybackException) {
                 android.util.Log.e("PlayerViewModel", "ExoPlayer onPlayerError: ${error.errorCodeName} (${error.errorCode}) - ${error.message}", error)
+
+                // -1. Unrecognized Input Format / Progressive fallback to HLS
+                val isUnrecognizedFormat = error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED ||
+                        error.cause?.javaClass?.name?.contains("UnrecognizedInputFormatException") == true ||
+                        error.message?.contains("None of the available extractors", ignoreCase = true) == true ||
+                        error.cause?.message?.contains("None of the available extractors", ignoreCase = true) == true
+
+                if (isUnrecognizedFormat) {
+                    val server = _uiState.value.selectedServer
+                    if (server != null) {
+                        val src = server.streamSource
+                        val isAutoOrUnpromoted = src.container == com.euthopiar.core.model.StreamContainer.AUTO ||
+                                (!src.isM3u8 && src.container != com.euthopiar.core.model.StreamContainer.HLS && src.container != com.euthopiar.core.model.StreamContainer.DASH)
+                        if (isAutoOrUnpromoted) {
+                            val probeText = src.manifestContent?.trim() ?: ""
+                            if (probeText.isBlank() && (src.url.startsWith("http://", ignoreCase = true) || src.url.startsWith("https://", ignoreCase = true))) {
+                                viewModelScope.launch(Dispatchers.IO) {
+                                    var probedContainer = com.euthopiar.core.model.StreamContainer.HLS
+                                    try {
+                                        val req = okhttp3.Request.Builder()
+                                            .url(src.url)
+                                            .header("Range", "bytes=0-511")
+                                            .apply { src.headers.forEach { (k, v) -> header(k, v) } }
+                                            .build()
+                                        com.euthopiar.core.network.PlayerPlaybackNetworking.playbackHttpClient.newCall(req).execute().use { resp ->
+                                            val ct = resp.header("Content-Type")?.lowercase() ?: ""
+                                            val peek = resp.peekBody(512).string()
+                                            if (peek.contains("<MPD", ignoreCase = true) || ct.contains("dash") || ct.contains("mpd")) {
+                                                probedContainer = com.euthopiar.core.model.StreamContainer.DASH
+                                            } else if (peek.contains("#EXTM3U", ignoreCase = true) || ct.contains("mpegurl")) {
+                                                probedContainer = com.euthopiar.core.model.StreamContainer.HLS
+                                            }
+                                        }
+                                    } catch (_: Throwable) {}
+                                    withContext(Dispatchers.Main) {
+                                        android.util.Log.i("PlayerViewModel", "Probed AUTO stream format: $probedContainer. Retrying playback...")
+                                        val updatedSource = src.copy(
+                                            container = probedContainer,
+                                            isM3u8 = (probedContainer == com.euthopiar.core.model.StreamContainer.HLS)
+                                        )
+                                        val updatedServer = server.copy(streamSource = updatedSource)
+                                        _uiState.update { it.copy(selectedServer = updatedServer) }
+                                        playStreamSource(updatedSource, streamResult?.subtitles ?: emptyList(), seekToPosition = exoPlayer?.currentPosition ?: _uiState.value.currentPositionMs)
+                                    }
+                                }
+                                return
+                            }
+
+                            val promotedContainer = when {
+                                probeText.contains("<MPD", ignoreCase = true) || src.url.contains(".mpd", ignoreCase = true) || src.url.contains("dash", ignoreCase = true) -> com.euthopiar.core.model.StreamContainer.DASH
+                                else -> com.euthopiar.core.model.StreamContainer.HLS
+                            }
+                            android.util.Log.i("PlayerViewModel", "Unrecognized input format on AUTO stream. Self-healing promotion to $promotedContainer...")
+                            val updatedSource = src.copy(
+                                container = promotedContainer,
+                                isM3u8 = (promotedContainer == com.euthopiar.core.model.StreamContainer.HLS)
+                            )
+                            val updatedServer = server.copy(streamSource = updatedSource)
+                            _uiState.update { it.copy(selectedServer = updatedServer) }
+                            playStreamSource(updatedSource, streamResult?.subtitles ?: emptyList(), seekToPosition = exoPlayer?.currentPosition ?: _uiState.value.currentPositionMs)
+                            return
+                        }
+                    }
+                }
 
                 // 0. Subtitle / Text Renderer Recovery
                 val isSubtitleError = error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED ||
@@ -703,8 +1021,35 @@ class PlayerViewModel(
                         error.cause?.message?.contains("Audio", ignoreCase = true) == true
 
                 if (isAudioError) {
-                    val currentTrack = _uiState.value.selectedAudioTrack
-                    val fallback = _uiState.value.availableAudioTracks.firstOrNull { it.id != currentTrack.id && !it.isAuto }
+                    val tracks = exoPlayer?.currentTracks
+                    if (tracks != null) {
+                        for (gIdx in 0 until tracks.groups.size) {
+                            val grp = tracks.groups[gIdx]
+                            if (grp.type == C.TRACK_TYPE_AUDIO) {
+                                for (tIdx in 0 until grp.length) {
+                                    if (grp.isTrackSelected(tIdx)) {
+                                        failedAudioTrackIds.add("audio_${gIdx}_$tIdx")
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    val selectedTrack = _uiState.value.selectedAudioTrack
+                    if (!selectedTrack.isAuto && selectedTrack.id.isNotBlank()) {
+                        failedAudioTrackIds.add(selectedTrack.id)
+                    }
+                    _uiState.value.availableAudioTracks.filter { it.isSelected }.forEach {
+                        failedAudioTrackIds.add(it.id)
+                    }
+
+                    val fallback = _uiState.value.availableAudioTracks.firstOrNull { opt ->
+                        opt.id !in failedAudioTrackIds && !opt.isSelected && !opt.isAuto &&
+                                (tracks == null || opt.groupIndex < 0 || opt.groupIndex >= tracks.groups.size || tracks.groups[opt.groupIndex].isTrackSupported(opt.trackIndex, false))
+                    } ?: _uiState.value.availableAudioTracks.firstOrNull { opt ->
+                        opt.id !in failedAudioTrackIds && !opt.isSelected && !opt.isAuto
+                    }
+
                     if (fallback != null) {
                         showToast("Switching to compatible audio track: ${fallback.displayName}...")
                         selectAudioTrack(fallback)
@@ -723,7 +1068,7 @@ class PlayerViewModel(
                     }
                 }
 
-                // 2. Video Decoder / Capabilities Recovery
+                // 2. Video Decoder / Capabilities Recovery (including Dolby Vision fallback)
                 val isVideoDecoderError = error.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED ||
                         error.errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
                         error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED ||
@@ -731,21 +1076,57 @@ class PlayerViewModel(
                         error.message?.contains("MediaCodecVideoRenderer", ignoreCase = true) == true ||
                         error.message?.contains("NO_EXCEEDS_CAPABILITIES", ignoreCase = true) == true
 
-                if (_uiState.value.smartFailoverEnabled && isVideoDecoderError) {
-                    val currentServer = _uiState.value.selectedServer
-                    if (currentServer != null) {
-                        failedServerIds.add(currentServer.id)
+                if (isVideoDecoderError) {
+                    val tracks = exoPlayer?.currentTracks
+                    val videoGroups = tracks?.groups?.filter { it.type == C.TRACK_TYPE_VIDEO }.orEmpty()
+
+                    // Check if there is an alternative compatible video track in current stream (e.g. HDR10/HEVC base or non-DV)
+                    var fallbackTrackSelected = false
+                    for (group in videoGroups) {
+                        for (i in 0 until group.length) {
+                            if (!group.isTrackSelected(i) && group.isTrackSupported(i)) {
+                                val fmt = group.getTrackFormat(i)
+                                val isDv = isDolbyVisionFormat(fmt)
+                                if (!isDv) {
+                                    val mime = fmt.sampleMimeType.orEmpty()
+                                    android.util.Log.i("PlayerViewModel", "Falling back from unsupported DV video track to compatible track index $i ($mime)")
+                                    exoPlayer?.trackSelectionParameters = exoPlayer?.trackSelectionParameters?.buildUpon()
+                                        ?.clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+                                        ?.setOverrideForType(
+                                            androidx.media3.common.TrackSelectionOverride(group.mediaTrackGroup, listOf(i))
+                                        )
+                                        ?.build() ?: break
+                                    showToast("Switching to compatible video stream...")
+                                    exoPlayer?.prepare()
+                                    exoPlayer?.play()
+                                    fallbackTrackSelected = true
+                                    break
+                                }
+                            }
+                        }
+                        if (fallbackTrackSelected) break
                     }
-                    val non4kFallback = _uiState.value.availableServers.firstOrNull {
-                        it.id !in failedServerIds &&
-                                !it.resolutionLabel.contains("2160") &&
-                                !it.resolutionLabel.contains("4k", ignoreCase = true)
-                    }
-                    val fallback = non4kFallback ?: _uiState.value.availableServers.firstOrNull { it.id !in failedServerIds }
-                    if (fallback != null) {
-                        showToast("Stream exceeds hardware decoder limits. Switching to ${fallback.serverName} (${fallback.resolutionLabel})...")
-                        selectServer(fallback, isUserExplicit = false)
+
+                    if (fallbackTrackSelected) {
                         return
+                    }
+
+                    if (_uiState.value.smartFailoverEnabled) {
+                        val currentServer = _uiState.value.selectedServer
+                        if (currentServer != null) {
+                            failedServerIds.add(currentServer.id)
+                        }
+                        val non4kFallback = _uiState.value.availableServers.firstOrNull {
+                            it.id !in failedServerIds &&
+                                    !it.resolutionLabel.contains("2160") &&
+                                    !it.resolutionLabel.contains("4k", ignoreCase = true)
+                        }
+                        val fallback = non4kFallback ?: _uiState.value.availableServers.firstOrNull { it.id !in failedServerIds }
+                        if (fallback != null) {
+                            showToast("Stream exceeds hardware decoder limits. Switching to ${fallback.serverName} (${fallback.resolutionLabel})...")
+                            selectServer(fallback, isUserExplicit = false)
+                            return
+                        }
                     }
                 }
 
@@ -792,6 +1173,7 @@ class PlayerViewModel(
             }
 
             override fun onTracksChanged(tracks: Tracks) {
+                lastReportedTracks = tracks
                 extractExoPlayerTracks(tracks)
             }
 
@@ -945,14 +1327,26 @@ class PlayerViewModel(
             showToast("$name error. Switching to ${fallback.serverName}…")
             selectServer(fallback, isUserExplicit = false)
         } else {
-            android.util.Log.w("PlayerViewModel", "Playback error: ${error.localizedMessage}", error)
-            _uiState.update {
-                it.copy(
-                    isLoading = false,
-                    isBuffering = false,
-                    userError = com.euthopiar.ui.util.UserError.SourceUnavailable,
-                    errorMessage = null
-                )
+            if (streamJob?.isActive == true) {
+                android.util.Log.d("PlayerViewModel", "No fallback available yet, but streamJob is active. Waiting for more sources...")
+                _uiState.update {
+                    it.copy(
+                        isLoading = true,
+                        isBuffering = true,
+                        userError = null,
+                        errorMessage = null
+                    )
+                }
+            } else {
+                android.util.Log.w("PlayerViewModel", "Playback error: ${error.localizedMessage}", error)
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        isBuffering = false,
+                        userError = com.euthopiar.ui.util.UserError.SourceUnavailable,
+                        errorMessage = null
+                    )
+                }
             }
         }
     }
@@ -967,10 +1361,12 @@ class PlayerViewModel(
         title: String? = null,
         epTitle: String? = null,
         season: Int? = null,
-        episode: Int? = null
+        episode: Int? = null,
+        year: Int? = null
     ) {
+        val isTv = type == MediaType.TV_SERIES || type == MediaType.ANIME
         val targetEpisodeData = when {
-            (type == MediaType.TV_SERIES || type == MediaType.ANIME) && season != null && episode != null -> {
+            isTv && season != null && episode != null -> {
                 if (!episodeData.isNullOrBlank() && episodeData.contains(":")) episodeData else "$mediaId:$season:$episode"
             }
             !episodeData.isNullOrBlank() -> episodeData
@@ -980,7 +1376,13 @@ class PlayerViewModel(
         currentEpisodeData = targetEpisodeData
         currentProvider = provider
         currentType = type
+        currentYear = year
+        sourcePrepJob?.cancel()
+        sourcePrepJob = null
+        fastStartJob?.cancel()
+        fastStartJob = null
         failedServerIds.clear()
+        failedAudioTrackIds.clear()
         activeRefreshableSource = null
         bufferingStallStartTime = null
         isUpNextDismissed = false
@@ -989,39 +1391,24 @@ class PlayerViewModel(
         hasPromptedSkipIntro = false
         currentAniSkipTimestamps = null
         currentImdbId = Regex("""tt\d+""").find("$mediaId $targetEpisodeData")?.value
-        if (mediaId.all { it.isDigit() } && mediaId.isNotBlank()) {
-            viewModelScope.launch(Dispatchers.IO) {
-                try {
-                    val endpoint = if (type == MediaType.TV_SERIES || type == MediaType.ANIME) "tv" else "movie"
-                    if (currentImdbId == null) {
-                        val extUrl = "https://api.themoviedb.org/3/$endpoint/$mediaId/external_ids?api_key=${com.euthopiar.core.util.TmdbBridge.DEFAULT_API_KEY}"
-                        val req = Request.Builder().url(extUrl).header("User-Agent", "Mozilla/5.0").build()
-                        DohDns.metadataClient.newCall(req).execute().use { resp ->
-                            if (resp.isSuccessful) {
-                                val body = resp.body?.string().orEmpty()
-                                val id = org.json.JSONObject(body).optString("imdb_id").takeIf { it.startsWith("tt") }
-                                if (id != null) {
-                                    currentImdbId = id
-                                }
-                            }
-                        }
-                    }
-                    val detailsUrl = "https://api.themoviedb.org/3/$endpoint/$mediaId?api_key=${com.euthopiar.core.util.TmdbBridge.DEFAULT_API_KEY}"
-                    val detReq = Request.Builder().url(detailsUrl).header("User-Agent", "Mozilla/5.0").build()
-                    DohDns.metadataClient.newCall(detReq).execute().use { resp ->
-                        if (resp.isSuccessful) {
-                            val body = resp.body?.string().orEmpty()
-                            val lang = org.json.JSONObject(body).optString("original_language").takeIf { it.isNotBlank() }
-                            if (lang != null) {
-                                currentOriginalLanguage = lang
-                            }
-                        }
-                    }
-                } catch (_: Exception) {}
+
+        // Check in-memory TMDB enriched cache (0ms lookup, 0 network bytes)
+        val cachedEnriched = com.euthopiar.core.util.TmdbBridge.getCachedEnrichedDetails(mediaId, isTv)
+        if (cachedEnriched != null) {
+            if (currentImdbId == null && !cachedEnriched.imdbId.isNullOrBlank()) {
+                currentImdbId = cachedEnriched.imdbId
+            }
+            if (currentOriginalLanguage == null && !cachedEnriched.originalLanguage.isNullOrBlank()) {
+                currentOriginalLanguage = cachedEnriched.originalLanguage
+            }
+            if (currentYear == null && (cachedEnriched.premiereYear != null || cachedEnriched.year != null)) {
+                currentYear = cachedEnriched.premiereYear ?: cachedEnriched.year
+            }
+            if (currentBackdropUrl == null && !cachedEnriched.backdropUrl.isNullOrBlank()) {
+                currentBackdropUrl = cachedEnriched.backdropUrl
             }
         }
 
-        val isTv = type == MediaType.TV_SERIES || type == MediaType.ANIME
         if (isTv && episode != null) {
             viewModelScope.launch(Dispatchers.IO) {
                 try {
@@ -1036,15 +1423,19 @@ class PlayerViewModel(
                 } catch (_: Exception) {}
             }
         }
-        android.util.Log.d("PlayerViewModel", "loadStream: mediaId=$mediaId, targetEpisodeData=$targetEpisodeData, provider=$provider")
+        android.util.Log.d("PlayerViewModel", "loadStream: mediaId=$mediaId, targetEpisodeData=$targetEpisodeData, provider=$provider, year=$currentYear, imdbId=$currentImdbId")
 
         // 1. Cancel previous stream collection, clear player items, and reset cues
         try {
             com.euthopiar.core.p2p.P2pStreamingEngine.stopStream()
         } catch (_: Throwable) {}
+        try {
+            com.euthopiar.ui.player.sequential.SequentialStreamManager.releaseActiveSession()
+        } catch (_: Throwable) {}
         p2pStateJob?.cancel()
         streamJob?.cancel()
         subtitleJob?.cancel()
+        lastReportedTracks = null
         exoPlayer?.stop()
         exoPlayer?.clearMediaItems()
         exoPlayer?.playbackParameters = PlaybackParameters(1.0f)
@@ -1055,9 +1446,12 @@ class PlayerViewModel(
             it.copy(
                 playbackSpeed = 1.0f,
                 isLoading = true,
+                isBuffering = true,
+                userError = null,
                 errorMessage = null,
                 mediaType = type,
-                mediaTitle = title ?: mediaId,
+                mediaTitle = title ?: cachedEnriched?.title ?: mediaId,
+                backdropUrl = currentBackdropUrl ?: cachedEnriched?.backdropUrl,
                 episodeTitle = if (isTv) epTitle else null,
                 seasonNumber = if (isTv) season else null,
                 episodeNumber = if (isTv) episode else null,
@@ -1074,8 +1468,8 @@ class PlayerViewModel(
                 selectedServer = null,
                 availableSubtitles = listOf(SubtitleOption("off", "Off")),
                 selectedSubtitle = SubtitleOption("off", "Off"),
-                availableQualities = listOf(VideoQualityOption("auto", "Auto (Adaptive)")),
-                selectedQuality = VideoQualityOption("auto", "Auto (Adaptive)"),
+                availableQualities = listOf(VideoQualityOption("auto", "Auto (Adaptive)", isAuto = true)),
+                selectedQuality = VideoQualityOption("auto", "Auto (Adaptive)", isAuto = true),
                 availableAudioTracks = listOf(AudioTrackOption("auto", "Auto (Default)", isAuto = true)),
                 selectedAudioTrack = AudioTrackOption("auto", "Auto (Default)", isAuto = true),
                 currentPositionMs = 0L,
@@ -1263,8 +1657,9 @@ class PlayerViewModel(
                 val offlineSource = StreamSource(
                     url = targetUrl,
                     quality = "${downloadedItem.qualityLabel} (Offline)",
-                    isM3u8 = targetUrl.contains(".m3u8") || targetUrl.contains("/content?v="),
-                    headers = downloadedItem.headers
+                    isM3u8 = downloadedItem.isM3u8 || targetUrl.contains(".m3u8"),
+                    headers = downloadedItem.headers,
+                    container = downloadedItem.container
                 )
                 val serverOption = ServerSourceOption(
                     id = "offline_cache",
@@ -1288,13 +1683,27 @@ class PlayerViewModel(
             }
 
             // Resolve streaming links progressively via getStreamFlow
-            var hasStartedPlayback = false
+            hasStartedPlayback = false
+            _uiState.update { it.copy(isSearchingStreams = true) }
             try {
-                android.util.Log.d("PlayerViewModel", "Calling getStreamFlow for $targetEpisodeData on provider $provider")
+                val hasDebrid = resolveUserHasDebrid()
+                android.util.Log.d("PlayerViewModel", "Calling getStreamFlow for $targetEpisodeData on provider $provider (hasDebrid=$hasDebrid)")
                 val collectedStreams = mutableListOf<StreamSource>()
                 val collectedSubtitles = mutableListOf<SubtitleTrack>()
 
-                repository.getStreamFlow(targetEpisodeData, provider)
+                val streamTitle = _uiState.value.mediaTitle.takeIf { it.isNotBlank() }
+                val candidateImdbId = currentImdbId ?: currentMediaId?.takeIf { it.startsWith("tt") }
+                val candidateMediaType = if (_uiState.value.mediaType == MediaType.TV_SERIES || _uiState.value.mediaType == MediaType.ANIME) "tv" else "movie"
+
+                repository.getStreamFlow(
+                    episodeData = targetEpisodeData,
+                    providerName = provider,
+                    mediaType = candidateMediaType,
+                    imdbId = candidateImdbId,
+                    title = streamTitle,
+                    year = currentYear,
+                    originalLanguage = currentOriginalLanguage
+                )
                     .collect { emission ->
                         when (emission) {
                             is com.euthopiar.core.model.StreamEmission.SourceFound -> {
@@ -1303,32 +1712,16 @@ class PlayerViewModel(
                                 streamResult = StreamResult(collectedStreams, collectedSubtitles)
 
                                 val sIndex = collectedStreams.size
-                                val rLabel = if (s.resolutionLabel.isNotBlank()) s.resolutionLabel else "Auto"
-                                val cleanServerName = when {
-                                    s.serverName.isNotBlank() && !s.serverName.equals("default", ignoreCase = true) && !s.serverName.startsWith("http") -> s.serverName
-                                    s.quality.isNotBlank() && !s.quality.startsWith("http") -> s.quality
-                                    else -> "Source $sIndex"
-                                }
-                                val parsedLangs = if (s.audioTracks.isNotEmpty()) {
-                                    s.audioTracks.map { it.isoCode.ifBlank { it.languageName } }
-                                } else {
-                                    com.euthopiar.core.streams.AudioLanguageDiscovery.parseAudioLanguagesFromMetadata(
-                                        cleanServerName + " " + s.url,
-                                        currentOriginalLanguage ?: if (currentType == MediaType.ANIME) "ja" else null
-                                    )
-                                }
-                                val aBadge = com.euthopiar.core.streams.AudioLanguageDiscovery.formatLanguageBadges(parsedLangs)
-                                val option = ServerSourceOption(
-                                    id = "server_${sIndex}_${s.url.hashCode()}",
-                                    serverName = cleanServerName,
-                                    resolutionLabel = rLabel,
-                                    label = if (aBadge != null) "$cleanServerName · $rLabel • $aBadge" else if (cleanServerName.contains(rLabel, ignoreCase = true)) cleanServerName else "$cleanServerName · $rLabel",
-                                    streamSource = s,
-                                    audioBadge = aBadge
+                                val option = createServerSourceOption(
+                                    s = s,
+                                    sIndex = sIndex,
+                                    originalLanguage = currentOriginalLanguage,
+                                    mediaType = currentType,
+                                    hasDebrid = hasDebrid
                                 )
 
                                 _uiState.update { state ->
-                                    val updatedList = deduplicateAndSortServers(state.availableServers + option)
+                                    val updatedList = deduplicateAndSortServers(state.availableServers + option, hasDebrid = hasDebrid)
                                     android.util.Log.i("PlayerViewModel", "SourceFound: total=${updatedList.size}, torrents=${updatedList.count { it.streamSource.infoHash != null || it.streamSource.url.startsWith("magnet:") }}, latest=${option.label}")
                                     val updatedSelected = updatedList.find { it.id == state.selectedServer?.id }
                                         ?: updatedList.find { computeTransportKey(it.streamSource) == state.selectedServer?.let { s -> computeTransportKey(s.streamSource) } }
@@ -1339,35 +1732,67 @@ class PlayerViewModel(
                                         selectedServer = updatedSelected
                                     )
                                 }
-                                probeServerLatency(option)
-                                if (aBadge == null) {
-                                    viewModelScope.launch(Dispatchers.IO) {
-                                        val discovered = if (s.isM3u8 || s.url.contains(".m3u8")) {
-                                            com.euthopiar.core.streams.AudioLanguageDiscovery.probeHlsAudioTracks(s.url, s.headers)
-                                        } else {
-                                            com.euthopiar.core.streams.AudioLanguageDiscovery.probeContainerAudioTracks(s.url, s.headers)
-                                        }
-                                        val probedBadge = com.euthopiar.core.streams.AudioLanguageDiscovery.formatLanguageBadges(discovered)
-                                        if (probedBadge != null) {
-                                            _uiState.update { state ->
-                                                val updated = state.availableServers.map { srv ->
-                                                    if (srv.id == option.id) srv.copy(audioBadge = probedBadge) else srv
-                                                }
-                                                val cur = if (state.selectedServer?.id == option.id) state.selectedServer?.copy(audioBadge = probedBadge) else state.selectedServer
-                                                state.copy(availableServers = updated, selectedServer = cur)
-                                            }
-                                        }
-                                    }
+                                rebuildUnifiedQualityOptions()
+
+                                // Throttle latency probes: probe only top 8 servers initially, defer rest until Sources panel or STATE_READY
+                                val top8 = _uiState.value.availableServers.take(8)
+                                if (top8.any { it.id == option.id }) {
+                                    probeServerLatency(option)
                                 }
 
-                                // FAST PLAYBACK: Auto-start on the optimal source found or recover if previous errored or stalled!
+                                // FAST PLAYBACK: Readiness Window (450ms) & Auto-Start
                                 val curSelected = _uiState.value.selectedServer
-                                if (!hasStartedPlayback || _uiState.value.errorMessage != null || (curSelected != null && curSelected.id in failedServerIds)) {
-                                    hasStartedPlayback = true
-                                    withContext(Dispatchers.Main) {
-                                        val targetServer = _uiState.value.availableServers.firstOrNull { it.id !in failedServerIds } ?: option
-                                        _uiState.update { it.copy(isLoading = false, errorMessage = null, selectedServer = targetServer) }
-                                        playStreamSource(targetServer.streamSource, collectedSubtitles, seekToPosition = resumePosition)
+                                val needsStart = !userExplicitServerSelection && (!hasStartedPlayback || _uiState.value.errorMessage != null || _uiState.value.userError != null || (curSelected != null && curSelected.id in failedServerIds))
+                                if (needsStart) {
+                                    val prefQualityStr = preferencesRepository.defaultQuality.firstOrNull() ?: "Auto"
+                                    val prefHeight = when {
+                                        prefQualityStr.contains("4K", ignoreCase = true) || prefQualityStr.contains("2160", ignoreCase = true) -> 2160
+                                        prefQualityStr.contains("720", ignoreCase = true) -> 720
+                                        else -> 1080
+                                    }
+
+                                    if (isPrimeCandidate(option, hasDebrid, prefHeight)) {
+                                        // Immediate 0ms start for prime candidate
+                                        fastStartJob?.cancel()
+                                        fastStartJob = null
+                                        hasStartedPlayback = true
+                                        withContext(Dispatchers.Main) {
+                                            _uiState.update { it.copy(isLoading = false, userError = null, errorMessage = null, selectedServer = option) }
+                                            playStreamSource(option.streamSource, collectedSubtitles, seekToPosition = resumePosition)
+                                        }
+                                    } else if (!hasStartedPlayback) {
+                                        // 450ms readiness window
+                                        if (fastStartJob == null || !fastStartJob!!.isActive) {
+                                            fastStartJob = viewModelScope.launch {
+                                                delay(450L)
+                                                if (isActive && !hasStartedPlayback) {
+                                                    hasStartedPlayback = true
+                                                    withContext(Dispatchers.Main) {
+                                                        val candidates = _uiState.value.availableServers.filter {
+                                                            it.id !in failedServerIds && it.healthCategory != ServerHealthCategory.UNWATCHABLE
+                                                        }
+                                                        val bestServer = candidates.maxByOrNull {
+                                                            scoreServerForInitialAutoPlay(it, hasDebrid, prefHeight)
+                                                        } ?: _uiState.value.availableServers.firstOrNull { it.id !in failedServerIds } ?: option
+
+                                                        _uiState.update { it.copy(isLoading = false, userError = null, errorMessage = null, selectedServer = bestServer) }
+                                                        playStreamSource(bestServer.streamSource, collectedSubtitles, seekToPosition = resumePosition)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        // Recovery from failed server
+                                        val candidates = _uiState.value.availableServers.filter {
+                                            it.id !in failedServerIds && it.healthCategory != ServerHealthCategory.UNWATCHABLE
+                                        }
+                                        val bestServer = candidates.maxByOrNull {
+                                            scoreServerForInitialAutoPlay(it, hasDebrid, prefHeight)
+                                        } ?: _uiState.value.availableServers.firstOrNull { it.id !in failedServerIds } ?: option
+                                        withContext(Dispatchers.Main) {
+                                            _uiState.update { it.copy(isLoading = false, userError = null, errorMessage = null, selectedServer = bestServer) }
+                                            playStreamSource(bestServer.streamSource, collectedSubtitles, seekToPosition = resumePosition)
+                                        }
                                     }
                                 }
                             }
@@ -1393,7 +1818,8 @@ class PlayerViewModel(
                                         id = "sub_${collectedSubtitles.size}",
                                         label = emission.track.language,
                                         language = emission.track.language,
-                                        url = emission.track.url
+                                        url = emission.track.url,
+                                        headers = emission.track.headers
                                     )
                                     val isEng = emission.track.language.contains("eng", ignoreCase = true)
                                     val shouldAutoSelect = _uiState.value.selectedSubtitle.id == "off" && (isEng || collectedSubtitles.size == 1)
@@ -1404,7 +1830,7 @@ class PlayerViewModel(
                                         )
                                     }
                                     if (shouldAutoSelect && opt.url != null) {
-                                        loadSubtitleCues(opt.url)
+                                        loadSubtitleCues(opt.url, opt.headers)
                                     }
                                 }
                             }
@@ -1429,7 +1855,15 @@ class PlayerViewModel(
 
                         if (backupEp != null && backupEp.data.isNotBlank() && backupEp.data != targetEpisodeData) {
                             android.util.Log.i("PlayerViewModel", "Retrying getStreamFlow with fresh episode data for S${curSeason}E$curEpisode")
-                            repository.getStreamFlow(backupEp.data, provider)
+                            repository.getStreamFlow(
+                                episodeData = backupEp.data,
+                                providerName = provider,
+                                mediaType = candidateMediaType,
+                                imdbId = candidateImdbId,
+                                title = streamTitle,
+                                year = currentYear,
+                                originalLanguage = currentOriginalLanguage
+                            )
                                 .collect { emission ->
                                     when (emission) {
                                         is com.euthopiar.core.model.StreamEmission.SourceFound -> {
@@ -1437,65 +1871,35 @@ class PlayerViewModel(
                                             collectedStreams.add(s)
                                             streamResult = StreamResult(collectedStreams, collectedSubtitles)
                                             val sIndex = collectedStreams.size
-                                            val rLabel = if (s.resolutionLabel.isNotBlank()) s.resolutionLabel else "Auto"
-                                            val cleanServerName = when {
-                                                s.serverName.isNotBlank() && !s.serverName.equals("default", ignoreCase = true) && !s.serverName.startsWith("http") -> s.serverName
-                                                s.quality.isNotBlank() && !s.quality.startsWith("http") -> s.quality
-                                                else -> "Source $sIndex"
-                                            }
-                                            val parsedLangs = if (s.audioTracks.isNotEmpty()) {
-                                                s.audioTracks.map { it.isoCode.ifBlank { it.languageName } }
-                                            } else {
-                                                com.euthopiar.core.streams.AudioLanguageDiscovery.parseAudioLanguagesFromMetadata(
-                                                    cleanServerName + " " + s.url,
-                                                    currentOriginalLanguage ?: if (currentType == MediaType.ANIME) "ja" else null
-                                                )
-                                            }
-                                            val aBadge = com.euthopiar.core.streams.AudioLanguageDiscovery.formatLanguageBadges(parsedLangs)
-                                            val option = ServerSourceOption(
-                                                id = "server_${sIndex}_${s.url.hashCode()}",
-                                                serverName = cleanServerName,
-                                                resolutionLabel = rLabel,
-                                                label = if (aBadge != null) "$cleanServerName · $rLabel • $aBadge" else if (cleanServerName.contains(rLabel, ignoreCase = true)) cleanServerName else "$cleanServerName · $rLabel",
-                                                streamSource = s,
-                                                audioBadge = aBadge
+                                            val option = createServerSourceOption(
+                                                s = s,
+                                                sIndex = sIndex,
+                                                originalLanguage = currentOriginalLanguage,
+                                                mediaType = currentType,
+                                                hasDebrid = hasDebrid
                                             )
                                             _uiState.update { state ->
-                                                val updatedList = deduplicateAndSortServers(state.availableServers + option)
+                                                val updatedList = deduplicateAndSortServers(state.availableServers + option, hasDebrid = hasDebrid)
                                                 val updatedSelected = updatedList.find { it.id == state.selectedServer?.id }
                                                     ?: updatedList.find { computeTransportKey(it.streamSource) == state.selectedServer?.let { s -> computeTransportKey(s.streamSource) } }
                                                     ?: state.selectedServer
                                                     ?: option
                                                 state.copy(availableServers = updatedList, selectedServer = updatedSelected)
                                             }
-                                            probeServerLatency(option)
-                                            if (aBadge == null) {
-                                                viewModelScope.launch(Dispatchers.IO) {
-                                                    val discovered = if (s.isM3u8 || s.url.contains(".m3u8")) {
-                                                        com.euthopiar.core.streams.AudioLanguageDiscovery.probeHlsAudioTracks(s.url, s.headers)
-                                                    } else {
-                                                        com.euthopiar.core.streams.AudioLanguageDiscovery.probeContainerAudioTracks(s.url, s.headers)
-                                                    }
-                                                    val probedBadge = com.euthopiar.core.streams.AudioLanguageDiscovery.formatLanguageBadges(discovered)
-                                                    if (probedBadge != null) {
-                                                        _uiState.update { state ->
-                                                            val updated = state.availableServers.map { srv ->
-                                                                if (srv.id == option.id) srv.copy(audioBadge = probedBadge) else srv
-                                                            }
-                                                            val cur = if (state.selectedServer?.id == option.id) state.selectedServer?.copy(audioBadge = probedBadge) else state.selectedServer
-                                                            state.copy(availableServers = updated, selectedServer = cur)
-                                                        }
-                                                    }
-                                                }
+                                            val top8 = _uiState.value.availableServers.take(8)
+                                            if (top8.any { it.id == option.id }) {
+                                                probeServerLatency(option)
                                             }
-                                            if (!hasStartedPlayback) {
+                                            val curSelected = _uiState.value.selectedServer
+                                            val needsStart = !userExplicitServerSelection && (!hasStartedPlayback || _uiState.value.errorMessage != null || _uiState.value.userError != null || (curSelected != null && curSelected.id in failedServerIds))
+                                            if (needsStart) {
                                                 hasStartedPlayback = true
                                                 withContext(Dispatchers.Main) {
                                                     val targetServer = _uiState.value.availableServers.firstOrNull { it.id !in failedServerIds } ?: option
-                                                    _uiState.update { it.copy(isLoading = false, errorMessage = null, selectedServer = targetServer) }
+                                                    _uiState.update { it.copy(isLoading = false, userError = null, errorMessage = null, selectedServer = targetServer) }
                                                     playStreamSource(targetServer.streamSource, collectedSubtitles, seekToPosition = resumePosition)
                                                 }
-                                                if (collectedSubtitles.isEmpty()) {
+                                                if (isExternalSubtitlesEnabled && collectedSubtitles.isEmpty()) {
                                                     launch(Dispatchers.IO) {
                                                         autoFetchExternalSubtitlesIfNeeded(title ?: mediaId, season, episode)
                                                     }
@@ -1520,7 +1924,13 @@ class PlayerViewModel(
                                             if (!isDuplicateVariant && collectedSubtitles.none { it.url == emission.track.url }) {
                                                 collectedSubtitles.add(emission.track)
                                                 streamResult = StreamResult(collectedStreams, collectedSubtitles)
-                                                val opt = SubtitleOption(id = "sub_${collectedSubtitles.size}", label = emission.track.language, language = emission.track.language, url = emission.track.url)
+                                                val opt = SubtitleOption(
+                                                    id = "sub_${collectedSubtitles.size}",
+                                                    label = emission.track.language,
+                                                    language = emission.track.language,
+                                                    url = emission.track.url,
+                                                    headers = emission.track.headers
+                                                )
                                                 val isEng = emission.track.language.contains("eng", ignoreCase = true)
                                                 val shouldAutoSelect = _uiState.value.selectedSubtitle.id == "off" && (isEng || collectedSubtitles.size == 1)
                                                 _uiState.update { state ->
@@ -1530,13 +1940,40 @@ class PlayerViewModel(
                                                     )
                                                 }
                                                 if (shouldAutoSelect && opt.url != null) {
-                                                    loadSubtitleCues(opt.url)
+                                                    loadSubtitleCues(opt.url, opt.headers)
                                                 }
                                             }
                                         }
                                         is com.euthopiar.core.model.StreamEmission.StatusUpdate -> {}
                                     }
                                 }
+                        }
+                    }
+                }
+
+                if (fastStartJob?.isActive == true) {
+                    fastStartJob?.join()
+                }
+
+                if (!hasStartedPlayback && _uiState.value.availableServers.isNotEmpty()) {
+                    val hasDebrid = isUserDebridActive()
+                    val prefQualityStr = preferencesRepository.defaultQuality.firstOrNull() ?: "Auto"
+                    val prefHeight = when {
+                        prefQualityStr.contains("4K", ignoreCase = true) || prefQualityStr.contains("2160", ignoreCase = true) -> 2160
+                        prefQualityStr.contains("720", ignoreCase = true) -> 720
+                        else -> 1080
+                    }
+                    val candidates = _uiState.value.availableServers.filter {
+                        it.id !in failedServerIds && it.healthCategory != ServerHealthCategory.UNWATCHABLE
+                    }
+                    val bestServer = candidates.maxByOrNull {
+                        scoreServerForInitialAutoPlay(it, hasDebrid, prefHeight)
+                    } ?: _uiState.value.availableServers.firstOrNull { it.id !in failedServerIds }
+                    if (bestServer != null) {
+                        hasStartedPlayback = true
+                        withContext(Dispatchers.Main) {
+                            _uiState.update { it.copy(isLoading = false, userError = null, errorMessage = null, selectedServer = bestServer) }
+                            playStreamSource(bestServer.streamSource, collectedSubtitles, seekToPosition = resumePosition)
                         }
                     }
                 }
@@ -1556,7 +1993,7 @@ class PlayerViewModel(
                     throw e
                 }
                 android.util.Log.w("PlayerViewModel", "Stream extraction failed for $targetEpisodeData", e)
-                if (!hasStartedPlayback && _uiState.value.selectedServer == null && _uiState.value.availableServers.isEmpty() && exoPlayer?.isPlaying != true) {
+                if (!hasStartedPlayback && _uiState.value.selectedServer == null && _uiState.value.availableServers.isEmpty() && !_uiState.value.isPlaying) {
                     _uiState.update {
                         it.copy(
                             isLoading = false,
@@ -1565,8 +2002,33 @@ class PlayerViewModel(
                         )
                     }
                 }
+            } finally {
+                _uiState.update { it.copy(isSearchingStreams = false) }
             }
         }
+    }
+
+    private fun looksLikeHlsUrl(
+        url: String,
+        headers: Map<String, String> = emptyMap(),
+        responseHeaders: Map<String, String> = emptyMap()
+    ): Boolean {
+        val lower = url.lowercase()
+        val cleanPath = lower.substringBefore('?').substringBefore('#')
+        if (cleanPath.endsWith(".m3u8") || cleanPath.endsWith(".m3u")) return true
+        if (lower.contains(".m3u8") || lower.contains("/hls/") || lower.contains("/hls?") || lower.contains("/hls") ||
+            lower.contains("format=hls") || lower.contains("type=hls") || lower.contains("output=hls") ||
+            lower.contains("format=m3u8") || lower.contains("type=m3u8") ||
+            lower.contains("playlist.m3u8") || lower.contains("master.m3u8") ||
+            lower.contains("mime=application%2f") || lower.contains("mpegurl")) {
+            return true
+        }
+        val contentType = (responseHeaders["Content-Type"]
+            ?: headers.entries.firstOrNull { it.key.equals("Content-Type", ignoreCase = true) }?.value)?.lowercase()
+        if (contentType != null && (contentType.contains("mpegurl") || contentType.contains("m3u8") || contentType.contains("application/vnd.apple"))) {
+            return true
+        }
+        return false
     }
 
     private fun buildMediaSource(
@@ -1575,11 +2037,12 @@ class PlayerViewModel(
         isOffline: Boolean = false
     ): MediaSource {
         val context = getApplication<Application>()
-        val uri = if (source.url.startsWith("/")) Uri.fromFile(java.io.File(source.url)) else Uri.parse(source.url)
-        val urlLower = source.url.lowercase()
-        val cleanUrlPath = source.url.substringBefore('?').substringBefore('#')
+        val (cleanStreamUrl, inlineHeaders) = com.euthopiar.core.network.PlayerPlaybackNetworking.extractUrlAndInlineHeaders(source.url, source.headers)
+        val uri = if (cleanStreamUrl.startsWith("/")) Uri.fromFile(java.io.File(cleanStreamUrl)) else Uri.parse(cleanStreamUrl)
+        val urlLower = cleanStreamUrl.lowercase()
+        val cleanUrlPath = cleanStreamUrl.substringBefore('?').substringBefore('#')
 
-        val requestHeaders = com.euthopiar.core.network.PlayerPlaybackNetworking.sanitizeHeaders(source.headers)
+        val requestHeaders = com.euthopiar.core.network.PlayerPlaybackNetworking.sanitizeHeaders(inlineHeaders)
         val userAgent = requestHeaders.entries.firstOrNull { it.key.equals("User-Agent", ignoreCase = true) }?.value
             ?: AppUserAgent.get(context)
 
@@ -1594,7 +2057,7 @@ class PlayerViewModel(
             overriddenHeaders = source.responseHeaders
         )
 
-        val isLocalFile = source.url.startsWith("file://") || source.url.startsWith("/")
+        val isLocalFile = cleanStreamUrl.startsWith("file://") || cleanStreamUrl.startsWith("/")
         val isOfflinePlayback = isOffline || _uiState.value.isOfflinePlayback
         val isDownloaded = isOfflinePlayback ||
                 downloadRepository.isMediaDownloaded(currentMediaId ?: "", currentEpisodeData)
@@ -1606,37 +2069,42 @@ class PlayerViewModel(
             else -> DefaultDataSource.Factory(context, overridingDataSourceFactory)
         }
 
-        val isDashSource = urlLower.contains(".mpd") || urlLower.contains("dash")
-        val cleanUrl = source.url.substringBefore('#')
-        val playUri = if (source.url.startsWith("http://", ignoreCase = true) || source.url.startsWith("https://", ignoreCase = true)) {
+        val isDashSource = source.container == com.euthopiar.core.model.StreamContainer.DASH || urlLower.contains(".mpd") || urlLower.contains("dash")
+        val cleanUrl = cleanStreamUrl.substringBefore('#')
+        val playUri = if (cleanStreamUrl.startsWith("http://", ignoreCase = true) || cleanStreamUrl.startsWith("https://", ignoreCase = true)) {
             Uri.parse(cleanUrl)
         } else {
             uri
         }
 
         val subtitleConfigs = subtitles.map { sub ->
-            val mimeType = if (sub.url.contains(".vtt", ignoreCase = true)) {
-                MimeTypes.TEXT_VTT
-            } else {
-                MimeTypes.APPLICATION_SUBRIP
+            val urlClean = sub.url.substringBefore('?').substringBefore('#').lowercase()
+            val mimeType = when {
+                urlClean.endsWith(".vtt") || sub.url.contains(".vtt", ignoreCase = true) -> MimeTypes.TEXT_VTT
+                urlClean.endsWith(".ass") || sub.url.contains(".ass", ignoreCase = true) -> MimeTypes.TEXT_SSA
+                urlClean.endsWith(".ssa") || sub.url.contains(".ssa", ignoreCase = true) -> MimeTypes.TEXT_SSA
+                urlClean.endsWith(".ttml") || urlClean.endsWith(".xml") || sub.url.contains(".ttml", ignoreCase = true) -> MimeTypes.APPLICATION_TTML
+                else -> MimeTypes.APPLICATION_SUBRIP
             }
             MediaItem.SubtitleConfiguration.Builder(Uri.parse(sub.url))
                 .setMimeType(mimeType)
                 .setLanguage(sub.language)
-                .setLabel(sub.language)
+                .setLabel(sub.name ?: sub.language)
                 .setSelectionFlags(0)
                 .build()
         }
+
+        val isHlsDetected = source.isM3u8 || looksLikeHlsUrl(cleanStreamUrl, requestHeaders, source.responseHeaders)
 
         val mediaItem = MediaItem.Builder()
             .setUri(playUri)
             .apply {
                 if (isLocalFile) {
                     try {
-                        val filePath = if (source.url.startsWith("file://")) {
-                            Uri.parse(source.url).path ?: source.url.removePrefix("file://")
+                        val filePath = if (cleanStreamUrl.startsWith("file://")) {
+                            Uri.parse(cleanStreamUrl).path ?: cleanStreamUrl.removePrefix("file://")
                         } else {
-                            source.url
+                            cleanStreamUrl
                         }
                         val localFileOnDisk = java.io.File(filePath)
                         if (localFileOnDisk.exists() && localFileOnDisk.length() >= 188) {
@@ -1653,47 +2121,76 @@ class PlayerViewModel(
                         }
                     } catch (_: Throwable) {}
                 }
-                val contentType = source.headers.entries
-                    .firstOrNull { it.key.equals("Content-Type", ignoreCase = true) }?.value?.lowercase()
+                val contentType = (source.responseHeaders["Content-Type"]
+                    ?: requestHeaders.entries.firstOrNull { it.key.equals("Content-Type", ignoreCase = true) }?.value)?.lowercase()
                 when {
-                    source.isM3u8 || urlLower.contains(".m3u8") || urlLower.contains("hls") || urlLower.contains("/content?v=") || contentType?.contains("mpegurl") == true || contentType?.contains("m3u8") == true -> {
+                    isHlsDetected -> {
                         setMimeType(MimeTypes.APPLICATION_M3U8)
                     }
-                    urlLower.contains(".mpd") || urlLower.contains("dash") || contentType?.contains("dash") == true || contentType?.contains("mpd") == true -> {
+                    source.container == com.euthopiar.core.model.StreamContainer.DASH || urlLower.contains(".mpd") || urlLower.contains("dash") || contentType?.contains("dash") == true || contentType?.contains("mpd") == true -> {
                         setMimeType(MimeTypes.APPLICATION_MPD)
                     }
-                    cleanUrlPath.endsWith(".mp4", ignoreCase = true) || urlLower.contains(".mp4") || contentType?.contains("mp4") == true -> {
-                        setMimeType(MimeTypes.VIDEO_MP4)
+                }
+            }
+            .apply {
+                source.drm?.let { drm ->
+                    val schemeUuid = when (drm.scheme.lowercase()) {
+                        "widevine" -> androidx.media3.common.C.WIDEVINE_UUID
+                        "playready" -> androidx.media3.common.C.PLAYREADY_UUID
+                        else -> androidx.media3.common.C.CLEARKEY_UUID
                     }
-                    (cleanUrlPath.endsWith(".mkv", ignoreCase = true) || urlLower.contains(".mkv") || urlLower.contains("r2.dev") || urlLower.contains("r2.cloudflarestorage.com") || urlLower.contains("pixeldrain.com") || urlLower.contains("hubcloud") || urlLower.contains("gamerxyt") || source.quality.contains("MKV", ignoreCase = true) || urlLower.contains("googleusercontent.com") || urlLower.contains("video-downloads") || urlLower.contains("video-seed.dev") || contentType?.contains("matroska") == true || contentType?.contains("mkv") == true) && !isLocalFile -> {
-                        setMimeType(MimeTypes.VIDEO_MATROSKA)
+                    val drmBuilder = MediaItem.DrmConfiguration.Builder(schemeUuid)
+                    if (!drm.licenseUrl.isNullOrBlank()) {
+                        drmBuilder.setLicenseUri(drm.licenseUrl)
                     }
-                    cleanUrlPath.endsWith(".webm", ignoreCase = true) || urlLower.contains(".webm") || contentType?.contains("webm") == true -> {
-                        setMimeType(MimeTypes.VIDEO_WEBM)
+                    if (drm.headers.isNotEmpty()) {
+                        drmBuilder.setLicenseRequestHeaders(drm.headers)
                     }
+                    setDrmConfiguration(drmBuilder.build())
                 }
             }
             .setSubtitleConfigurations(subtitleConfigs)
             .build()
 
-        android.util.Log.d("PlayerViewModel", "buildMediaSource: url=${source.url}, isM3u8=${source.isM3u8}")
+        android.util.Log.d("PlayerViewModel", "buildMediaSource: url=$cleanStreamUrl, isM3u8=${source.isM3u8}, isHlsDetected=$isHlsDetected")
 
         // 2. Format Sniffing & MediaSource Dispatch
         return when {
             // HLS (Adaptive Master Playlists & Media Playlists)
-            source.isM3u8 || urlLower.contains(".m3u8") || urlLower.contains("hls") || urlLower.contains("/content?v=") ||
-                    mediaItem.localConfiguration?.mimeType == MimeTypes.APPLICATION_M3U8 -> {
-                HlsMediaSource.Factory(dataSourceFactory)
-                    .setAllowChunklessPreparation(false)
+            source.container == com.euthopiar.core.model.StreamContainer.HLS || isHlsDetected || mediaItem.localConfiguration?.mimeType == MimeTypes.APPLICATION_M3U8 -> {
+                HlsMediaSource.Factory(DisguisedHlsDataSource.Factory(dataSourceFactory, cleanStreamUrl, requestHeaders))
                     .createMediaSource(mediaItem)
             }
             // MPEG-DASH
-            urlLower.contains(".mpd") || urlLower.contains("dash") -> {
+            source.container == com.euthopiar.core.model.StreamContainer.DASH || urlLower.contains(".mpd") || urlLower.contains("dash") ||
+                    mediaItem.localConfiguration?.mimeType == MimeTypes.APPLICATION_MPD -> {
                 DashMediaSource.Factory(dataSourceFactory)
+                    .setManifestParser(SanitizingDashManifestParser())
                     .createMediaSource(mediaItem)
             }
             // Direct Progressive MP4 / MKV / WebM / Cloud Download Links
             else -> {
+                val isSequential = !isLocalFile && !isOfflinePlayback && !isDownloaded &&
+                        com.euthopiar.ui.player.sequential.SequentialStreamManager.isSequentialStream(
+                            cleanStreamUrl,
+                            source.container,
+                            source.responseHeaders
+                        )
+
+                if (isSequential) {
+                    android.util.Log.i("PlayerViewModel", "Using SequentialStreamEngine for cloud progressive stream: $cleanStreamUrl")
+                    val session = com.euthopiar.ui.player.sequential.SequentialStreamManager.getOrCreateSession(
+                        context = context,
+                        url = cleanStreamUrl,
+                        headers = requestHeaders,
+                        okHttpClient = streamingHttpClient
+                    )
+                    val seqDataSourceFactory = com.euthopiar.ui.player.sequential.SequentialStreamDataSource.Factory(session)
+                    val seqExtractorsFactory = com.euthopiar.ui.player.sequential.SequentialMatroskaExtractorsFactory(session)
+                    return ProgressiveMediaSource.Factory(seqDataSourceFactory, seqExtractorsFactory)
+                        .createMediaSource(mediaItem)
+                }
+
                 val progressiveExtractorsFactory: ExtractorsFactory = if (isLocalFile) {
                     val filePath = if (source.url.startsWith("file://")) {
                         Uri.parse(source.url).path ?: source.url.removePrefix("file://")
@@ -1772,8 +2269,15 @@ class PlayerViewModel(
         }
     }
 
-    private fun extractP2pStreamRequest(rawUrl: String): com.euthopiar.core.p2p.P2pStreamRequest? =
-        com.euthopiar.core.p2p.extractP2pStreamRequest(rawUrl)
+    private fun extractP2pStreamRequest(
+        rawUrl: String?,
+        fallbackInfoHash: String? = null,
+        defaultFileIdx: Int? = null,
+        defaultSeason: Int? = null,
+        defaultEpisode: Int? = null,
+        trackers: List<String> = emptyList()
+    ): com.euthopiar.core.p2p.P2pStreamRequest? =
+        com.euthopiar.core.p2p.extractP2pStreamRequest(rawUrl, fallbackInfoHash, defaultFileIdx, defaultSeason, defaultEpisode, trackers)
 
     private fun playStreamSource(
         source: StreamSource,
@@ -1781,13 +2285,31 @@ class PlayerViewModel(
         seekToPosition: Long? = null,
         isOffline: Boolean = false
     ) {
+        sourcePrepJob?.cancel()
+        sourcePrepJob = null
+        fastStartJob?.cancel()
+        fastStartJob = null
+        _uiState.update { it.copy(userError = null, errorMessage = null) }
 
         val cleanUrl = source.url.trim()
         val isHttp = cleanUrl.startsWith("http://", ignoreCase = true) || cleanUrl.startsWith("https://", ignoreCase = true)
-        val isTorrent = !isHttp && (cleanUrl.startsWith("magnet:", ignoreCase = true) ||
+        val isTorrent = cleanUrl.startsWith("magnet:", ignoreCase = true) ||
                 cleanUrl.startsWith("torrent://", ignoreCase = true) ||
                 cleanUrl.startsWith("torrent:", ignoreCase = true) ||
-                com.euthopiar.core.p2p.extractP2pStreamRequest(cleanUrl) != null)
+                com.euthopiar.core.p2p.extractP2pStreamRequest(cleanUrl, source.infoHash) != null
+        val isP2pOrTorrent = isTorrent || (_uiState.value.selectedServer?.isTorrent == true) || !source.infoHash.isNullOrBlank()
+
+        if (!isOffline && !userExplicitServerSelection && !isP2pOrTorrent) {
+            val selServer = _uiState.value.selectedServer
+            val cachedLatency = probedLatencies[source.url]
+            val isUnwatchable = selServer?.healthCategory == ServerHealthCategory.UNWATCHABLE ||
+                    cachedLatency?.second == ServerHealthCategory.UNWATCHABLE
+            if (isUnwatchable) {
+                if (selServer != null) failedServerIds.add(selServer.id)
+                triggerFailover("Source unreachable")
+                return
+            }
+        }
 
         if (!isTorrent && !source.url.startsWith("http://127.0.0.1") && !source.url.startsWith("http://localhost") && !source.url.startsWith("http://[::1]")) {
             try {
@@ -1803,26 +2325,27 @@ class PlayerViewModel(
                 !urlLower.contains(".mpd") &&
                 !urlLower.contains(".mp4") &&
                 !urlLower.contains(".mkv") &&
-                !urlLower.contains(".webm") &&
-                !urlLower.contains("/content?v=")
+                !urlLower.contains(".webm")
 
         if (isTorrent || isAmbiguousHttp) {
-            viewModelScope.launch {
+            sourcePrepJob = viewModelScope.launch {
+                ensureActive()
                 var currentSource = source
 
                 // 1. Debrid unrestrict for magnets or info hashes
                 if (isTorrent) {
                     _uiState.update { it.copy(isLoading = true, isBuffering = true) }
-                    val activeProviderStr = preferencesRepository.activeDebridProvider.firstOrNull() ?: "NONE"
+                    val debridEnabled = preferencesRepository.debridEnabled.firstOrNull() ?: false
+                    val activeProviderStr = if (debridEnabled) preferencesRepository.activeDebridProvider.firstOrNull() ?: "NONE" else "NONE"
                     val pType = com.euthopiar.core.debrid.DebridProviderType.fromId(activeProviderStr)
-                    var apiKey = when (pType) {
+                    var apiKey = if (!debridEnabled) "" else when (pType) {
                         com.euthopiar.core.debrid.DebridProviderType.REAL_DEBRID -> preferencesRepository.realDebridApiKey.firstOrNull() ?: ""
                         com.euthopiar.core.debrid.DebridProviderType.ALL_DEBRID -> preferencesRepository.allDebridApiKey.firstOrNull() ?: ""
                         com.euthopiar.core.debrid.DebridProviderType.TORBOX -> preferencesRepository.torBoxApiKey.firstOrNull() ?: ""
                         com.euthopiar.core.debrid.DebridProviderType.NONE -> ""
                     }
                     var effectiveProvider = pType
-                    if (apiKey.isBlank()) {
+                    if (debridEnabled && apiKey.isBlank()) {
                         val rdKey = preferencesRepository.realDebridApiKey.firstOrNull() ?: ""
                         if (rdKey.isNotBlank()) {
                             apiKey = rdKey
@@ -1832,11 +2355,24 @@ class PlayerViewModel(
 
                     if (apiKey.isBlank()) {
                         // Route through P2P Streaming Engine when no Debrid key is present
-                        val p2pRequest = extractP2pStreamRequest(currentSource.url)
+                        val p2pRequest = extractP2pStreamRequest(
+                            rawUrl = currentSource.url,
+                            fallbackInfoHash = currentSource.infoHash,
+                            defaultFileIdx = currentSource.fileIdx,
+                            defaultSeason = currentSource.season,
+                            defaultEpisode = currentSource.episode,
+                            trackers = currentSource.trackers
+                        )
                         if (p2pRequest == null) {
                             val err = "Real-Debrid API Key required or invalid torrent link"
-                            showToast(err)
-                            _uiState.update { it.copy(isLoading = false, isBuffering = false, errorMessage = err) }
+                            val srv = _uiState.value.selectedServer
+                            if (srv != null) failedServerIds.add(srv.id)
+                            if (_uiState.value.smartFailoverEnabled) {
+                                triggerFailover(err)
+                            } else {
+                                showToast(err)
+                                _uiState.update { it.copy(isLoading = false, isBuffering = false, userError = com.euthopiar.ui.util.UserError.SourceUnavailable, errorMessage = err) }
+                            }
                             return@launch
                         }
 
@@ -1844,53 +2380,86 @@ class PlayerViewModel(
                             _uiState.update { it.copy(isLoading = true, isBuffering = true) }
                             com.euthopiar.core.p2p.P2pStreamingEngine.initialize(getApplication())
                             val loopbackUrl = com.euthopiar.core.p2p.P2pStreamingEngine.startStream(p2pRequest)
+                            ensureActive()
                             observeP2pEngineState()
                             currentSource = currentSource.copy(url = loopbackUrl)
                         } catch (e: Exception) {
                             if (e is kotlinx.coroutines.CancellationException) throw e
                             val err = e.message ?: "Failed to start P2P stream"
-                            showToast(err)
-                            _uiState.update { it.copy(isLoading = false, isBuffering = false, errorMessage = err) }
+                            val srv = _uiState.value.selectedServer
+                            if (srv != null) failedServerIds.add(srv.id)
+                            if (_uiState.value.smartFailoverEnabled) {
+                                triggerFailover(err)
+                            } else {
+                                showToast(err)
+                                _uiState.update { it.copy(isLoading = false, isBuffering = false, userError = com.euthopiar.ui.util.UserError.SourceUnavailable, errorMessage = err) }
+                            }
                             return@launch
                         }
                     } else {
                         val resolveResult = withContext(Dispatchers.IO) {
                             com.euthopiar.core.debrid.DebridManager.getInstance().resolveStream(
-                                effectiveProvider,
-                                apiKey,
-                                currentSource.url
+                                providerType = effectiveProvider,
+                                apiKey = apiKey,
+                                linkOrMagnet = currentSource.url,
+                                fileIdx = currentSource.fileIdx,
+                                season = currentSource.season,
+                                episode = currentSource.episode,
+                                originalResolutionLabel = currentSource.resolutionLabel.takeIf { it.isNotBlank() && !it.equals("Auto", ignoreCase = true) },
+                                originalQuality = currentSource.quality.takeIf { it.isNotBlank() && !it.equals("Auto", ignoreCase = true) }
                             )
                         }
+                        ensureActive()
 
                         if (resolveResult.isSuccess) {
                             currentSource = resolveResult.getOrThrow()
                         } else {
                             // If Debrid resolution fails, attempt fallback to native P2P engine
-                            val p2pRequest = extractP2pStreamRequest(currentSource.url)
+                            val p2pRequest = extractP2pStreamRequest(
+                                rawUrl = currentSource.url,
+                                fallbackInfoHash = currentSource.infoHash,
+                                defaultFileIdx = currentSource.fileIdx,
+                                defaultSeason = currentSource.season,
+                                defaultEpisode = currentSource.episode,
+                                trackers = currentSource.trackers
+                            )
                             if (p2pRequest != null) {
                                 try {
                                     com.euthopiar.core.p2p.P2pStreamingEngine.initialize(getApplication())
                                     val loopbackUrl = com.euthopiar.core.p2p.P2pStreamingEngine.startStream(p2pRequest)
+                                    ensureActive()
                                     observeP2pEngineState()
                                     currentSource = currentSource.copy(url = loopbackUrl)
                                 } catch (p2pErr: Exception) {
                                     if (p2pErr is kotlinx.coroutines.CancellationException) throw p2pErr
                                     val err = resolveResult.exceptionOrNull()?.message ?: "Debrid resolution failed"
-                                    showToast("Debrid resolution failed: $err")
-                                    _uiState.update { it.copy(isLoading = false, isBuffering = false, errorMessage = err) }
+                                    val srv = _uiState.value.selectedServer
+                                    if (srv != null) failedServerIds.add(srv.id)
+                                    if (_uiState.value.smartFailoverEnabled) {
+                                        triggerFailover(err)
+                                    } else {
+                                        showToast("Debrid resolution failed: $err")
+                                        _uiState.update { it.copy(isLoading = false, isBuffering = false, userError = com.euthopiar.ui.util.UserError.SourceUnavailable, errorMessage = err) }
+                                    }
                                     return@launch
                                 }
                             } else {
                                 val err = resolveResult.exceptionOrNull()?.message ?: "Unknown Debrid error"
-                                showToast("Debrid resolution failed: $err")
-                                _uiState.update { it.copy(isLoading = false, isBuffering = false, errorMessage = err) }
+                                val srv = _uiState.value.selectedServer
+                                if (srv != null) failedServerIds.add(srv.id)
+                                if (_uiState.value.smartFailoverEnabled) {
+                                    triggerFailover(err)
+                                } else {
+                                    showToast("Debrid resolution failed: $err")
+                                    _uiState.update { it.copy(isLoading = false, isBuffering = false, userError = com.euthopiar.ui.util.UserError.SourceUnavailable, errorMessage = err) }
+                                }
                                 return@launch
                             }
                         }
                     }
                 }
 
-                // 2. Active HEAD probe for ambiguous HTTP URLs to detect HLS playlists
+                // 2. Active HEAD probe and byte-sniffing for ambiguous HTTP URLs to detect HLS/DASH playlists
                 val effectiveUrlLower = currentSource.url.lowercase()
                 val isEffectiveLoopback = effectiveUrlLower.contains("://127.0.0.1") ||
                         effectiveUrlLower.contains("://localhost") ||
@@ -1898,29 +2467,171 @@ class PlayerViewModel(
                 if (!isEffectiveLoopback && currentSource.url.startsWith("http", ignoreCase = true) && !currentSource.isM3u8 &&
                     !effectiveUrlLower.contains(".m3u8") && !effectiveUrlLower.contains(".mpd") &&
                     !effectiveUrlLower.contains(".mp4") && !effectiveUrlLower.contains(".mkv") &&
-                    !effectiveUrlLower.contains(".webm") && !effectiveUrlLower.contains("/content?v=")) {
+                    !effectiveUrlLower.contains(".webm")) {
+                    val (cleanProbeUrl, rawProbeHeaders) = com.euthopiar.core.network.PlayerPlaybackNetworking.extractUrlAndInlineHeaders(currentSource.url, currentSource.headers)
+                    val safeProbeHeaders = com.euthopiar.core.network.PlayerPlaybackNetworking.sanitizeHeaders(rawProbeHeaders)
+                    var shouldPeekBytes = false
                     try {
                         val probeRequest = Request.Builder()
-                            .url(currentSource.url)
+                            .url(cleanProbeUrl)
                             .head()
                             .apply {
-                                currentSource.headers.forEach { (k, v) -> addHeader(k, v) }
+                                safeProbeHeaders.forEach { (k, v) -> addHeader(k, v) }
                             }
                             .build()
                         val response = withContext(Dispatchers.IO) {
-                            com.euthopiar.core.network.PlayerPlaybackNetworking.playbackHttpClient.newCall(probeRequest).execute()
+                            com.euthopiar.core.network.PlayerPlaybackNetworking.probeHttpClient.newCall(probeRequest).execute()
+                        }
+                        val statusCode = response.code
+                        if (!userExplicitServerSelection && (statusCode in listOf(403, 404, 410) || statusCode >= 500)) {
+                            response.close()
+                            val selServer = _uiState.value.selectedServer
+                            if (selServer != null) failedServerIds.add(selServer.id)
+                            triggerFailover("Source unreachable")
+                            return@launch
                         }
                         val ct = response.header("Content-Type")?.lowercase() ?: ""
                         val finalUrl = response.request.url.toString().lowercase()
+                        val isSuccessful = response.isSuccessful
                         response.close()
-                        if (ct.contains("mpegurl") || ct.contains("m3u8") || finalUrl.contains(".m3u8")) {
-                            currentSource = currentSource.copy(isM3u8 = true)
+
+                        if (isSuccessful && ct.contains("text/html")) {
+                            try {
+                                val resolver = com.euthopiar.core.browser.HeadlessWebResolver.getInstance(getApplication())
+                                val resolveRes = resolver.resolve(
+                                    com.euthopiar.core.browser.BrowserResolveRequest(
+                                        url = currentSource.url,
+                                        headers = currentSource.headers,
+                                        urlSniffRegex = Regex("""\.(?:m3u8|mpd|mp4|mkv)(?:\?|$|#)|(?:master|playlist|index)\.(?:m3u8|txt)|/hls/""", RegexOption.IGNORE_CASE),
+                                        stopOnFirstMediaMatch = true,
+                                        timeoutMs = 12000L
+                                    )
+                                )
+                                val sniffed = resolveRes.sniffedMedia.firstOrNull { !it.isSubtitles } ?: resolveRes.sniffedMedia.firstOrNull()
+                                val sniffedUrl = sniffed?.url ?: resolveRes.sniffedUrls.firstOrNull()
+                                if (sniffedUrl != null) {
+                                    val isHls = sniffedUrl.contains(".m3u8", ignoreCase = true) ||
+                                            sniffedUrl.contains("/hls/", ignoreCase = true) ||
+                                            sniffed?.mimeType?.contains("mpegurl", ignoreCase = true) == true
+                                    currentSource = currentSource.copy(
+                                        url = sniffedUrl,
+                                        headers = currentSource.headers + (sniffed?.headers ?: emptyMap()),
+                                        isM3u8 = isHls
+                                    )
+                                }
+                            } catch (_: Throwable) {}
                         }
-                    } catch (_: Throwable) {
-                        // Keep source as-is on probe failure
+
+                        val confirmedKnownFormat = isSuccessful && (
+                                ct.contains("video/mp4") || ct.contains("video/x-matroska") ||
+                                ct.contains("video/webm") || finalUrl.contains(".mp4") ||
+                                finalUrl.contains(".mkv") || finalUrl.contains(".webm")
+                        )
+
+                        if (isSuccessful && (ct.contains("mpegurl") || ct.contains("m3u8") || finalUrl.contains(".m3u8"))) {
+                            currentSource = currentSource.copy(isM3u8 = true)
+                        } else if (isSuccessful && (ct.contains("dash") || ct.contains("mpd") || finalUrl.contains(".mpd"))) {
+                            currentSource = currentSource.copy(headers = currentSource.headers + ("Content-Type" to "application/dash+xml"))
+                        } else if (!confirmedKnownFormat) {
+                            shouldPeekBytes = true
+                        }
+                    } catch (e: Throwable) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        shouldPeekBytes = true
+                    }
+
+                    if (shouldPeekBytes && !currentSource.isM3u8) {
+                        try {
+                            val (cleanPeekUrl, rawPeekHeaders) = com.euthopiar.core.network.PlayerPlaybackNetworking.extractUrlAndInlineHeaders(currentSource.url, currentSource.headers)
+                            val safePeekHeaders = com.euthopiar.core.network.PlayerPlaybackNetworking.sanitizeHeaders(rawPeekHeaders)
+                            val peekRequest = Request.Builder()
+                                .url(cleanPeekUrl)
+                                .header("Range", "bytes=0-127")
+                                .apply {
+                                    safePeekHeaders.forEach { (k, v) ->
+                                        if (!k.equals("Range", ignoreCase = true)) {
+                                            addHeader(k, v)
+                                        }
+                                    }
+                                }
+                                .build()
+                            val peekResponse = withContext(Dispatchers.IO) {
+                                com.euthopiar.core.network.PlayerPlaybackNetworking.probeHttpClient.newCall(peekRequest).execute()
+                            }
+                            val peekStatusCode = peekResponse.code
+                            if (!userExplicitServerSelection && (peekStatusCode in listOf(403, 404, 410) || peekStatusCode >= 500)) {
+                                peekResponse.close()
+                                val selServer = _uiState.value.selectedServer
+                                if (selServer != null) failedServerIds.add(selServer.id)
+                                triggerFailover("Source unreachable")
+                                return@launch
+                            }
+                            val peekCt = peekResponse.header("Content-Type")?.lowercase() ?: ""
+                            val peekFinalUrl = peekResponse.request.url.toString().lowercase()
+                            val peekBody = peekResponse.body
+                            if (peekBody != null) {
+                                val peekBytes = ByteArray(128)
+                                val bytesRead = peekBody.byteStream().use { stream ->
+                                    var total = 0
+                                    while (total < 128) {
+                                        val r = stream.read(peekBytes, total, 128 - total)
+                                        if (r == -1) break
+                                        total += r
+                                    }
+                                    total
+                                }
+                                peekResponse.close()
+                                if (bytesRead > 0) {
+                                    val peekText = String(peekBytes, 0, bytesRead, Charsets.UTF_8)
+                                    val trimmed = peekText.trimStart('\uFEFF', ' ', '\t', '\r', '\n')
+                                    if (peekCt.contains("text/html") || trimmed.startsWith("<!DOCTYPE", ignoreCase = true) || trimmed.startsWith("<html", ignoreCase = true)) {
+                                        try {
+                                            val resolver = com.euthopiar.core.browser.HeadlessWebResolver.getInstance(getApplication())
+                                            val resolveRes = resolver.resolve(
+                                                com.euthopiar.core.browser.BrowserResolveRequest(
+                                                    url = currentSource.url,
+                                                    headers = currentSource.headers,
+                                                    urlSniffRegex = Regex("""\.(?:m3u8|mpd|mp4|mkv)(?:\?|$|#)|(?:master|playlist|index)\.(?:m3u8|txt)|/hls/""", RegexOption.IGNORE_CASE),
+                                                    stopOnFirstMediaMatch = true,
+                                                    timeoutMs = 12000L
+                                                )
+                                            )
+                                            val sniffed = resolveRes.sniffedMedia.firstOrNull { !it.isSubtitles } ?: resolveRes.sniffedMedia.firstOrNull()
+                                            val sniffedUrl = sniffed?.url ?: resolveRes.sniffedUrls.firstOrNull()
+                                            if (sniffedUrl != null) {
+                                                val isHls = sniffedUrl.contains(".m3u8", ignoreCase = true) ||
+                                                        sniffedUrl.contains("/hls/", ignoreCase = true) ||
+                                                        sniffed?.mimeType?.contains("mpegurl", ignoreCase = true) == true
+                                                currentSource = currentSource.copy(
+                                                    url = sniffedUrl,
+                                                    headers = currentSource.headers + (sniffed?.headers ?: emptyMap()),
+                                                    isM3u8 = isHls
+                                                )
+                                            }
+                                        } catch (_: Throwable) {}
+                                    } else if (trimmed.startsWith("#EXTM3U") || peekText.contains("#EXTM3U") || peekText.contains("#EXT-X-") ||
+                                        peekCt.contains("mpegurl") || peekCt.contains("m3u8") || peekFinalUrl.contains(".m3u8")) {
+                                        currentSource = currentSource.copy(isM3u8 = true)
+                                    } else if (peekText.contains("<MPD", ignoreCase = true) || peekCt.contains("dash") || peekCt.contains("mpd") || peekFinalUrl.contains(".mpd")) {
+                                        currentSource = currentSource.copy(headers = currentSource.headers + ("Content-Type" to "application/dash+xml"))
+                                    }
+                                }
+                            } else {
+                                peekResponse.close()
+                                if (peekCt.contains("mpegurl") || peekCt.contains("m3u8") || peekFinalUrl.contains(".m3u8")) {
+                                    currentSource = currentSource.copy(isM3u8 = true)
+                                } else if (peekCt.contains("dash") || peekCt.contains("mpd") || peekFinalUrl.contains(".mpd")) {
+                                    currentSource = currentSource.copy(headers = currentSource.headers + ("Content-Type" to "application/dash+xml"))
+                                }
+                            }
+                        } catch (e: Throwable) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                            // Keep source as-is on peek failure
+                        }
                     }
                 }
 
+                ensureActive()
                 playStreamSourceInternal(currentSource, subtitles, seekToPosition, isOffline)
             }
             return
@@ -1939,6 +2650,7 @@ class PlayerViewModel(
         videoFrameRendered = false
         player.stop()
         continuousPlayTimeMs = 0L
+        failedAudioTrackIds.clear()
 
         val activeScraper = com.euthopiar.core.js.JsPluginStorage.getInstanceOrNull()?.scrapersFlow?.value?.find {
             it.name.equals(currentProvider, ignoreCase = true) || it.id.equals(currentProvider, ignoreCase = true)
@@ -1957,9 +2669,9 @@ class PlayerViewModel(
 
         val mId = currentMediaId
         if (mId != null && !isOffline) {
-            val mType = if (currentType == MediaType.TV_SERIES) "tv" else "movie"
+            val mType = if (currentType == MediaType.TV_SERIES || currentType == MediaType.ANIME) "tv" else "movie"
             activeRefreshableSource = com.euthopiar.core.streams.RefreshableSource(
-                scraperId = currentProvider ?: "tmdb",
+                scraperId = source.addonId?.removePrefix("plugin:") ?: currentProvider ?: "tmdb",
                 mediaType = mType,
                 videoId = mId,
                 season = _uiState.value.seasonNumber,
@@ -1968,32 +2680,27 @@ class PlayerViewModel(
                 host = try { java.net.URI(source.url).host } catch (_: Exception) { null },
                 name = source.serverName.ifBlank { null },
                 initialUrl = source.url,
-                initialHeaders = source.headers
+                initialHeaders = source.headers,
+                imdbId = currentImdbId,
+                title = _uiState.value.mediaTitle
             )
         } else {
             activeRefreshableSource = null
         }
 
-        val mediaSource = buildMediaSource(source, subtitles, isOffline)
-
-        // Initial default resolution options linked to active source
-        val defaultQualities = listOf(
-            VideoQualityOption("auto", "Auto (Adaptive)"),
-            VideoQualityOption("height_1080", "1080p (Full HD)", 1080),
-            VideoQualityOption("height_720", "720p (HD)", 720),
-            VideoQualityOption("height_480", "480p (SD)", 480),
-            VideoQualityOption("height_360", "360p (SD)", 360)
-        )
+        val effectiveSubtitles = (subtitles + source.subtitles).distinctBy { it.url }
+        val mediaSource = buildMediaSource(source, effectiveSubtitles, isOffline)
 
         // Subtitles list
         val subtitleOptions = mutableListOf(SubtitleOption("off", "Off"))
         var defaultSubtitle: SubtitleOption? = null
-        subtitles.forEachIndexed { idx, sub ->
+        effectiveSubtitles.forEachIndexed { idx, sub ->
             val opt = SubtitleOption(
                 id = "sub_$idx",
-                label = sub.language,
+                label = sub.name ?: sub.language,
                 language = sub.language,
-                url = sub.url
+                url = sub.url,
+                headers = sub.headers
             )
             subtitleOptions.add(opt)
             if (defaultSubtitle == null && (sub.language.contains("eng", ignoreCase = true) || idx == 0)) {
@@ -2001,44 +2708,39 @@ class PlayerViewModel(
             }
         }
 
-        val initialSubtitle = defaultSubtitle ?: SubtitleOption("off", "Off")
-        if (initialSubtitle.url != null) {
-            loadSubtitleCues(initialSubtitle.url)
+        val prevSelectedSubtitle = _uiState.value.selectedSubtitle
+        val initialSubtitle = if (prevSelectedSubtitle.id != "off") {
+            subtitleOptions.find { it.url == prevSelectedSubtitle.url }
+                ?: subtitleOptions.find { !it.language.isNullOrBlank() && it.language.equals(prevSelectedSubtitle.language, ignoreCase = true) }
+                ?: subtitleOptions.find { it.label.equals(prevSelectedSubtitle.label, ignoreCase = true) }
+                ?: prevSelectedSubtitle
         } else {
+            defaultSubtitle ?: SubtitleOption("off", "Off")
+        }
+        if (initialSubtitle.url != null) {
+            loadSubtitleCues(initialSubtitle.url, initialSubtitle.headers)
+        } else if (initialSubtitle.id == "off") {
             activeSubtitleCues = emptyList()
             _currentSubtitleText.value = null
         }
 
         val activeServer = _uiState.value.selectedServer
-        val initialQualities = defaultQualities.map {
-            it.copy(latencyMs = activeServer?.latencyMs, healthCategory = activeServer?.healthCategory)
-        }
         _uiState.update {
             it.copy(
-                availableQualities = initialQualities,
-                selectedQuality = VideoQualityOption("auto", "Auto (Adaptive)", latencyMs = activeServer?.latencyMs, healthCategory = activeServer?.healthCategory),
                 availableSubtitles = subtitleOptions,
                 selectedSubtitle = initialSubtitle,
                 availableAudioTracks = listOf(AudioTrackOption("auto", "Auto (Default)", isAuto = true)),
-                selectedAudioTrack = AudioTrackOption("auto", "Auto (Default)", isAuto = true),
+                userError = null,
                 errorMessage = null,
                 isLoading = false,
                 isBuffering = true
             )
         }
+        rebuildUnifiedQualityOptions()
 
-        val estimatedBps = com.euthopiar.core.network.BandwidthEstimator.Default.getEstimatedBandwidthBps(getApplication())
-        val autoTier = com.euthopiar.core.network.BandwidthEstimator.Default.decideAutoQuality(estimatedBps)
-        val maxH = when (autoTier) {
-            "480p" -> 480
-            "720p" -> 720
-            "1080p" -> 1080
-            else -> Int.MAX_VALUE
-        }
         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
             .clearVideoSizeConstraints()
-            .setMaxVideoSize(Int.MAX_VALUE, maxH)
-            .setMinVideoSize(0, 0)
+            .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
             .setPreferredVideoMimeType(null)
             .build()
 
@@ -2053,7 +2755,7 @@ class PlayerViewModel(
 
     private fun extractExoPlayerTracks(tracks: Tracks) {
         val detectedResolutions = mutableListOf<VideoQualityOption>()
-        detectedResolutions.add(VideoQualityOption("auto", "Auto (Adaptive)"))
+        detectedResolutions.add(VideoQualityOption("auto", "Auto (Adaptive)", isAuto = true))
 
         val detectedAudio = mutableListOf<AudioTrackOption>()
         detectedAudio.add(AudioTrackOption("auto", "Auto (Default)", isAuto = true))
@@ -2061,26 +2763,64 @@ class PlayerViewModel(
 
         val detectedSubs = mutableListOf<SubtitleOption>()
 
+        val rawVideoTracks = mutableListOf<VideoTrackCandidate>()
         for ((groupIndex, group) in tracks.groups.withIndex()) {
             if (group.type == C.TRACK_TYPE_VIDEO) {
                 for (i in 0 until group.length) {
                     val format = group.getTrackFormat(i)
-                    val h = format.height
-                    if (h > 0) {
-                        val label = when {
-                            h >= 2160 -> "4K (2160p)"
-                            h >= 1440 -> "2K (1440p)"
-                            h >= 1080 -> "1080p (Full HD)"
-                            h >= 720 -> "720p (HD)"
-                            h >= 480 -> "480p (SD)"
-                            else -> "${h}p"
-                        }
-                        if (detectedResolutions.none { it.height == h }) {
-                            detectedResolutions.add(VideoQualityOption(id = "height_$h", label = label, height = h))
-                        }
+                    val h = resolveTrackHeight(format, i)
+                    val bitrate = if (format.bitrate != androidx.media3.common.Format.NO_VALUE && format.bitrate > 0) format.bitrate else null
+                    if (h > 0 || (group.length > 1 && bitrate != null && bitrate > 0)) {
+                        rawVideoTracks.add(VideoTrackCandidate(groupIndex, i, h, bitrate))
                     }
                 }
-            } else if (group.type == C.TRACK_TYPE_AUDIO) {
+            }
+        }
+        val heightCounts = mutableMapOf<Int, Int>()
+        for (cand in rawVideoTracks) {
+            heightCounts[cand.height] = (heightCounts[cand.height] ?: 0) + 1
+        }
+        for (cand in rawVideoTracks) {
+            val baseLabel = when {
+                cand.height >= 2160 -> "4K (2160p)"
+                cand.height >= 1440 -> "2K (1440p)"
+                cand.height >= 1080 -> "1080p (Full HD)"
+                cand.height >= 720 -> "720p (HD)"
+                cand.height >= 480 -> "480p (SD)"
+                cand.height > 0 -> "${cand.height}p"
+                else -> "Adaptive"
+            }
+            val label = if (cand.bitrate != null && cand.bitrate > 0) {
+                val mbpsStr = if (cand.bitrate >= 1_000_000) {
+                    String.format(java.util.Locale.US, "%.1f Mbps", cand.bitrate / 1_000_000.0)
+                } else {
+                    "${cand.bitrate / 1000} kbps"
+                }
+                if (cand.height <= 0) {
+                    "Adaptive ($mbpsStr)"
+                } else if ((heightCounts[cand.height] ?: 0) > 1) {
+                    "${cand.height}p ($mbpsStr)"
+                } else {
+                    baseLabel
+                }
+            } else {
+                baseLabel
+            }
+            detectedResolutions.add(
+                VideoQualityOption(
+                    id = "video_${cand.groupIndex}_${cand.trackIndex}",
+                    label = label,
+                    height = cand.height.takeIf { it > 0 },
+                    bitrate = cand.bitrate,
+                    groupIndex = cand.groupIndex,
+                    trackIndex = cand.trackIndex,
+                    isAuto = false
+                )
+            )
+        }
+
+        for ((groupIndex, group) in tracks.groups.withIndex()) {
+            if (group.type == C.TRACK_TYPE_AUDIO) {
                 var firstPlayableIndex: Int? = null
                 var currentlySelectedIndex: Int? = null
                 for (i in 0 until group.length) {
@@ -2181,57 +2921,34 @@ class PlayerViewModel(
             }
         }
 
-        if (detectedResolutions.size > 1) {
-            val activeServer = _uiState.value.selectedServer
-            val mappedResolutions = detectedResolutions.map {
-                it.copy(latencyMs = activeServer?.latencyMs, healthCategory = activeServer?.healthCategory)
-            }.sortedByDescending { it.height ?: 9999 }
-            _uiState.update { it.copy(availableQualities = mappedResolutions) }
-
-            // Auto-prefer highest available quality (e.g. 1080p Full HD) or honor user quality preference
-            val currentQuality = _uiState.value.selectedQuality
-            val targetHeight = when {
-                userDefaultQuality.contains("2160") -> 2160
-                userDefaultQuality.contains("1080") -> 1080
-                userDefaultQuality.contains("720") -> 720
-                userDefaultQuality.contains("480") -> 480
-                currentQuality.height != null -> currentQuality.height
-                else -> 1080 // Default to 1080p Full HD if available
-            }
-
-            val targetOption = mappedResolutions.firstOrNull { it.height == targetHeight }
-                ?: mappedResolutions.filter { it.height != null }.maxByOrNull { it.height ?: 0 }
-
-            if (targetOption != null && targetOption.height != null) {
-                if (currentQuality.id != "auto" && currentQuality.height != null) {
-                    _uiState.update { it.copy(selectedQuality = targetOption) }
-                    exoPlayer?.let { player ->
-                        player.trackSelectionParameters = player.trackSelectionParameters
-                            .buildUpon()
-                            .setMaxVideoSize(Int.MAX_VALUE, targetOption.height)
-                            .setMinVideoSize(0, 0)
-                            .build()
-                    }
-                } else {
-                    // Auto adaptive: allow player to seamlessly select best playable rendition without hard constraints
-                    exoPlayer?.let { player ->
-                        player.trackSelectionParameters = player.trackSelectionParameters
-                            .buildUpon()
-                            .clearVideoSizeConstraints()
-                            .build()
-                    }
-                }
-            }
-        }
+        rebuildUnifiedQualityOptions(tracks)
 
         if (detectedAudio.size > 1) {
-            val activeSelected = _uiState.value.selectedAudioTrack
+            val prefLang = userPreferredAudioLanguage
+            val preferredTrack = if (prefLang != null) {
+                detectedAudio.firstOrNull { opt ->
+                    !opt.isAuto && (
+                        opt.language?.equals(prefLang, ignoreCase = true) == true ||
+                        opt.isoCode.equals(prefLang, ignoreCase = true)
+                    )
+                }
+            } else null
+
+            val activeSelected = preferredTrack ?: _uiState.value.selectedAudioTrack
+            val effectiveSelected = if (activeSelected.id in detectedAudio.map { a -> a.id }) {
+                activeSelected
+            } else {
+                detectedAudio.first()
+            }
+            if (preferredTrack != null && !effectiveSelected.isAuto) {
+                selectAudioTrack(effectiveSelected)
+            }
             _uiState.update {
                 it.copy(
                     availableAudioTracks = detectedAudio.map { opt ->
-                        opt.copy(isSelected = opt.id == activeSelected.id)
+                        opt.copy(isSelected = opt.id == effectiveSelected.id)
                     },
-                    selectedAudioTrack = if (activeSelected.id in detectedAudio.map { a -> a.id }) activeSelected else detectedAudio.first()
+                    selectedAudioTrack = effectiveSelected
                 )
             }
         }
@@ -2253,20 +2970,42 @@ class PlayerViewModel(
             if (!hasSelectedVideo) {
                 android.util.Log.w("PlayerViewModel", "No video track selected in video group! Attempting force-selection of playable track...")
                 var forceSelected = false
+                // Prioritize supported non-Dolby-Vision tracks first for devices that cannot decode Dolby Vision
                 for (group in videoGroups) {
                     for (i in 0 until group.length) {
                         if (group.isTrackSupported(i)) {
-                            android.util.Log.i("PlayerViewModel", "Force-selecting supported video track at index $i")
-                            exoPlayer?.trackSelectionParameters = exoPlayer?.trackSelectionParameters?.buildUpon()
-                                ?.setOverrideForType(
-                                    androidx.media3.common.TrackSelectionOverride(group.mediaTrackGroup, listOf(i))
-                                )
-                                ?.build() ?: break
-                            forceSelected = true
-                            break
+                            val fmt = group.getTrackFormat(i)
+                            if (!isDolbyVisionFormat(fmt)) {
+                                val mime = fmt.sampleMimeType.orEmpty()
+                                android.util.Log.i("PlayerViewModel", "Force-selecting supported non-DV video track at index $i ($mime)")
+                                exoPlayer?.trackSelectionParameters = exoPlayer?.trackSelectionParameters?.buildUpon()
+                                    ?.setOverrideForType(
+                                        androidx.media3.common.TrackSelectionOverride(group.mediaTrackGroup, listOf(i))
+                                    )
+                                    ?.build() ?: break
+                                forceSelected = true
+                                break
+                            }
                         }
                     }
                     if (forceSelected) break
+                }
+                if (!forceSelected) {
+                    for (group in videoGroups) {
+                        for (i in 0 until group.length) {
+                            if (group.isTrackSupported(i)) {
+                                android.util.Log.i("PlayerViewModel", "Force-selecting supported video track at index $i")
+                                exoPlayer?.trackSelectionParameters = exoPlayer?.trackSelectionParameters?.buildUpon()
+                                    ?.setOverrideForType(
+                                        androidx.media3.common.TrackSelectionOverride(group.mediaTrackGroup, listOf(i))
+                                    )
+                                    ?.build() ?: break
+                                forceSelected = true
+                                break
+                            }
+                        }
+                        if (forceSelected) break
+                    }
                 }
                 if (_uiState.value.smartFailoverEnabled && !forceSelected && !userExplicitServerSelection) {
                     // All video tracks in this source are unsupported by device decoder. Gracefully fallback!
@@ -2288,6 +3027,15 @@ class PlayerViewModel(
             }
         }
         updateMediaFormatInfo()
+    }
+
+    private fun isDolbyVisionFormat(fmt: androidx.media3.common.Format): Boolean {
+        val mime = fmt.sampleMimeType.orEmpty()
+        val codecs = fmt.codecs.orEmpty()
+        return mime.contains("dolby-vision", ignoreCase = true) ||
+                codecs.contains("dvh1", ignoreCase = true) ||
+                codecs.contains("dvhe", ignoreCase = true) ||
+                codecs.contains("dav1", ignoreCase = true)
     }
 
     fun updateMediaFormatInfo() {
@@ -2401,9 +3149,33 @@ class PlayerViewModel(
                 return@launch
             }
 
-            val result = measureUrlLatency(url, option.streamSource.headers)
-            probedLatencies[url] = result
-            updateServerLatency(option.id, result.first, result.second)
+            probeSemaphore.withPermit {
+                val cachedAgain = probedLatencies[url]
+                if (cachedAgain != null) {
+                    updateServerLatency(option.id, cachedAgain.first, cachedAgain.second)
+                    return@withPermit
+                }
+
+                val result = measureUrlLatency(
+                    url = url,
+                    headers = option.streamSource.headers,
+                    seeders = option.seeders ?: option.streamSource.seeders,
+                    isTorrent = option.isTorrent,
+                    infoHash = option.streamSource.infoHash
+                )
+                probedLatencies[url] = result
+                updateServerLatency(option.id, result.first, result.second)
+            }
+        }
+    }
+
+    fun probeAllPendingServers() {
+        val servers = _uiState.value.availableServers
+        servers.forEach { option ->
+            val url = option.streamSource.url
+            if (!url.startsWith("file://") && !url.startsWith("content://") && option.id != "offline_cache" && probedLatencies[url] == null) {
+                probeServerLatency(option)
+            }
         }
     }
 
@@ -2458,26 +3230,48 @@ class PlayerViewModel(
         }
     }
 
-    private suspend fun measureUrlLatency(url: String, headers: Map<String, String>): Pair<Long, ServerHealthCategory> = withContext(Dispatchers.IO) {
+    private suspend fun measureUrlLatency(
+        url: String,
+        headers: Map<String, String>,
+        seeders: Int? = null,
+        isTorrent: Boolean = false,
+        infoHash: String? = null
+    ): Pair<Long, ServerHealthCategory> = withContext(Dispatchers.IO) {
         val urlLower = url.lowercase()
-        if (extractP2pStreamRequest(url) != null ||
+        if (isTorrent ||
+            !infoHash.isNullOrBlank() ||
+            extractP2pStreamRequest(url, infoHash) != null ||
             urlLower.startsWith("magnet:") ||
             urlLower.startsWith("torrent:") ||
+            urlLower.startsWith("torrent://") ||
             urlLower.contains("127.0.0.1") ||
             urlLower.contains("localhost") ||
             urlLower.contains("[::1]")
         ) {
-            return@withContext 10L to ServerHealthCategory.EXCELLENT
+            val s = seeders ?: 0
+            val (estLatency, cat) = when {
+                s >= 10 -> 250L to ServerHealthCategory.AVERAGE
+                else -> 500L to ServerHealthCategory.POOR
+            }
+            return@withContext estLatency to cat
         }
+        val (cleanTargetUrl, extractedHeaders) = com.euthopiar.core.network.PlayerPlaybackNetworking.extractUrlAndInlineHeaders(url, headers)
+        val safeHeaders = com.euthopiar.core.network.PlayerPlaybackNetworking.sanitizeHeaders(extractedHeaders)
         val start = System.currentTimeMillis()
         try {
             val req = Request.Builder()
-                .url(url)
+                .url(cleanTargetUrl)
                 .head()
-                .apply { headers.forEach { (k, v) -> header(k, v) } }
+                .apply { safeHeaders.forEach { (k, v) -> header(k, v) } }
                 .build()
 
             streamingHttpClient.newCall(req).execute().use { resp ->
+                if (resp.code == 405) {
+                    throw java.io.IOException("HEAD 405 Method Not Allowed")
+                }
+                if (!resp.isSuccessful && resp.code !in 200..399) {
+                    return@withContext 999L to ServerHealthCategory.UNWATCHABLE
+                }
                 val duration = (System.currentTimeMillis() - start).coerceAtLeast(1L)
                 val cat = when {
                     duration <= 150L -> ServerHealthCategory.EXCELLENT
@@ -2491,12 +3285,15 @@ class PlayerViewModel(
             try {
                 val start2 = System.currentTimeMillis()
                 val req2 = Request.Builder()
-                    .url(url)
+                    .url(cleanTargetUrl)
                     .header("Range", "bytes=0-1024")
-                    .apply { headers.forEach { (k, v) -> if (k != "Range") header(k, v) } }
+                    .apply { safeHeaders.forEach { (k, v) -> if (!k.equals("Range", ignoreCase = true)) header(k, v) } }
                     .build()
 
                 streamingHttpClient.newCall(req2).execute().use { resp2 ->
+                    if (!resp2.isSuccessful && resp2.code != 206 && resp2.code !in 200..399) {
+                        return@withContext 999L to ServerHealthCategory.UNWATCHABLE
+                    }
                     val duration = (System.currentTimeMillis() - start2).coerceAtLeast(1L)
                     val cat = when {
                         duration <= 150L -> ServerHealthCategory.EXCELLENT
@@ -2539,13 +3336,416 @@ class PlayerViewModel(
                 selectedQuality = updatedSelectedQuality
             )
         }
+        rebuildUnifiedQualityOptions()
+    }
+
+    fun resolveTrackHeight(format: androidx.media3.common.Format, trackIndex: Int): Int {
+        if (format.height > 0) return format.height
+        if (format.width > 0) {
+            val w = format.width
+            return when {
+                w >= 3800 -> 2160
+                w >= 2500 -> 1440
+                w >= 1900 -> 1080
+                w >= 1200 -> 720
+                w >= 800 -> 480
+                w >= 600 -> 360
+                else -> (w * 9) / 16
+            }
+        }
+        val labelHeight = parseResolutionHeight("${format.label.orEmpty()} ${format.id.orEmpty()}")
+        if (labelHeight > 0) return labelHeight
+
+        try {
+            val manifest = exoPlayer?.currentManifest
+            if (manifest is HlsManifest) {
+                val variants = manifest.multivariantPlaylist.variants
+                val matchedVariant = variants.firstOrNull { it.format.bitrate == format.bitrate }
+                    ?: variants.getOrNull(trackIndex)
+                if (matchedVariant != null) {
+                    val vHeight = matchedVariant.format.height.takeIf { it > 0 }
+                        ?: parseResolutionHeight(matchedVariant.url.toString())
+                    if (vHeight > 0) return vHeight
+                }
+            }
+        } catch (_: Throwable) {}
+
+        return 0
+    }
+
+    fun parseResolutionHeight(label: String): Int {
+        val clean = label.lowercase()
+        return when {
+            clean.contains("4k") || clean.contains("2160") || clean.contains("uhd") -> 2160
+            clean.contains("1440") || clean.contains("2k") || clean.contains("qhd") -> 1440
+            clean.contains("1080") || clean.contains("fhd") -> 1080
+            clean.contains("720") || clean.contains("hd") -> 720
+            clean.contains("480") || clean.contains("sd") -> 480
+            clean.contains("360") -> 360
+            else -> {
+                val num = Regex("""(\d{3,4})p""").find(clean)?.groupValues?.get(1)?.toIntOrNull()
+                num ?: 0
+            }
+        }
+    }
+
+    fun labelForHeight(h: Int): String {
+        return when {
+            h >= 2160 -> "4K (2160p)"
+            h >= 1440 -> "2K (1440p)"
+            h >= 1080 -> "1080p (Full HD)"
+            h >= 720 -> "720p (HD)"
+            h >= 480 -> "480p (SD)"
+            h >= 360 -> "360p (SD)"
+            else -> "${h}p"
+        }
+    }
+
+    fun parseSizeToGb(sizeStr: String): Double? {
+        if (sizeStr.isBlank()) return null
+        val match = Regex("""([\d.]+)\s*(gb|mb|tb|g|m|t)""", RegexOption.IGNORE_CASE).find(sizeStr) ?: return null
+        val num = match.groupValues[1].toDoubleOrNull() ?: return null
+        val unit = match.groupValues[2].lowercase()
+        return when {
+            unit.startsWith("t") -> num * 1024.0
+            unit.startsWith("g") -> num
+            unit.startsWith("m") -> num / 1024.0
+            else -> num
+        }
+    }
+
+    fun scoreServerForInitialAutoPlay(
+        option: ServerSourceOption,
+        hasDebrid: Boolean,
+        preferredQualityHeight: Int = 1080
+    ): Double {
+        var score = 0.0
+        val src = option.streamSource
+        val url = src.url.lowercase()
+        val isTorrent = option.isTorrent || src.infoHash != null || url.startsWith("magnet:") || url.startsWith("torrent:") || url.startsWith("torrent://") || com.euthopiar.core.p2p.extractP2pStreamRequest(src.url, src.infoHash) != null
+
+        // 1. Health & Transport Reliability Tier
+        if (option.healthCategory == ServerHealthCategory.UNWATCHABLE || option.id in failedServerIds) {
+            score -= 1000.0
+        } else {
+            if (!isTorrent || hasDebrid) {
+                when (option.healthCategory) {
+                    ServerHealthCategory.EXCELLENT -> score += 320.0
+                    ServerHealthCategory.AVERAGE -> score += 300.0
+                    ServerHealthCategory.POOR -> score += 150.0
+                    null -> score += 250.0
+                    ServerHealthCategory.UNWATCHABLE -> score -= 1000.0
+                }
+            } else {
+                val seeders = option.seeders ?: src.seeders ?: 0
+                when {
+                    seeders >= 50 -> score += 150.0
+                    seeders >= 25 -> score += 100.0
+                    seeders >= 10 -> score += 50.0
+                    seeders >= 3 -> score += 20.0
+                    else -> score -= 50.0
+                }
+            }
+        }
+
+        // 2. Match Confidence Tier
+        val matchScore = src.matchScore
+        if (matchScore >= 0.80) {
+            score += 200.0
+        } else if (matchScore >= 0.65) {
+            score += 100.0
+        } else if (matchScore > 0.0) {
+            score += (matchScore * 100.0)
+        }
+
+        // 3. Resolution & Codec Compatibility Tier
+        val height = parseResolutionHeight(option.resolutionLabel.ifBlank { src.quality })
+        val combinedText = "${option.serverName} ${option.label}".lowercase()
+        val isRemux = combinedText.contains("remux")
+        val isDvOnly = (combinedText.contains("dovi") || combinedText.contains("dv") || combinedText.contains("dolby vision")) &&
+                !combinedText.contains("hdr10") && !combinedText.contains("hdr")
+        val sizeGb = parseSizeToGb(option.label) ?: parseSizeToGb(option.serverName) ?: 0.0
+        val isHeavyRemux = isRemux && (sizeGb > 20.0 || sizeGb == 0.0)
+
+        if (preferredQualityHeight >= 2160) {
+            when {
+                height >= 2160 -> score += 220.0
+                height >= 1080 -> score += 120.0
+                height == 0 -> score += 110.0
+                height >= 720 -> score += 80.0
+                else -> score += 40.0
+            }
+        } else {
+            when {
+                height == 1080 -> score += 150.0
+                height == 0 -> score += 140.0
+                height >= 2160 -> score += 110.0
+                height >= 720 -> score += 120.0
+                height >= 480 -> score += 80.0
+                else -> score += 50.0
+            }
+        }
+
+        if (isHeavyRemux) {
+            score -= 40.0
+        }
+        if (isDvOnly) {
+            score -= 30.0
+        }
+
+        return score
+    }
+
+    fun isPrimeCandidate(option: ServerSourceOption, hasDebrid: Boolean, prefHeight: Int = 1080): Boolean {
+        val src = option.streamSource
+        if (src.matchScore < 0.75) return false
+        val url = src.url.lowercase()
+        val isTorrent = src.infoHash != null || url.startsWith("magnet:") || url.startsWith("torrent:") || url.startsWith("torrent://") || com.euthopiar.core.p2p.extractP2pStreamRequest(src.url, src.infoHash) != null
+        if (isTorrent && !hasDebrid) {
+            val seeders = src.seeders ?: option.seeders ?: 0
+            val isPrimary = _uiState.value.availableServers.firstOrNull()?.id == option.id
+            if (seeders < 3 && !isPrimary) return false
+        }
+        val h = parseResolutionHeight(option.resolutionLabel.ifBlank { src.quality })
+        val matchesPreferred = if (prefHeight >= 2160) h >= 2160 else (h == 1080 || h == 0)
+        if (!matchesPreferred) return false
+        val combinedText = "${option.serverName} ${option.label}".lowercase()
+        if (combinedText.contains("remux")) {
+            val sizeGb = parseSizeToGb(option.label) ?: parseSizeToGb(option.serverName) ?: 0.0
+            if (sizeGb > 20.0 || sizeGb == 0.0) return false
+        }
+        val probed = probedLatencies[src.url]
+        if (probed != null && probed.second == ServerHealthCategory.UNWATCHABLE) return false
+        return true
+    }
+
+    fun rebuildUnifiedQualityOptions(
+        currentTracks: Tracks? = if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+            try { exoPlayer?.currentTracks } catch (_: Throwable) { lastReportedTracks }
+        } else {
+            lastReportedTracks
+        }
+    ) {
+        val activeServer = _uiState.value.selectedServer
+        val availableServers = _uiState.value.availableServers
+        val exoTracks = mutableListOf<VideoTrackCandidate>()
+
+        if (currentTracks != null) {
+            for ((groupIndex, group) in currentTracks.groups.withIndex()) {
+                if (group.type == C.TRACK_TYPE_VIDEO) {
+                    for (i in 0 until group.length) {
+                        val format = group.getTrackFormat(i)
+                        val h = resolveTrackHeight(format, i)
+                        val bitrate = if (format.bitrate != androidx.media3.common.Format.NO_VALUE && format.bitrate > 0) format.bitrate else null
+                        if (h > 0 || (group.length > 1 && bitrate != null && bitrate > 0)) {
+                            exoTracks.add(VideoTrackCandidate(groupIndex, i, h, bitrate))
+                        }
+                    }
+                }
+            }
+        }
+        exoTracks.sortWith(compareByDescending<VideoTrackCandidate> { it.height }.thenByDescending { it.bitrate ?: 0 })
+
+        val resultQualities = mutableListOf<VideoQualityOption>()
+
+        val isAdaptiveStream = exoTracks.size > 1 ||
+                activeServer?.streamSource?.isM3u8 == true ||
+                activeServer?.streamSource?.container in listOf(
+                    com.euthopiar.core.model.StreamContainer.HLS,
+                    com.euthopiar.core.model.StreamContainer.DASH
+                )
+
+        if (isAdaptiveStream) {
+            // Adaptive multi-rendition stream (HLS / DASH)
+            resultQualities.add(
+                VideoQualityOption(
+                    id = "auto",
+                    label = "Auto (Adaptive)",
+                    height = null,
+                    bitrate = null,
+                    groupIndex = -1,
+                    trackIndex = -1,
+                    isAuto = true,
+                    latencyMs = activeServer?.latencyMs,
+                    healthCategory = activeServer?.healthCategory
+                )
+            )
+            val heightCounts = mutableMapOf<Int, Int>()
+            for (cand in exoTracks) {
+                heightCounts[cand.height] = (heightCounts[cand.height] ?: 0) + 1
+            }
+            for (cand in exoTracks) {
+                val baseLabel = if (cand.height > 0) labelForHeight(cand.height) else "Adaptive"
+                val label = if (cand.bitrate != null && cand.bitrate > 0) {
+                    val mbpsStr = if (cand.bitrate >= 1_000_000) {
+                        String.format(java.util.Locale.US, "%.1f Mbps", cand.bitrate / 1_000_000.0)
+                    } else {
+                        "${cand.bitrate / 1000} kbps"
+                    }
+                    if (cand.height <= 0) {
+                        "Adaptive ($mbpsStr)"
+                    } else if ((heightCounts[cand.height] ?: 0) > 1) {
+                        "${cand.height}p ($mbpsStr)"
+                    } else {
+                        baseLabel
+                    }
+                } else {
+                    baseLabel
+                }
+                resultQualities.add(
+                    VideoQualityOption(
+                        id = "video_${cand.groupIndex}_${cand.trackIndex}",
+                        label = label,
+                        height = cand.height.takeIf { it > 0 },
+                        bitrate = cand.bitrate,
+                        groupIndex = cand.groupIndex,
+                        trackIndex = cand.trackIndex,
+                        isAuto = false,
+                        isServerSwitch = false,
+                        latencyMs = activeServer?.latencyMs,
+                        healthCategory = activeServer?.healthCategory
+                    )
+                )
+            }
+        } else {
+            // Single-resolution direct / debrid / P2P stream
+            val single = exoTracks.firstOrNull()
+            val activeHeight = single?.height?.takeIf { it > 0 } ?: parseResolutionHeight(
+                activeServer?.resolutionLabel.orEmpty().ifBlank { activeServer?.streamSource?.quality.orEmpty() }
+            )
+
+            resultQualities.add(
+                VideoQualityOption(
+                    id = "auto",
+                    label = "Auto (Recommended)",
+                    height = null,
+                    bitrate = null,
+                    groupIndex = -1,
+                    trackIndex = -1,
+                    isAuto = true,
+                    latencyMs = activeServer?.latencyMs,
+                    healthCategory = activeServer?.healthCategory
+                )
+            )
+
+            if (activeHeight > 0) {
+                resultQualities.add(
+                    VideoQualityOption(
+                        id = single?.let { "video_${it.groupIndex}_${it.trackIndex}" } ?: "current_res_$activeHeight",
+                        label = "${labelForHeight(activeHeight)} (Current)",
+                        height = activeHeight,
+                        bitrate = single?.bitrate,
+                        groupIndex = single?.groupIndex ?: -1,
+                        trackIndex = single?.trackIndex ?: -1,
+                        isAuto = false,
+                        linkedServerId = activeServer?.id,
+                        isServerSwitch = false,
+                        latencyMs = activeServer?.latencyMs,
+                        healthCategory = activeServer?.healthCategory
+                    )
+                )
+            }
+
+            val activeBaseName = activeServer?.serverName?.substringBefore("•")?.trim().orEmpty()
+            val activeAddon = activeServer?.streamSource?.addonName ?: activeServer?.streamSource?.addonId ?: currentProvider
+            val healthyServers = availableServers.filter { s ->
+                s.id !in failedServerIds &&
+                s.healthCategory != ServerHealthCategory.UNWATCHABLE &&
+                s.id != activeServer?.id &&
+                activeBaseName.isNotBlank() &&
+                s.serverName.substringBefore("•").trim().equals(activeBaseName, ignoreCase = true) &&
+                (s.streamSource.addonName?.equals(activeAddon, ignoreCase = true) == true ||
+                 (s.streamSource.addonId != null && s.streamSource.addonId.equals(activeAddon, ignoreCase = true)))
+            }
+
+            val otherTiers = healthyServers.groupBy {
+                parseResolutionHeight(it.resolutionLabel.ifBlank { it.streamSource.quality })
+            }.filter { (tierHeight, _) ->
+                tierHeight > 0 && tierHeight != activeHeight
+            }
+
+            for ((tierHeight, tierServers) in otherTiers) {
+                val bestServer = tierServers.maxWithOrNull(
+                    compareBy<ServerSourceOption> {
+                        when (it.healthCategory) {
+                            ServerHealthCategory.EXCELLENT -> 3
+                            ServerHealthCategory.AVERAGE -> 2
+                            null -> 1
+                            ServerHealthCategory.POOR -> 0
+                            else -> -1
+                        }
+                    }
+                    .thenBy { it.streamSource.matchScore }
+                    .thenBy { it.streamSource.seeders ?: 0 }
+                )
+                if (bestServer != null) {
+                    resultQualities.add(
+                        VideoQualityOption(
+                            id = "server_res_$tierHeight",
+                            label = "${labelForHeight(tierHeight)} · ${bestServer.serverName}",
+                            height = tierHeight,
+                            linkedServerId = bestServer.id,
+                            isServerSwitch = true,
+                            latencyMs = bestServer.latencyMs,
+                            healthCategory = bestServer.healthCategory
+                        )
+                    )
+                }
+            }
+        }
+
+        val autoOpt = resultQualities.firstOrNull { it.id == "auto" }
+        val nonAuto = resultQualities.filter { it.id != "auto" }.sortedWith(
+            compareByDescending<VideoQualityOption> { it.height ?: 0 }.thenByDescending { it.bitrate ?: 0 }
+        )
+        val finalQualities = if (autoOpt != null) listOf(autoOpt) + nonAuto else nonAuto
+
+        _uiState.update { state ->
+            val prevSelected = state.selectedQuality
+            val updatedSelected = when {
+                prevSelected.id == "auto" -> autoOpt ?: prevSelected
+                finalQualities.any { it.id == prevSelected.id } -> {
+                    finalQualities.first { it.id == prevSelected.id }
+                }
+                prevSelected.linkedServerId != null && prevSelected.linkedServerId == activeServer?.id -> {
+                    finalQualities.firstOrNull { it.linkedServerId == activeServer.id } ?: prevSelected
+                }
+                prevSelected.height != null -> {
+                    finalQualities.firstOrNull { it.height == prevSelected.height } ?: prevSelected
+                }
+                else -> autoOpt ?: finalQualities.firstOrNull() ?: prevSelected
+            }
+            state.copy(
+                availableQualities = finalQualities,
+                selectedQuality = updatedSelected
+            )
+        }
     }
 
     fun selectServer(serverOption: ServerSourceOption, isUserExplicit: Boolean = true) {
-        val player = exoPlayer ?: return
+        sourcePrepJob?.cancel()
+        sourcePrepJob = null
+        fastStartJob?.cancel()
+        fastStartJob = null
         bufferingStallStartTime = null
         userExplicitServerSelection = isUserExplicit
+        if (isUserExplicit) {
+            hasStartedPlayback = true
+        }
         failedServerIds.remove(serverOption.id)
+        failedAudioTrackIds.clear()
+
+        // 1. Immediately stop playback & clear media items to prevent old audio/video bleed
+        exoPlayer?.stop()
+        exoPlayer?.clearMediaItems()
+
+        // 2. Stop P2P streaming and release SequentialStreamManager active session
+        try {
+            com.euthopiar.core.p2p.P2pStreamingEngine.stopStream()
+        } catch (_: Throwable) {}
+        p2pStateJob?.cancel()
+        p2pStateJob = null
+        com.euthopiar.ui.player.sequential.SequentialStreamManager.releaseActiveSession()
 
         if (isUserExplicit && serverOption.resolutionLabel.isNotBlank() && !serverOption.resolutionLabel.contains("Auto", ignoreCase = true)) {
             val estimated = com.euthopiar.core.network.BandwidthEstimator.Default.getEstimatedBandwidthBps(getApplication())
@@ -2557,21 +3757,27 @@ class PlayerViewModel(
             }
         }
 
-        val currentPos = player.currentPosition.coerceAtLeast(0L)
+        val currentPos = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: _uiState.value.currentPositionMs.coerceAtLeast(0L)
+        val defaultAutoQuality = VideoQualityOption(
+            id = "auto",
+            label = "Auto (Adaptive)",
+            isAuto = true,
+            latencyMs = serverOption.latencyMs,
+            healthCategory = serverOption.healthCategory
+        )
         _uiState.update { state ->
             val updatedQualities = state.availableQualities.map { q ->
                 q.copy(latencyMs = serverOption.latencyMs, healthCategory = serverOption.healthCategory)
             }
-            val updatedSelectedQuality = state.selectedQuality.copy(
-                latencyMs = serverOption.latencyMs,
-                healthCategory = serverOption.healthCategory
-            )
             state.copy(
                 selectedServer = serverOption,
                 availableQualities = updatedQualities,
-                selectedQuality = updatedSelectedQuality
+                selectedQuality = defaultAutoQuality,
+                userError = null,
+                errorMessage = null
             )
         }
+        rebuildUnifiedQualityOptions()
         playStreamSource(
             source = serverOption.streamSource,
             subtitles = streamResult?.subtitles ?: emptyList(),
@@ -2652,7 +3858,7 @@ class PlayerViewModel(
         pendingQualityOption = null
 
         if (targetServer != null) {
-            selectServer(targetServer, isUserExplicit = false)
+            selectServer(targetServer, isUserExplicit = true)
         } else if (targetQuality != null) {
             applyQuality(targetQuality)
         }
@@ -2666,36 +3872,53 @@ class PlayerViewModel(
 
     private fun applyQuality(option: VideoQualityOption) {
         _uiState.update { it.copy(selectedQuality = option) }
+
+        if (option.isServerSwitch && option.linkedServerId != null) {
+            val targetServer = _uiState.value.availableServers.find { it.id == option.linkedServerId }
+            if (targetServer != null && targetServer.id != _uiState.value.selectedServer?.id) {
+                selectServer(targetServer, isUserExplicit = true)
+            }
+            return
+        }
+
         val player = exoPlayer ?: return
 
-        if (option.height != null) {
-            player.trackSelectionParameters = player.trackSelectionParameters
-                .buildUpon()
-                .setMaxVideoSize(Int.MAX_VALUE, option.height)
-                .setMinVideoSize(0, 0)
-                .build()
-            player.seekTo(player.currentPosition)
-            updateMediaFormatInfo()
-            showToast("Quality: ${option.label}")
-        } else {
-            // Auto: network-aware auto quality decider
-            val estimatedBps = com.euthopiar.core.network.BandwidthEstimator.Default.getEstimatedBandwidthBps(getApplication())
-            val autoTier = com.euthopiar.core.network.BandwidthEstimator.Default.decideAutoQuality(estimatedBps)
-            val maxH = when (autoTier) {
-                "480p" -> 480
-                "720p" -> 720
-                "1080p" -> 1080
-                else -> Int.MAX_VALUE
-            }
+        if (option.isAuto || (option.groupIndex < 0 && option.trackIndex < 0 && option.height == null)) {
             player.trackSelectionParameters = player.trackSelectionParameters
                 .buildUpon()
                 .clearVideoSizeConstraints()
-                .setMaxVideoSize(Int.MAX_VALUE, maxH)
-                .setMinVideoSize(0, 0)
+                .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
                 .build()
-            player.seekTo(player.currentPosition)
             updateMediaFormatInfo()
-            showToast("Quality: Auto ($autoTier)")
+            showToast("Quality: Auto (Adaptive)")
+        } else if (option.groupIndex >= 0 && option.trackIndex >= 0) {
+            val group = player.currentTracks.groups.getOrNull(option.groupIndex)
+            if (group != null && option.trackIndex in 0 until group.length) {
+                player.trackSelectionParameters = player.trackSelectionParameters
+                    .buildUpon()
+                    .clearVideoSizeConstraints()
+                    .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+                    .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, listOf(option.trackIndex)))
+                    .build()
+            } else {
+                player.trackSelectionParameters = player.trackSelectionParameters
+                    .buildUpon()
+                    .clearVideoSizeConstraints()
+                    .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+                    .build()
+            }
+            updateMediaFormatInfo()
+            showToast("Quality: ${option.label}")
+        } else if (option.height != null) {
+            val targetHeight = option.height
+            player.trackSelectionParameters = player.trackSelectionParameters
+                .buildUpon()
+                .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+                .setMaxVideoSize(Int.MAX_VALUE, targetHeight)
+                .setMinVideoSize(0, (targetHeight - 100).coerceAtLeast(0))
+                .build()
+            updateMediaFormatInfo()
+            showToast("Quality: ${option.label}")
         }
     }
 
@@ -2750,11 +3973,19 @@ class PlayerViewModel(
             )
         }
         updateMediaFormatInfo()
+        if (isoCode.isNotBlank() && isoCode != "und" && isoCode != "auto") {
+            userPreferredAudioLanguage = isoCode
+        }
         val display = _uiState.value.availableAudioTracks.firstOrNull { it.isoCode.equals(isoCode, ignoreCase = true) }?.displayName ?: isoCode
         showToast("Audio: $display")
     }
 
     fun selectAudioTrack(option: AudioTrackOption) {
+        val prefLang = option.language?.takeIf { it.isNotBlank() && it != "und" }
+            ?: option.isoCode.takeIf { it.isNotBlank() && it != "und" && it != "auto" }
+        if (prefLang != null) {
+            userPreferredAudioLanguage = prefLang
+        }
         _uiState.update { state ->
             state.copy(
                 selectedAudioTrack = option,
@@ -2869,7 +4100,7 @@ class PlayerViewModel(
                 showToast("Subtitles: ${option.label}")
             } else {
                 // External sidecar track (.srt, .vtt, .ass)
-                loadSubtitleCues(option.url)
+                loadSubtitleCues(option.url, option.headers)
                 try {
                     // Disable ExoPlayer's internal text tracks so ExoPlayer does not crash on ASS/unsupported formats
                     player.trackSelectionParameters = player.trackSelectionParameters
@@ -2886,18 +4117,18 @@ class PlayerViewModel(
         }
     }
 
-    private fun loadSubtitleCues(url: String) {
+    private fun loadSubtitleCues(url: String, headers: Map<String, String> = emptyMap()) {
         subtitleJob?.cancel()
         subtitleJob = viewModelScope.launch(Dispatchers.IO) {
             try {
+                val (cleanSubUrl, inlineHeaders) = com.euthopiar.core.network.PlayerPlaybackNetworking.extractUrlAndInlineHeaders(url, headers)
                 val reqBuilder = Request.Builder()
-                    .url(url)
+                    .url(cleanSubUrl)
                     .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-                if (url.contains("vidzee", ignoreCase = true)) {
-                    reqBuilder.header("Referer", "https://player.vidzee.wtf/")
-                    reqBuilder.header("Origin", "https://player.vidzee.wtf")
+                inlineHeaders.forEach { (k, v) ->
+                    reqBuilder.header(k, v)
                 }
-                val resp = httpClient.newCall(reqBuilder.build()).execute()
+                val resp = com.euthopiar.core.network.PlayerPlaybackNetworking.playbackHttpClient.newCall(reqBuilder.build()).execute()
                 if (resp.isSuccessful) {
                     val rawBytes = resp.body?.bytes() ?: ByteArray(0)
                     val bytes = if (rawBytes.size >= 2 && rawBytes[0] == 0x1f.toByte() && rawBytes[1] == 0x8b.toByte()) {
@@ -3005,6 +4236,8 @@ class PlayerViewModel(
 
     fun seekTo(positionMs: Long) {
         val player = exoPlayer ?: return
+        seekDebounceJob?.cancel()
+        pendingSeekTargetMs = null
         val effectiveDuration = player.duration.takeIf { it > 0 } ?: _uiState.value.durationMs
         val clamped = if (effectiveDuration > 0) positionMs.coerceIn(0L, effectiveDuration) else positionMs.coerceAtLeast(0L)
         android.util.Log.d("PlayerViewModel", "seekTo: target=$positionMs, clamped=$clamped, duration=$effectiveDuration, isSeekable=${player.isCurrentMediaItemSeekable}")
@@ -3018,16 +4251,26 @@ class PlayerViewModel(
     fun seekRelative(deltaMs: Long) {
         val player = exoPlayer ?: return
         val playerPos = player.currentPosition.coerceAtLeast(0L)
-        val uiPos = _uiState.value.currentPositionMs
-        val current = if (Math.abs(uiPos - playerPos) > 1500L && uiPos > 0L) uiPos else playerPos
+        val current = pendingSeekTargetMs ?: playerPos
         val effectiveDuration = player.duration.takeIf { it > 0 } ?: _uiState.value.durationMs
         val target = current + deltaMs
         val newPos = if (effectiveDuration > 0) target.coerceIn(0L, effectiveDuration) else target.coerceAtLeast(0L)
         android.util.Log.d("PlayerViewModel", "seekRelative: delta=$deltaMs, current=$current, target=$newPos, duration=$effectiveDuration, isSeekable=${player.isCurrentMediaItemSeekable}")
-        player.seekTo(newPos)
+        pendingSeekTargetMs = newPos
         _uiState.update { it.copy(currentPositionMs = newPos) }
         updateSubtitleForPosition(newPos)
         resetAutoHideTimer()
+
+        seekDebounceJob?.cancel()
+        seekDebounceJob = viewModelScope.launch {
+            delay(300L)
+            val seekTarget = pendingSeekTargetMs ?: newPos
+            player.seekTo(seekTarget)
+            delay(200L)
+            if (pendingSeekTargetMs == seekTarget) {
+                pendingSeekTargetMs = null
+            }
+        }
     }
 
     fun onScrubStart(positionMs: Long) {
@@ -3201,6 +4444,9 @@ class PlayerViewModel(
     }
 
     fun openSidePanel(panel: PlayerSidePanelType) {
+        if (panel == PlayerSidePanelType.SOURCES) {
+            probeAllPendingServers()
+        }
         _uiState.update {
             it.copy(
                 activeSidePanel = panel,
@@ -3314,7 +4560,7 @@ class PlayerViewModel(
             mediaId = mediaId,
             episodeData = episode.data,
             provider = currentProvider,
-            type = MediaType.TV_SERIES,
+            type = if (currentType == MediaType.ANIME) MediaType.ANIME else MediaType.TV_SERIES,
             title = _uiState.value.mediaTitle,
             epTitle = episode.title,
             season = episode.seasonNumber,
@@ -3500,7 +4746,7 @@ class PlayerViewModel(
                         }
                     }
 
-                    if (!_uiState.value.isScrubbing && (player.playbackState == Player.STATE_READY || player.isPlaying)) {
+                    if (!_uiState.value.isScrubbing && pendingSeekTargetMs == null && (player.playbackState == Player.STATE_READY || player.isPlaying)) {
                         _uiState.update {
                             it.copy(
                                 currentPositionMs = pos,
@@ -3545,8 +4791,16 @@ class PlayerViewModel(
             showToast("$reason. Switching to ${fallback.serverName}…")
             selectServer(fallback, isUserExplicit = false)
         } else {
-            if (userExplicitServerSelection) {
-                showToast("${currentServer?.serverName ?: "Server"} is taking longer to buffer.")
+            if (streamJob?.isActive == true) {
+                android.util.Log.d("PlayerViewModel", "triggerFailover: No fallback available yet, but streamJob is active. Waiting for more sources...")
+                _uiState.update {
+                    it.copy(
+                        isLoading = true,
+                        isBuffering = true,
+                        userError = null,
+                        errorMessage = null
+                    )
+                }
             } else {
                 android.util.Log.w("PlayerViewModel", "Stream source unreachable for ${currentServer?.serverName} ($reason)")
                 _uiState.update {
@@ -3680,7 +4934,7 @@ class PlayerViewModel(
     }
 
     private fun checkAndTriggerUpNext(pos: Long, duration: Long) {
-        if (isUpNextDismissed || upNextJob != null || !_uiState.value.hasNextEpisode || duration <= 0L || _uiState.value.selectedSleepTimer == SleepTimerOption.END_OF_EPISODE) return
+        if (!isAutoPlayNextEnabled || isUpNextDismissed || upNextJob != null || !_uiState.value.hasNextEpisode || duration <= 0L || _uiState.value.selectedSleepTimer == SleepTimerOption.END_OF_EPISODE) return
         val remaining = duration - pos
         if (remaining in 1L..35_000L) {
             val nextEp = _uiState.value.upNextEpisode ?: getNextEpisode() ?: return
@@ -3735,8 +4989,12 @@ class PlayerViewModel(
             playNextEpisode()
         } else {
             val dur = _uiState.value.durationMs
+            val outroDurMs = _uiState.value.skipOutroSeconds.coerceIn(10, 180) * 1000L
             if (dur > 0L) {
-                exoPlayer?.seekTo((dur - 2000L).coerceAtLeast(0L))
+                val target = ((exoPlayer?.currentPosition ?: _uiState.value.currentPositionMs) + outroDurMs)
+                    .coerceAtMost((dur - 2000L).coerceAtLeast(0L))
+                exoPlayer?.seekTo(target)
+                showToast("Skipped outro (+${_uiState.value.skipOutroSeconds}s)")
             }
         }
         _uiState.update { it.copy(showSkipOutro = false) }
@@ -3757,11 +5015,12 @@ class PlayerViewModel(
             pos in 3_000L..120_000L
         }
 
+        val outroWindowMs = (_uiState.value.skipOutroSeconds.coerceIn(10, 180) * 1000L)
         val isOutroRange = if (outroStart != null) {
             val startMs = (outroStart * 1000).toLong()
             pos >= startMs
         } else {
-            (duration - pos) in 20_000L..150_000L
+            (duration - pos) in 5_000L..outroWindowMs
         }
 
         val dynamicIntroLabel = if (introStart != null && introStart > 20.0 && pos < (introStart * 1000).toLong()) {
@@ -3800,7 +5059,8 @@ class PlayerViewModel(
                 val token = preferencesRepository.traktAccessToken.first()
                 val enabled = preferencesRepository.traktScrobbleEnabled.first()
                 if (!enabled || token.isBlank()) return@launch
-                val isTv = currentType == MediaType.TV_SERIES
+                val isTv = currentType == MediaType.TV_SERIES ||
+                    (currentType == MediaType.ANIME && (_uiState.value.seasonNumber != null || _uiState.value.episodeNumber != null || _uiState.value.availableEpisodes.isNotEmpty()))
                 val body = if (isTv) {
                     com.euthopiar.core.sync.trakt.TraktScrobbleBody(
                         show = com.euthopiar.core.sync.trakt.TraktShow(
@@ -3823,8 +5083,52 @@ class PlayerViewModel(
                         progress = progressPercent.coerceIn(0f, 100f)
                     )
                 }
-                com.euthopiar.core.sync.trakt.TraktClient.getInstance().scrobble(action, token, body)
+                val result = com.euthopiar.core.sync.trakt.TraktClient.getInstance().scrobble(action, token, body)
+                if (result.isFailure && result.exceptionOrNull()?.message?.contains("401") == true) {
+                    val refreshToken = preferencesRepository.traktRefreshToken.first()
+                    if (refreshToken.isNotBlank()) {
+                        val refreshed = refreshTraktTokenIfNeeded(refreshToken)
+                        if (!refreshed.isNullOrBlank()) {
+                            com.euthopiar.core.sync.trakt.TraktClient.getInstance().scrobble(action, refreshed, body)
+                        }
+                    }
+                }
             } catch (_: Exception) {}
+        }
+    }
+
+    private suspend fun refreshTraktTokenIfNeeded(refreshToken: String): String? = withContext(Dispatchers.IO) {
+        try {
+            val payload = org.json.JSONObject().apply {
+                put("refresh_token", refreshToken)
+                put("client_id", com.euthopiar.core.sync.trakt.TraktClient.DEFAULT_CLIENT_ID)
+                put("client_secret", com.euthopiar.core.sync.trakt.TraktClient.DEFAULT_CLIENT_SECRET)
+                put("redirect_uri", "urn:ietf:wg:oauth:2.0:oob")
+                put("grant_type", "refresh_token")
+            }
+            val mediaType = with(okhttp3.MediaType.Companion) { "application/json; charset=utf-8".toMediaType() }
+            val body = with(okhttp3.RequestBody.Companion) { payload.toString().toRequestBody(mediaType) }
+            val req = okhttp3.Request.Builder()
+                .url("${com.euthopiar.core.sync.trakt.TraktClient.BASE_URL}/oauth/token")
+                .header("Content-Type", "application/json")
+                .post(body)
+                .build()
+            com.euthopiar.core.network.DohDns.sharedBaseClient.newCall(req).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val raw = resp.body?.string().orEmpty()
+                    val json = org.json.JSONObject(raw)
+                    val newAccess = json.optString("access_token")
+                    val newRefresh = json.optString("refresh_token").ifBlank { refreshToken }
+                    if (newAccess.isNotBlank()) {
+                        val currentUsername = preferencesRepository.traktUsername.first()
+                        preferencesRepository.setTraktAuth(newAccess, newRefresh, currentUsername)
+                        return@withContext newAccess
+                    }
+                }
+            }
+            null
+        } catch (_: Exception) {
+            null
         }
     }
 
@@ -3834,7 +5138,8 @@ class PlayerViewModel(
                 val token = preferencesRepository.simklAccessToken.first()
                 val enabled = preferencesRepository.simklScrobbleEnabled.first()
                 if (!enabled || token.isBlank()) return@launch
-                val isTv = currentType == MediaType.TV_SERIES
+                val isTv = currentType == MediaType.TV_SERIES ||
+                    (currentType == MediaType.ANIME && (_uiState.value.seasonNumber != null || _uiState.value.episodeNumber != null || _uiState.value.availableEpisodes.isNotEmpty()))
                 val payload = if (isTv) {
                     com.euthopiar.core.sync.simkl.SimklScrobblePayload(
                         show = com.euthopiar.core.sync.simkl.SimklScrobbleItem(
@@ -3922,6 +5227,7 @@ class PlayerViewModel(
     }
 
     private suspend fun autoFetchExternalSubtitlesIfNeeded(title: String, season: Int?, episode: Int?) {
+        if (!isExternalSubtitlesEnabled) return
         if (_uiState.value.availableSubtitles.size > 1) return
         try {
             val imdb = currentImdbId ?: Regex("""tt\d+""").find("${currentMediaId.orEmpty()} ${currentEpisodeData.orEmpty()}")?.value
@@ -3971,7 +5277,7 @@ class PlayerViewModel(
                             )
                         }
                         if (autoSub?.url != null) {
-                            loadSubtitleCues(autoSub.url)
+                            loadSubtitleCues(autoSub.url, autoSub.headers)
                         }
                     }
                 }
@@ -3985,7 +5291,8 @@ class PlayerViewModel(
         val duration = exoPlayer?.duration?.coerceAtLeast(0L) ?: _uiState.value.durationMs
         if (pos <= 0L) return
 
-        val isTv = currentType == MediaType.TV_SERIES
+        val isTv = currentType == MediaType.TV_SERIES ||
+            (currentType == MediaType.ANIME && (_uiState.value.seasonNumber != null || _uiState.value.episodeNumber != null || _uiState.value.availableEpisodes.isNotEmpty()))
         val s = if (isTv) _uiState.value.seasonNumber else null
         val e = if (isTv) _uiState.value.episodeNumber else null
         val epTitle = if (isTv) _uiState.value.episodeTitle else null
@@ -4025,10 +5332,47 @@ class PlayerViewModel(
 
     fun onExitPlayer() {
         savePlaybackProgress()
+        seekDebounceJob?.cancel()
+        pendingSeekTargetMs = null
+        unregisterNetworkCallback()
+        sourcePrepJob?.cancel()
+        fastStartJob?.cancel()
+        streamJob?.cancel()
+        try {
+            com.euthopiar.core.p2p.P2pStreamingEngine.stopStream()
+        } catch (_: Throwable) {}
+        p2pStateJob?.cancel()
+        tickerJob?.cancel()
+        autoHideJob?.cancel()
+        toastJob?.cancel()
+        subtitleJob?.cancel()
+        resumeDismissJob?.cancel()
+        upNextJob?.cancel()
+        sleepTimerJob?.cancel()
+        try {
+            audioDspManager.release()
+        } catch (_: Exception) {}
+        try {
+            dynamicsProcessing?.release()
+        } catch (_: Exception) {}
+        dynamicsProcessing = null
+        try {
+            loudnessEnhancer?.release()
+        } catch (_: Exception) {}
+        loudnessEnhancer = null
         exoPlayer?.pause()
+        exoPlayer?.release()
+        exoPlayer = null
+        try {
+            com.euthopiar.ui.player.sequential.SequentialStreamManager.releaseActiveSession()
+            com.euthopiar.ui.player.sequential.SequentialStreamManager.clearPinnedUrls()
+        } catch (_: Throwable) {}
     }
 
-    internal fun deduplicateAndSortServers(options: List<ServerSourceOption>): List<ServerSourceOption> {
+    internal fun deduplicateAndSortServers(
+        options: List<ServerSourceOption>,
+        hasDebrid: Boolean = isUserDebridActive()
+    ): List<ServerSourceOption> {
         if (options.isEmpty()) return emptyList()
 
         // Tier 1: Exact Transport Deduplication
@@ -4042,11 +5386,51 @@ class PlayerViewModel(
 
         val tier1Deduped = transportGroups.values.map { group ->
             if (group.size == 1) {
-                group.first()
+                val single = group.first()
+                if (!hasDebrid && (single.isCached || single.streamSource.isCached)) {
+                    val rawIsTorrent = single.isTorrent || single.streamSource.infoHash != null ||
+                            single.streamSource.url.startsWith("magnet:", ignoreCase = true) ||
+                            single.streamSource.url.startsWith("torrent:", ignoreCase = true) ||
+                            single.streamSource.url.startsWith("torrent://", ignoreCase = true) ||
+                            com.euthopiar.core.p2p.extractP2pStreamRequest(single.streamSource.url, single.streamSource.infoHash) != null
+                    single.copy(isCached = false, isTorrent = rawIsTorrent)
+                } else {
+                    single
+                }
             } else {
-                group.maxWith(
-                    compareBy<ServerSourceOption> { it.streamSource.seeders ?: 0 }
+                val best = group.maxWith(
+                    compareBy<ServerSourceOption> { if (hasDebrid && it.isCached) 1 else 0 }
+                        .thenBy { it.seeders ?: it.streamSource.seeders ?: 0 }
                         .thenBy { it.label.length }
+                )
+                val aggregatedAddons = group.flatMap { it.addonNames }.distinct().filter { it.isNotBlank() }
+                val mergedSize = group.firstNotNullOfOrNull { it.size?.takeIf { s -> s.isNotBlank() } }
+                    ?: best.size
+                val mergedSeeders = group.mapNotNull { it.seeders ?: it.streamSource.seeders }.maxOrNull()
+                    ?: best.seeders
+                val mergedCached = if (hasDebrid) group.any { it.isCached || it.streamSource.isCached } else false
+                val rawIsTorrent = group.any { it.isTorrent } || best.streamSource.infoHash != null ||
+                        best.streamSource.url.startsWith("magnet:", ignoreCase = true) ||
+                        best.streamSource.url.startsWith("torrent:", ignoreCase = true) ||
+                        best.streamSource.url.startsWith("torrent://", ignoreCase = true) ||
+                        com.euthopiar.core.p2p.extractP2pStreamRequest(best.streamSource.url, best.streamSource.infoHash) != null
+                val mergedTorrent = if (hasDebrid) (!mergedCached && rawIsTorrent) else rawIsTorrent
+                val mergedHdr = group.firstNotNullOfOrNull { it.hdrType?.takeIf { h -> h.isNotBlank() } }
+                    ?: best.hdrType
+                val mergedCodec = group.firstNotNullOfOrNull { it.codec?.takeIf { c -> c.isNotBlank() } }
+                    ?: best.codec
+                val mergedAudioBadge = group.firstNotNullOfOrNull { it.audioBadge?.takeIf { a -> a.isNotBlank() } }
+                    ?: best.audioBadge
+
+                best.copy(
+                    size = mergedSize,
+                    seeders = mergedSeeders,
+                    isCached = mergedCached,
+                    isTorrent = mergedTorrent,
+                    hdrType = mergedHdr,
+                    codec = mergedCodec,
+                    audioBadge = mergedAudioBadge,
+                    addonNames = if (aggregatedAddons.isNotEmpty()) aggregatedAddons else best.addonNames
                 )
             }
         }
@@ -4054,7 +5438,7 @@ class PlayerViewModel(
         // Tier 2: Preserve Distinct Release Variants
         // Distinct release variants (4K vs 1080p, REMUX vs WEB-DL, HDR/DV vs SDR, TrueHD vs AAC)
         // have different torrent hashes or direct stream URLs, and are therefore preserved.
-        // Sort for optimal hierarchy: Resolution -> Release Type (REMUX/DV/HDR) -> Seeders -> Name
+        // Sort for optimal hierarchy: Resolution Tier -> Verified Stream (matchScore >= 0.80) -> matchScore -> Release Type (REMUX/DV/HDR) -> Seeders -> Name
         return tier1Deduped.sortedWith(
             compareBy<ServerSourceOption> { opt ->
                 val res = opt.resolutionLabel.lowercase()
@@ -4067,6 +5451,12 @@ class PlayerViewModel(
                     res.contains("480") || res.contains("sd") -> 5
                     else -> 6
                 }
+            }.thenByDescending { opt ->
+                if (hasDebrid && (opt.isCached || opt.streamSource.isCached)) 1 else 0
+            }.thenByDescending { opt ->
+                opt.streamSource.matchScore >= 0.80
+            }.thenByDescending { opt ->
+                opt.streamSource.matchScore
             }.thenBy { opt ->
                 val combined = "${opt.serverName} ${opt.label}".lowercase()
                 when {
@@ -4078,7 +5468,7 @@ class PlayerViewModel(
                     else -> 5
                 }
             }.thenByDescending { opt ->
-                opt.streamSource.seeders ?: 0
+                opt.seeders ?: opt.streamSource.seeders ?: 0
             }.thenBy { opt ->
                 opt.serverName.lowercase()
             }
@@ -4093,6 +5483,11 @@ class PlayerViewModel(
         }
 
         val url = source.url.trim()
+        val p2pReq = com.euthopiar.core.p2p.extractP2pStreamRequest(url, source.infoHash, trackers = source.trackers)
+        if (p2pReq != null) {
+            return "torrent:${p2pReq.infoHash.lowercase()}:${p2pReq.fileIdx ?: 0}"
+        }
+
         if (url.startsWith("magnet:", ignoreCase = true)) {
             val btih = Regex("""xt=urn:btih:([a-zA-Z0-9]+)""", RegexOption.IGNORE_CASE)
                 .find(url)?.groupValues?.get(1)?.lowercase()
@@ -4108,8 +5503,10 @@ class PlayerViewModel(
             return "torrent:$raw:$idx"
         }
 
-        if ((url.length == 40 || url.length == 64) && url.all { it in '0'..'9' || it.lowercaseChar() in 'a'..'f' }) {
-            return "torrent:${url.lowercase()}:0"
+        val clean = url.substringBefore('?')
+        if (((clean.length == 40 || clean.length == 64) && clean.all { it in '0'..'9' || it.lowercaseChar() in 'a'..'f' }) ||
+            (clean.length == 32 && clean.all { it.uppercaseChar() in 'A'..'Z' || it in '2'..'7' })) {
+            return "torrent:${clean.lowercase()}:0"
         }
 
         return "url:${normalizePlaybackUrl(url)}"
@@ -4137,32 +5534,154 @@ class PlayerViewModel(
         return if (filteredQuery.isEmpty()) base else "$base?$filteredQuery"
     }
 
+    private fun createServerSourceOption(
+        s: StreamSource,
+        sIndex: Int,
+        originalLanguage: String?,
+        mediaType: MediaType,
+        hasDebrid: Boolean = isUserDebridActive()
+    ): ServerSourceOption {
+        val rLabel = if (s.resolutionLabel.isNotBlank()) s.resolutionLabel else "Auto"
+        val cleanServerName = when {
+            s.serverName.isNotBlank() && !s.serverName.equals("default", ignoreCase = true) && !s.serverName.startsWith("http") -> s.serverName
+            s.quality.isNotBlank() && !s.quality.startsWith("http") -> s.quality
+            else -> "Source $sIndex"
+        }
+        val parsedLangs = if (s.audioTracks.isNotEmpty()) {
+            s.audioTracks.map { it.isoCode.ifBlank { it.languageName } }
+        } else {
+            com.euthopiar.core.streams.AudioLanguageDiscovery.parseAudioLanguagesFromMetadata(
+                cleanServerName + " " + s.url,
+                originalLanguage ?: if (mediaType == MediaType.ANIME) "ja" else null
+            )
+        }
+        val aBadge = com.euthopiar.core.streams.AudioLanguageDiscovery.formatLanguageBadges(parsedLangs)
+
+        val rawMeta = "$cleanServerName ${s.url} ${s.quality} ${s.resolutionLabel}"
+        val parsedHdr = s.hdrType ?: extractHdrType(rawMeta)
+        val parsedCodec = s.codec ?: extractCodec(rawMeta)
+        val parsedSize = s.size ?: extractSizeFromText(rawMeta)
+        val rawIsTorrent = s.infoHash != null ||
+                s.url.startsWith("magnet:", ignoreCase = true) ||
+                s.url.startsWith("torrent:", ignoreCase = true) ||
+                s.url.startsWith("torrent://", ignoreCase = true) ||
+                com.euthopiar.core.p2p.extractP2pStreamRequest(s.url, s.infoHash) != null
+        val isCached = if (hasDebrid) {
+            s.isCached || extractIsCached(rawMeta)
+        } else {
+            false
+        }
+        val isTorrent = if (hasDebrid) {
+            !isCached && rawIsTorrent
+        } else {
+            rawIsTorrent
+        }
+        val initialAddon = s.addonName?.takeIf { it.isNotBlank() } ?: s.addonId?.takeIf { it.isNotBlank() } ?: extractAddonName(cleanServerName)
+        val addonList = listOfNotNull(initialAddon)
+        val audioFormat = extractAudioFormat(rawMeta)
+        val finalAudioBadge = when {
+            audioFormat != null && aBadge != null -> "$audioFormat • $aBadge"
+            audioFormat != null -> audioFormat
+            else -> aBadge
+        }
+
+        return ServerSourceOption(
+            id = "server_${sIndex}_${s.url.hashCode()}",
+            serverName = cleanServerName,
+            resolutionLabel = rLabel,
+            label = if (finalAudioBadge != null) "$cleanServerName · $rLabel • $finalAudioBadge" else if (cleanServerName.contains(rLabel, ignoreCase = true)) cleanServerName else "$cleanServerName · $rLabel",
+            streamSource = s,
+            latencyMs = null,
+            healthCategory = null,
+            audioBadge = finalAudioBadge,
+            size = parsedSize,
+            seeders = s.seeders,
+            isCached = isCached,
+            isTorrent = isTorrent,
+            hdrType = parsedHdr,
+            codec = parsedCodec,
+            addonNames = addonList
+        )
+    }
+
+    private fun extractHdrType(text: String): String? {
+        val upper = text.uppercase(java.util.Locale.US)
+        return when {
+            upper.contains("DOLBY VISION") || upper.contains("DOVI") || Regex("""\bDV\b""").containsMatchIn(upper) -> "DV"
+            upper.contains("HDR10+") || upper.contains("HDR10PLUS") -> "HDR10+"
+            upper.contains("HDR10") -> "HDR10"
+            Regex("""\bHDR\b""").containsMatchIn(upper) -> "HDR"
+            upper.contains("HLG") -> "HLG"
+            upper.contains("SDR") -> "SDR"
+            else -> null
+        }
+    }
+
+    private fun extractCodec(text: String): String? {
+        val upper = text.uppercase(java.util.Locale.US)
+        return when {
+            upper.contains("AV1") -> "AV1"
+            upper.contains("HEVC") || upper.contains("H.265") || upper.contains("H265") || upper.contains("X265") -> "HEVC"
+            upper.contains("AVC") || upper.contains("H.264") || upper.contains("H264") || upper.contains("X264") -> "AVC"
+            upper.contains("VP9") -> "VP9"
+            else -> null
+        }
+    }
+
+    private fun extractAudioFormat(text: String): String? {
+        val upper = text.uppercase(java.util.Locale.US)
+        val hasAtmos = upper.contains("ATMOS")
+        val has71 = upper.contains("7.1") || upper.contains("7_1") || upper.contains("8CH")
+        val has51 = upper.contains("5.1") || upper.contains("5_1") || upper.contains("6CH")
+        val hasTrueHd = upper.contains("TRUEHD")
+        val hasDdp = upper.contains("DDP") || upper.contains("DD+") || upper.contains("EAC3") || upper.contains("E-AC-3")
+        val hasDts = upper.contains("DTS-HD") || upper.contains("DTS")
+
+        return when {
+            hasAtmos && has71 -> "Atmos 7.1"
+            hasAtmos && has51 -> "Atmos 5.1"
+            hasAtmos -> "Atmos"
+            hasTrueHd && has71 -> "TrueHD 7.1"
+            hasTrueHd -> "TrueHD"
+            hasDdp && has51 -> "DDP 5.1"
+            hasDdp -> "DDP"
+            hasDts -> if (has71) "DTS-HD 7.1" else if (has51) "DTS 5.1" else "DTS"
+            has71 -> "7.1"
+            has51 -> "5.1"
+            upper.contains("AAC") -> "AAC"
+            else -> null
+        }
+    }
+
+    private fun extractIsCached(text: String): Boolean {
+        val upper = text.uppercase(java.util.Locale.US)
+        return upper.contains("[RD+]") || upper.contains("RD+") ||
+                upper.contains("[TB+]") || upper.contains("TB+") ||
+                upper.contains("[AD+]") || upper.contains("AD+") ||
+                upper.contains("[PM+]") || upper.contains("PM+") ||
+                upper.contains("REAL-DEBRID") || upper.contains("REALDEBRID") ||
+                upper.contains("TORBOX") || upper.contains("ALLDEBRID") ||
+                upper.contains("PREMIUMIZE") ||
+                upper.contains("⚡")
+    }
+
+    private fun extractSizeFromText(text: String): String? {
+        val match = Regex("""([0-9]+(?:\.[0-9]+)?)\s*(GB|MB|GiB|MiB)""", RegexOption.IGNORE_CASE).find(text)
+        return match?.let {
+            val num = it.groupValues[1]
+            val unit = it.groupValues[2].uppercase(java.util.Locale.US).replace("GIB", "GB").replace("MIB", "MB")
+            "$num $unit"
+        }
+    }
+
+    private fun extractAddonName(text: String): String? {
+        val firstPart = text.substringBefore("•").substringBefore("·").substringBefore("|").trim()
+        val knownAddons = listOf("Torrentio", "Comet", "MediaFusion", "KnightCrawler", "Annatar", "Jackett", "Torbox", "StremThru")
+        return knownAddons.firstOrNull { firstPart.contains(it, ignoreCase = true) }
+    }
+
     override fun onCleared() {
-        savePlaybackProgress()
+        onExitPlayer()
         super.onCleared()
-        try {
-            com.euthopiar.core.p2p.P2pStreamingEngine.stopStream()
-        } catch (_: Throwable) {}
-        p2pStateJob?.cancel()
-        tickerJob?.cancel()
-        autoHideJob?.cancel()
-        toastJob?.cancel()
-        subtitleJob?.cancel()
-        resumeDismissJob?.cancel()
-        upNextJob?.cancel()
-        sleepTimerJob?.cancel()
-        try {
-            audioDspManager.release()
-        } catch (_: Exception) {}
-        try {
-            dynamicsProcessing?.release()
-        } catch (_: Exception) {}
-        dynamicsProcessing = null
-        try {
-            loudnessEnhancer?.release()
-        } catch (_: Exception) {}
-        loudnessEnhancer = null
-        exoPlayer?.release()
-        exoPlayer = null
     }
 }

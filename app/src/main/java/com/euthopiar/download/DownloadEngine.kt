@@ -48,7 +48,8 @@ class DownloadEngine(private val context: Context) {
             } catch (_: Exception) { null }
         }
         if (!customPath.isNullOrBlank()) {
-            val customDir = File(customPath)
+            val resolvedPath = resolveCustomDownloadPath(customPath)
+            val customDir = File(resolvedPath)
             if (customDir.exists() || customDir.mkdirs()) {
                 return customDir
             }
@@ -59,6 +60,37 @@ class DownloadEngine(private val context: Context) {
             baseDir.mkdirs()
         }
         return baseDir
+    }
+
+    private fun resolveCustomDownloadPath(rawPath: String): String {
+        val trimmed = rawPath.trim()
+        if (trimmed.startsWith("content://")) {
+            return try {
+                val uri = android.net.Uri.parse(trimmed)
+                val docId = android.provider.DocumentsContract.getTreeDocumentId(uri)
+                resolveTreeDocId(docId) ?: trimmed
+            } catch (_: Exception) {
+                trimmed
+            }
+        }
+        if (trimmed.startsWith("/tree/")) {
+            val docId = trimmed.removePrefix("/tree/").substringBefore("/document/")
+            resolveTreeDocId(docId)?.let { return it }
+        }
+        return trimmed
+    }
+
+    private fun resolveTreeDocId(docId: String): String? {
+        if (!docId.contains(":")) return null
+        val split = docId.split(":", limit = 2)
+        val type = split.getOrNull(0).orEmpty()
+        val relativePath = split.getOrNull(1).orEmpty().trim('/')
+        return if (type.equals("primary", ignoreCase = true)) {
+            val base = Environment.getExternalStorageDirectory().absolutePath
+            if (relativePath.isNotEmpty()) "$base/$relativePath" else base
+        } else if (type.isNotBlank()) {
+            if (relativePath.isNotEmpty()) "/storage/$type/$relativePath" else "/storage/$type"
+        } else null
     }
 
     fun startOrResumeDownload(
@@ -75,16 +107,32 @@ class DownloadEngine(private val context: Context) {
 
         val job = scope.launch {
             try {
-                val cleanUrl = sanitizeUrl(item.streamUrl)
+                val (extractedUrl, extractedHeaders) = com.euthopiar.core.network.PlayerPlaybackNetworking.extractUrlAndInlineHeaders(
+                    item.streamUrl,
+                    item.headers
+                )
+                val cleanUrl = sanitizeUrl(extractedUrl)
+                val effectiveItem = if (cleanUrl != item.streamUrl || extractedHeaders != item.headers) {
+                    item.copy(streamUrl = cleanUrl, headers = extractedHeaders)
+                } else item
+
+                val urlWithoutQuery = cleanUrl.substringBefore('?').trim()
                 val isTorrent = cleanUrl.startsWith("magnet:", ignoreCase = true) ||
                         cleanUrl.startsWith("torrent://", ignoreCase = true) ||
-                        ((cleanUrl.length == 40 || cleanUrl.length == 64) && cleanUrl.all { it in '0'..'9' || it.lowercaseChar() in 'a'..'f' })
-                val isHls = !isTorrent && isHlsStream(cleanUrl, item.headers)
+                        cleanUrl.startsWith("torrent:", ignoreCase = true) ||
+                        ((urlWithoutQuery.length == 40 || urlWithoutQuery.length == 64) && urlWithoutQuery.all { it in '0'..'9' || it.lowercaseChar() in 'a'..'f' }) ||
+                        (urlWithoutQuery.length == 32 && urlWithoutQuery.all { it.uppercaseChar() in 'A'..'Z' || it in '2'..'7' }) ||
+                        com.euthopiar.core.p2p.extractP2pStreamRequest(cleanUrl) != null
+                val isHls = !isTorrent && (
+                    effectiveItem.container == com.euthopiar.core.model.StreamContainer.HLS ||
+                    effectiveItem.isM3u8 ||
+                    isHlsStream(cleanUrl, effectiveItem.headers)
+                )
 
                 when {
-                    isTorrent -> downloadTorrentViaP2p(item, cleanUrl, onProgress, onCompleted, onError)
-                    isHls -> downloadHlsStream(item, cleanUrl, onProgress, onCompleted, onError)
-                    else -> downloadDirectFile(item, cleanUrl, onProgress, onCompleted, onError)
+                    isTorrent -> downloadTorrentViaP2p(effectiveItem, cleanUrl, onProgress, onCompleted, onError)
+                    isHls -> downloadHlsStream(effectiveItem, cleanUrl, onProgress, onCompleted, onError)
+                    else -> downloadDirectFile(effectiveItem, cleanUrl, onProgress, onCompleted, onError)
                 }
             } catch (e: CancellationException) {
                 // User paused or canceled
@@ -284,10 +332,6 @@ class DownloadEngine(private val context: Context) {
     private suspend fun isHlsStream(cleanUrl: String, headers: Map<String, String>): Boolean = withContext(Dispatchers.IO) {
         val lower = cleanUrl.lowercase()
         if (lower.contains(".m3u8") ||
-            lower.contains("/content?v=") ||
-            lower.contains("totallyacdn.org") ||
-            lower.contains("hls.lol") ||
-            lower.contains("vdrk.site") ||
             (lower.contains("workers.dev") && lower.contains("payload=")) ||
             lower.contains("playlist")
         ) {
@@ -657,21 +701,6 @@ class DownloadEngine(private val context: Context) {
 
         // Apply all headers passed from the plugin/stream source
         itemHeaders.forEach { (k, v) -> builder.header(k, v) }
-
-        // Fallback: if Referer is not provided, derive default only for hosts that strictly require it
-        if (!itemHeaders.keys.any { it.equals("Referer", ignoreCase = true) } && url.startsWith("http")) {
-            val referer = when {
-                lower.contains("valentine.guru") || lower.contains("cocktail.beer") || lower.contains("pixel.hubcdn") || lower.contains("gamerxyt") -> "https://gamerxyt.com/"
-                lower.contains("zenoak") || lower.contains("movy") || lower.contains("cinejoy") || lower.contains("wing.st") || lower.contains("cheaptruckrepairs") || lower.contains("bright67") -> "https://cinejoy.pk/"
-                lower.contains("driveseed.org") -> "https://driveseed.org/"
-                lower.contains("pixeldrain.com") -> "https://pixeldrain.com/"
-                lower.contains("hls.lol") -> "https://stream.hls.lol/"
-                else -> null
-            }
-            if (referer != null) {
-                builder.header("Referer", referer)
-            }
-        }
     }
 
     private suspend fun tryRefreshToken(item: DownloadItem, staleUrl: String): String? {
@@ -707,162 +736,39 @@ class DownloadEngine(private val context: Context) {
         onCompleted: (finalFilePath: String, totalBytes: Long) -> Unit,
         onError: (errorMessage: String) -> Unit
     ) = withContext(Dispatchers.IO) {
-        val p2pRequest = com.euthopiar.core.p2p.extractP2pStreamRequest(cleanUrl)
-            ?: run {
-                onError("Invalid torrent magnet or info hash")
-                return@withContext
-            }
-
-        com.euthopiar.core.p2p.P2pStreamingEngine.initialize(context)
-
-        val loopbackUrl = try {
-            com.euthopiar.core.p2p.P2pStreamingEngine.startStream(p2pRequest)
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            onError("Failed to start P2P engine: ${e.message}")
+        val p2pRequest = com.euthopiar.core.p2p.extractP2pStreamRequest(
+            rawUrl = cleanUrl,
+            defaultFileIdx = null,
+            defaultSeason = item.seasonNumber,
+            defaultEpisode = item.episodeNumber,
+            trackers = item.trackers
+        ) ?: run {
+            onError("Invalid torrent magnet or info hash")
             return@withContext
         }
+
+        com.euthopiar.core.p2p.P2pStreamingEngine.initialize(context)
 
         val dir = getDownloadDirectory()
         val safeFilename = sanitizeFilename(item.title)
         val ext = inferExtension(p2pRequest.filename ?: item.title)
         val finalFile = File(dir, "$safeFilename-${item.id}.$ext")
-        val partFile = File(dir, "${item.id}.part")
 
         try {
-            val reqBuilder = Request.Builder()
-                .url(loopbackUrl)
-                .header("User-Agent", "Euthopiar/1.0")
-
-            var existingBytes = if (partFile.exists()) partFile.length() else 0L
-            if (existingBytes > 0L) {
-                reqBuilder.header("Range", "bytes=$existingBytes-")
-            }
-
-            var resp = client.newCall(reqBuilder.build()).execute()
-            if ((resp.code == 403 || resp.code == 416) && existingBytes > 0L) {
-                resp.close()
-                partFile.delete()
-                existingBytes = 0L
-                val retryReq = Request.Builder().url(loopbackUrl).header("User-Agent", "Euthopiar/1.0").build()
-                resp = client.newCall(retryReq).execute()
-            }
-
-            if (!resp.isSuccessful && resp.code != 206) {
-                val code = resp.code
-                resp.close()
-                com.euthopiar.core.p2p.P2pStreamingEngine.stopStream()
-                onError("P2P Engine error HTTP $code")
-                return@withContext
-            }
-
-            val body = resp.body ?: run {
-                resp.close()
-                com.euthopiar.core.p2p.P2pStreamingEngine.stopStream()
-                onError("Empty stream from P2P engine")
-                return@withContext
-            }
-
-            val isPartial = resp.code == 206
-            val contentLength = body.contentLength()
-            val totalBytes = if (isPartial && contentLength > 0) {
-                existingBytes + contentLength
-            } else if (contentLength > 0) {
-                contentLength
-            } else {
-                item.totalBytes.takeIf { it > 0 } ?: 0L
-            }
-
-            val appendMode = isPartial && existingBytes > 0L
-            val inputStream = body.byteStream()
-            val outputStream = FileOutputStream(partFile, appendMode)
-
-            val buffer = ByteArray(64 * 1024)
-            var bytesReadTotal = existingBytes
-            var lastUpdateMs = System.currentTimeMillis()
-            var bytesReadSinceUpdate = 0L
-
-            outputStream.use { out ->
-                inputStream.use { inp ->
-                    while (currentCoroutineContext().isActive) {
-                        val read = inp.read(buffer)
-                        if (read == -1) break
-                        out.write(buffer, 0, read)
-                        bytesReadTotal += read
-                        bytesReadSinceUpdate += read
-
-                        val now = System.currentTimeMillis()
-                        val elapsed = now - lastUpdateMs
-                        if (elapsed >= 500) {
-                            val speedBytesPerSec = if (elapsed > 0) (bytesReadSinceUpdate * 1000L) / elapsed else 0L
-                            val percent = if (totalBytes > 0) {
-                                ((bytesReadTotal.toDouble() / totalBytes) * 100.0).toFloat().coerceIn(0f, 99.9f)
-                            } else 0f
-
-                            val p2pState = com.euthopiar.core.p2p.P2pStreamingEngine.state.value
-                            val speedStr = if (p2pState is com.euthopiar.core.p2p.P2pStreamingState.Streaming && p2pState.downloadSpeed > 0L) {
-                                "${com.euthopiar.core.p2p.formatP2pSpeed(p2pState.downloadSpeed)} • ${p2pState.peers} peers"
-                            } else {
-                                formatSpeed(speedBytesPerSec)
-                            }
-
-                            onProgress(bytesReadTotal, totalBytes, percent, speedStr)
-                            lastUpdateMs = now
-                            bytesReadSinceUpdate = 0L
-                        }
-                    }
-                    out.flush()
-                }
-            }
-
-            // Deduplicate with engine payload directory to prevent double writes
-            val payloadDir = File(context.cacheDir, "nuvio-engine/payload")
-            val reqFilename = p2pRequest.filename
-            val matchingPayload = try {
-                payloadDir.listFiles()?.firstOrNull { file ->
-                    file.name.contains(p2pRequest.infoHash, ignoreCase = true) ||
-                    (!reqFilename.isNullOrBlank() && file.name.contains(reqFilename, ignoreCase = true)) ||
-                    (totalBytes > 0L && file.length() == totalBytes)
-                }
-            } catch (_: Exception) { null }
-
-            if (finalFile.exists()) finalFile.delete()
-
-            val resolvedFile = if (matchingPayload != null && matchingPayload.exists() && matchingPayload.length() >= totalBytes * 0.95) {
-                // Atomically move from payload directory to avoid double writes
-                try {
-                    java.nio.file.Files.move(
-                        matchingPayload.toPath(),
-                        finalFile.toPath(),
-                        java.nio.file.StandardCopyOption.REPLACE_EXISTING
-                    )
-                    if (partFile.exists()) partFile.delete()
-                    finalFile
-                } catch (_: Exception) {
-                    if (partFile.exists() && partFile.length() > 0L) {
-                        partFile.renameTo(finalFile)
-                        try { matchingPayload.delete() } catch (_: Exception) {}
-                        finalFile
-                    } else matchingPayload
-                }
-            } else if (partFile.exists() && partFile.length() > 0L) {
-                partFile.renameTo(finalFile)
-                try { matchingPayload?.delete() } catch (_: Exception) {}
-                finalFile
-            } else null
-
-            com.euthopiar.core.p2p.P2pStreamingEngine.stopStream()
-
-            if (resolvedFile != null && resolvedFile.exists() && resolvedFile.length() > 0L) {
-                onCompleted(resolvedFile.absolutePath, resolvedFile.length())
+            val downloadedFile = com.euthopiar.core.p2p.P2pStreamingEngine.downloadFileDirect(
+                request = p2pRequest,
+                destinationFile = finalFile,
+                onProgress = onProgress,
+                isCancelled = { !coroutineContext.isActive }
+            )
+            if (downloadedFile.exists() && downloadedFile.length() > 0L) {
+                onCompleted(downloadedFile.absolutePath, downloadedFile.length())
             } else {
                 onError("P2P download incomplete or empty")
             }
         } catch (e: CancellationException) {
-            com.euthopiar.core.p2p.P2pStreamingEngine.stopStream()
             throw e
         } catch (e: Exception) {
-            com.euthopiar.core.p2p.P2pStreamingEngine.stopStream()
             onError("P2P download interrupted: ${e.message}")
         }
     }
@@ -870,17 +776,11 @@ class DownloadEngine(private val context: Context) {
     fun pauseDownload(id: String) {
         activeJobs[id]?.cancel()
         activeJobs.remove(id)
-        try {
-            com.euthopiar.core.p2p.P2pStreamingEngine.stopStream()
-        } catch (_: Exception) {}
     }
 
     fun removeDownload(id: String) {
         activeJobs[id]?.cancel()
         activeJobs.remove(id)
-        try {
-            com.euthopiar.core.p2p.P2pStreamingEngine.stopStream()
-        } catch (_: Exception) {}
 
         try {
             val dir = getDownloadDirectory()

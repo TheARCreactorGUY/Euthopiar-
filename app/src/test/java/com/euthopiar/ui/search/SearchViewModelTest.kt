@@ -214,4 +214,46 @@ class SearchViewModelTest {
         assertTrue(filtered.any { it.id == "3" }) // matched via title
         assertFalse(filtered.any { it.id == "2" })
     }
+
+    @Test
+    fun testClearQueryMaintainsResultsActiveStateWhenInResultsMode() {
+        val vm = SearchViewModel(app)
+        vm.isResultsActive.value = true
+        vm.onQueryChange("Dune")
+        assertEquals("Dune", vm.currentQuery.value)
+
+        vm.clearQuery()
+        assertEquals("", vm.currentQuery.value)
+        assertTrue("Results mode must stay active when clearQuery() is called in results mode", vm.isResultsActive.value)
+        assertFalse(vm.isRefining.value)
+        val state = vm.uiState.value
+        assertTrue("uiState must be Results with empty list when query is cleared in results mode", state is SearchUiState.Results && state.items.isEmpty())
+    }
+
+    @Test
+    fun testOnQueryChangeBlankClearsResultsInResultsMode() {
+        val vm = SearchViewModel(app)
+        vm.isResultsActive.value = true
+        vm.onQueryChange("Batman")
+        assertEquals("Batman", vm.currentQuery.value)
+
+        // Backspacing to blank
+        vm.onQueryChange("")
+        assertEquals("", vm.currentQuery.value)
+        assertTrue(vm.isResultsActive.value)
+        assertFalse(vm.isRefining.value)
+        val state = vm.uiState.value
+        assertTrue("uiState must be Results with empty list when query is blank in results mode", state is SearchUiState.Results && state.items.isEmpty())
+    }
+
+    @Test
+    fun testBackToSearchResetsResultsActiveAndRefining() {
+        val vm = SearchViewModel(app)
+        vm.isResultsActive.value = true
+        vm.isRefining.value = true
+
+        vm.backToSearch()
+        assertFalse(vm.isResultsActive.value)
+        assertFalse(vm.isRefining.value)
+    }
 }

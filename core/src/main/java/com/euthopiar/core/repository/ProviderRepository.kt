@@ -10,6 +10,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.takeWhile
+import kotlinx.coroutines.flow.transformWhile
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 
@@ -471,12 +473,26 @@ open class ProviderRepository(
      * @param episodeData The episode identifier/payload string.
      * @param providerName Optional provider name override; falls back to active provider.
      */
-    suspend fun getStreamLinks(episodeData: String, providerName: String? = null): StreamResult = withContext(Dispatchers.IO) {
+    suspend fun getStreamLinks(
+        episodeData: String,
+        providerName: String? = null,
+        mediaType: String? = null,
+        imdbId: String? = null,
+        title: String? = null,
+        year: Int? = null
+    ): StreamResult = withContext(Dispatchers.IO) {
         val streams = mutableListOf<StreamSource>()
         val subtitles = mutableListOf<SubtitleTrack>()
         try {
             withTimeoutOrNull(20_000L) {
-                getStreamFlow(episodeData, providerName).collect { emission ->
+                getStreamFlow(
+                    episodeData = episodeData,
+                    providerName = providerName,
+                    mediaType = mediaType,
+                    imdbId = imdbId,
+                    title = title,
+                    year = year
+                ).collect { emission ->
                     when (emission) {
                         is StreamEmission.SourceFound -> streams.add(emission.source)
                         is StreamEmission.SubtitleFound -> subtitles.add(emission.track)
@@ -498,65 +514,135 @@ open class ProviderRepository(
      * Progressively streams resolved stream sources, subtitles, and server status events for an episode.
      * Concurrently queries all enabled JavaScript provider scrapers via unified StreamsRepository.
      */
-    fun getStreamFlow(episodeData: String, providerName: String? = null): Flow<StreamEmission> = channelFlow {
+    fun getStreamFlow(
+        episodeData: String,
+        providerName: String? = null,
+        mediaType: String? = null,
+        imdbId: String? = null,
+        title: String? = null,
+        year: Int? = null,
+        originalLanguage: String? = null
+    ): Flow<StreamEmission> = channelFlow {
         val cleanData = episodeData.removePrefix("tmdb:").removePrefix("tmdb/")
         val parts = cleanData.split(":")
-        val tmdbId = parts.getOrNull(0) ?: cleanData
-        val season = parts.getOrNull(1)?.toIntOrNull()
-        val episode = parts.getOrNull(2)?.toIntOrNull()
+        val lastSeason = parts.getOrNull(parts.size - 2)?.toIntOrNull()
+        val lastEpisode = parts.getOrNull(parts.size - 1)?.toIntOrNull()
+        val (mediaId, season, episode) = if (parts.size >= 3 && lastSeason != null && lastEpisode != null) {
+            val id = parts.dropLast(2).joinToString(":")
+            Triple(id, lastSeason, lastEpisode)
+        } else {
+            val knownPrefixes = setOf("mal", "jikan", "kitsu", "anilist", "tmdb", "imdb")
+            val hasPrefix = parts.size >= 2 && parts[0].lowercase() in knownPrefixes
+            val idPartCount = if (hasPrefix) 2 else 1
+            val id = parts.take(idPartCount).joinToString(":")
+            val s = parts.getOrNull(idPartCount)?.toIntOrNull()
+            val e = parts.getOrNull(idPartCount + 1)?.toIntOrNull()
+            Triple(id, s, e)
+        }
         val isTv = season != null && episode != null
-        val mediaType = if (isTv) "tv" else "movie"
+        val resolvedType = mediaType ?: if (isTv) "tv" else "movie"
 
         // Delegate to unified StreamsRepository for concurrency limiting, type filtering & caching
         com.euthopiar.core.streams.StreamsRepository.load(
-            type = mediaType,
-            videoId = tmdbId,
+            type = resolvedType,
+            videoId = mediaId,
             season = season,
             episode = episode,
-            forceRefresh = true
+            title = title,
+            year = year,
+            forceRefresh = true,
+            originalLanguage = originalLanguage,
+            imdbId = imdbId
         )
 
+        val hasActiveDebrid = com.euthopiar.core.debrid.DebridManager.hasActiveDebrid()
         val seenUrls = mutableSetOf<String>()
-        com.euthopiar.core.streams.StreamsRepository.uiState.collect { state ->
-            for (group in state.groups) {
-                for (stream in group.streams) {
-                    val rawUrl = stream.playableDirectUrl ?: if (stream.isTorrentStream) stream.effectiveMagnetOrHash else null
-                    val url = rawUrl ?: continue
-                    if (seenUrls.add(url)) {
-                        val rLabel = stream.quality ?: "Auto"
-                        val cleanServerName = if (stream.addonName.isNotBlank()) {
-                            "${stream.addonName} • ${stream.streamLabel}"
-                        } else {
-                            stream.streamLabel
-                        }
-                        val finalServerName = if (stream.isTorrentStream) "$cleanServerName (Debrid)" else cleanServerName
-                        val src = StreamSource(
-                            url = url,
-                            quality = stream.quality ?: "Auto",
-                            isM3u8 = url.contains(".m3u8") || url.contains("/content?v="),
-                            serverName = finalServerName,
-                            headers = stream.headers,
-                            responseHeaders = stream.responseHeaders,
-                            resolutionLabel = rLabel
-                        )
-                        send(StreamEmission.SourceFound(src))
-                        for (sub in stream.externalSubtitles) {
-                            send(
-                                StreamEmission.SubtitleFound(
+        var sawLoading = false
+        com.euthopiar.core.streams.StreamsRepository.uiState
+            .transformWhile { state ->
+                emit(state)
+                if (state.isAnyLoading || state.groups.any { it.isLoading }) {
+                    sawLoading = true
+                }
+                val isFinished = (sawLoading || state.allStreams.isNotEmpty() || state.emptyStateReason != null) &&
+                        !state.isAnyLoading && state.groups.none { it.isLoading }
+                !isFinished
+            }
+            .collect { state ->
+                for (group in state.groups) {
+                    for (stream in group.streams) {
+                        val rawUrl = stream.playableDirectUrl ?: if (stream.isTorrentStream) stream.effectiveMagnetOrHash else null
+                        val url = rawUrl ?: continue
+                        if (seenUrls.add(url)) {
+                            val rLabel = stream.quality ?: "Auto"
+                            val cleanServerName = if (stream.addonName.isNotBlank()) {
+                                "${stream.addonName} • ${stream.streamLabel}"
+                            } else {
+                                stream.streamLabel
+                            }
+                            val serverLabel = if (stream.isTorrentStream) "$cleanServerName (${if (hasActiveDebrid) "Debrid/P2P" else "P2P"})" else cleanServerName
+                            val rawText = "${stream.name.orEmpty()} ${stream.title.orEmpty()} ${stream.quality.orEmpty()} ${stream.description.orEmpty()}"
+                            val parsedHdr = when {
+                                rawText.contains("Dolby Vision", ignoreCase = true) || rawText.contains("DoVi", ignoreCase = true) || Regex("""\bDV\b""").containsMatchIn(rawText) -> "DV"
+                                rawText.contains("HDR10+", ignoreCase = true) || rawText.contains("HDR10Plus", ignoreCase = true) -> "HDR10+"
+                                rawText.contains("HDR10", ignoreCase = true) -> "HDR10"
+                                Regex("""\bHDR\b""", RegexOption.IGNORE_CASE).containsMatchIn(rawText) -> "HDR"
+                                rawText.contains("HLG", ignoreCase = true) -> "HLG"
+                                else -> null
+                            }
+                            val parsedCodec = when {
+                                rawText.contains("AV1", ignoreCase = true) -> "AV1"
+                                rawText.contains("HEVC", ignoreCase = true) || rawText.contains("H.265", ignoreCase = true) || rawText.contains("x265", ignoreCase = true) || rawText.contains("H265", ignoreCase = true) -> "HEVC"
+                                rawText.contains("AVC", ignoreCase = true) || rawText.contains("H.264", ignoreCase = true) || rawText.contains("x264", ignoreCase = true) || rawText.contains("H264", ignoreCase = true) -> "AVC"
+                                rawText.contains("VP9", ignoreCase = true) -> "VP9"
+                                else -> null
+                            }
+                            val effectiveAddon = stream.addonName.ifBlank { stream.sourceName.orEmpty() }
+
+                            val src = StreamSource(
+                                serverName = serverLabel,
+                                url = url,
+                                quality = stream.quality ?: "Auto",
+                                isM3u8 = url.contains(".m3u8", ignoreCase = true),
+                                headers = stream.headers,
+                                subtitles = stream.externalSubtitles.map { sub ->
                                     SubtitleTrack(
+                                        language = sub.name ?: sub.language,
                                         url = sub.url,
-                                        language = sub.name ?: sub.language
+                                        headers = sub.headers ?: emptyMap()
+                                    )
+                                },
+                                infoHash = stream.infoHash,
+                                seeders = stream.seeders,
+                                fileIdx = stream.fileIdx,
+                                addonId = stream.addonId,
+                                season = season,
+                                episode = episode,
+                                responseHeaders = stream.responseHeaders,
+                                resolutionLabel = rLabel,
+                                matchScore = stream.matchScore,
+                                size = stream.size,
+                                isCached = if (hasActiveDebrid) stream.isCached else false,
+                                hdrType = parsedHdr,
+                                codec = parsedCodec,
+                                addonName = effectiveAddon
+                            )
+                            send(StreamEmission.SourceFound(src))
+                            for (sub in stream.externalSubtitles) {
+                                send(
+                                    StreamEmission.SubtitleFound(
+                                        SubtitleTrack(
+                                            url = sub.url,
+                                            language = sub.name ?: sub.language,
+                                            headers = sub.headers ?: emptyMap()
+                                        )
                                     )
                                 )
-                            )
+                            }
                         }
                     }
                 }
             }
-            if (!state.isAnyLoading && (state.hasAnyStreams || state.emptyStateReason != null)) {
-                return@collect
-            }
-        }
     }
 
     /**

@@ -1,6 +1,8 @@
 package com.euthopiar.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -83,6 +85,7 @@ fun PosterCard(
                 .aspectRatio(Dimens.posterAspectRatio)
                 .clip(ShapeS)
                 .background(SurfaceLow)
+                .border(0.5.dp, Color.White.copy(alpha = 0.08f), ShapeS)
         ) {
             AppAsyncImage(
                 model = posterUrl,

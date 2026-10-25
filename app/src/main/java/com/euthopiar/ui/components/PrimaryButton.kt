@@ -57,11 +57,11 @@ fun PrimaryButton(
 
     Row(
         modifier = modifier
+            .then(interactionModifier)
             .height(Dimens.buttonHeight)
             .defaultMinSize(minWidth = 120.dp)
             .clip(ShapeFull)
             .background(backgroundColor)
-            .then(interactionModifier)
             .tvFocusable(shape = ShapeFull)
             .padding(horizontal = Dimens.spacing24),
         verticalAlignment = Alignment.CenterVertically,

@@ -64,6 +64,10 @@ import com.euthopiar.ui.components.ContinueWatchingRow
 import com.euthopiar.ui.components.ErrorState
 import com.euthopiar.ui.components.HeroCarousel
 import com.euthopiar.ui.components.HeroCarouselSkeleton
+import com.euthopiar.ui.components.HomeScreenSkeleton
+import com.euthopiar.ui.components.ProvideShimmerScope
+import com.euthopiar.ui.details.sheets.MediaDetailsActionSheet
+import com.euthopiar.ui.details.sheets.SheetScreen
 import com.euthopiar.ui.components.rememberHeroStretchState
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.zIndex
@@ -77,6 +81,11 @@ import com.euthopiar.ui.longpress.UserReaction
 import com.euthopiar.ui.longpress.toSheetItem
 import com.euthopiar.ui.components.TopHeaderBar
 import com.euthopiar.ui.components.TopTenRow
+import com.euthopiar.ui.components.HomeUpdateBanner
+import com.euthopiar.ui.components.UpdateInfoDialog
+import com.euthopiar.data.preferences.PreferencesRepository
+import com.euthopiar.data.update.AppUpdateManager
+import com.euthopiar.data.update.UpdateCheckState
 import com.euthopiar.ui.navigation.ObserveScrollForNavbar
 import com.euthopiar.ui.theme.Accent
 import com.euthopiar.ui.theme.LocalAmoledMode
@@ -103,6 +112,7 @@ fun HomeScreen(
     val playbackHistoryMap by viewModel.playbackHistoryMap.collectAsState()
     val bookmarkedIds by viewModel.bookmarkedIds.collectAsState()
     val watchlistItems by viewModel.watchlistItems.collectAsState()
+    val watchlistStatusMap by viewModel.watchlistStatusMap.collectAsState()
     val selectedTab by viewModel.selectedTab.collectAsState()
     val top10Style by viewModel.top10Style.collectAsState()
     val sectionLabelStyle by viewModel.sectionLabelStyle.collectAsState()
@@ -114,6 +124,33 @@ fun HomeScreen(
     val context = androidx.compose.ui.platform.LocalContext.current
     var quickActionItem by remember { mutableStateOf<MediaItem?>(null) }
     var addToPlaylistMedia by remember { mutableStateOf<MediaItem?>(null) }
+    var watchlistSheetMedia by remember { mutableStateOf<MediaItem?>(null) }
+
+    // GitHub Release Update Management
+    val updateManager = remember(context) { AppUpdateManager.getInstance(context) }
+    val updateState by updateManager.updateState.collectAsState()
+    val downloadState by updateManager.downloadState.collectAsState()
+    val autoPopupShown by updateManager.autoPopupShownForSession.collectAsState()
+    val preferencesRepository = remember(context) { PreferencesRepository.getInstance(context) }
+    val autoCheckUpdates by preferencesRepository.autoCheckUpdates.collectAsState(initial = true)
+    val skippedUpdateVersion by preferencesRepository.skippedUpdateVersion.collectAsState(initial = "")
+    var showUpdateDialog by remember { mutableStateOf(false) }
+
+    // Automatic update check on app launch
+    LaunchedEffect(autoCheckUpdates) {
+        if (autoCheckUpdates && updateState is UpdateCheckState.Idle) {
+            updateManager.checkForUpdates(forceManual = false)
+        }
+    }
+
+    // Auto-popup update dialog once per app session when update is available and not skipped
+    LaunchedEffect(updateState, skippedUpdateVersion, autoPopupShown) {
+        val available = updateState as? UpdateCheckState.UpdateAvailable
+        if (available != null && !autoPopupShown && available.release.versionName != skippedUpdateVersion) {
+            showUpdateDialog = true
+            updateManager.markAutoPopupShownForSession()
+        }
+    }
     val lazyListState = rememberLazyListState()
     ObserveScrollForNavbar(lazyListState)
     val windowDimensions = rememberWindowDimensions()
@@ -199,10 +236,8 @@ fun HomeScreen(
         ) { state ->
             when (state) {
                 is HomeUiState.Loading -> {
-                    Box(
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        HeroCarouselSkeleton()
+                    ProvideShimmerScope {
+                        HomeScreenSkeleton(modifier = Modifier.fillMaxSize())
                     }
                 }
 
@@ -352,7 +387,7 @@ fun HomeScreen(
                                         }
                                     },
                                     onDetailsClick = { onMediaClick(it) },
-                                    onBookmarkClick = { viewModel.toggleBookmark(it) },
+                                    onBookmarkClick = { watchlistSheetMedia = it },
                                     isOffScreen = isHeroOffScreen,
                                     isFeedScrolling = { isFeedScrolling },
                                     playFocusRequester = heroPlayFocusRequester,
@@ -572,7 +607,7 @@ fun HomeScreen(
 }
 } // Close Box(hazeSource)
 
-        // Pinned Top Header Bar & Offline Banner (outside hazeSource, samples homeHazeState)
+        // Pinned Top Header Bar, Offline Banner & Update Banner (outside hazeSource, samples homeHazeState)
         Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -581,9 +616,15 @@ fun HomeScreen(
             TopHeaderBar(
                 registry = registry,
                 scrollFraction = { headerScrollFraction },
-                hazeState = homeHazeState
+                hazeState = homeHazeState,
+                hasUpdateAvailable = updateState is UpdateCheckState.UpdateAvailable,
+                onUpdateBadgeClick = { showUpdateDialog = true }
             )
             OfflineBanner()
+            HomeUpdateBanner(
+                onOpenUpdatePopup = { _, _ -> showUpdateDialog = true },
+                onDismiss = { updateManager.dismissBannerForSession() }
+            )
         }
 
     // Long-Press Quick Actions Host (sits on top of blurred hazeSource content)
@@ -642,7 +683,8 @@ fun HomeScreen(
                 context.startActivity(android.content.Intent.createChooser(shareIntent, "Share ${item.title}"))
             },
             onDownload = {
-                snackbarController.show("Downloading ${item.title}...")
+                quickActionItem = null
+                onMediaClick(item)
             },
             onOpenDetails = {
                 quickActionItem = null
@@ -679,6 +721,60 @@ fun HomeScreen(
             onDismiss = { addToPlaylistMedia = null },
             onPlaylistAction = { msg -> snackbarController.show(msg) }
         )
+    }
+
+    watchlistSheetMedia?.let { media ->
+        val currentStatus = watchlistStatusMap[media.id]
+        MediaDetailsActionSheet(
+            mediaId = media.id,
+            title = media.title,
+            posterUrl = media.posterUrl ?: media.backdropUrl,
+            backdropUrl = media.backdropUrl ?: media.posterUrl,
+            isTvSeries = media.type == com.euthopiar.core.model.MediaType.TV_SERIES || media.type == com.euthopiar.core.model.MediaType.ANIME,
+            year = media.year,
+            provider = media.provider,
+            initialScreen = SheetScreen.WATCHLIST_CATEGORY,
+            watchlistStatus = currentStatus,
+            onSelectWatchlistCategory = { statusKey, label ->
+                val isMove = !currentStatus.isNullOrBlank() && currentStatus != statusKey
+                val toastMsg = if (isMove) "Moved to $label" else "Added to $label"
+                viewModel.setWatchlistStatus(media, statusKey)
+                snackbarController.show(toastMsg)
+            },
+            onRemoveFromWatchlist = {
+                val previousStatus = currentStatus ?: "TO_BE_WATCHED"
+                viewModel.removeFromWatchlist(media.id)
+                snackbarController.show(
+                    message = "Removed from watchlist",
+                    actionLabel = "Undo",
+                    durationMillis = 4000L
+                ) {
+                    viewModel.setWatchlistStatus(media, previousStatus)
+                }
+            },
+            onPlaylistAction = { msg -> snackbarController.show(msg) },
+            onDismiss = { watchlistSheetMedia = null }
+        )
+    }
+
+    // Application Update Information Popup
+    if (showUpdateDialog) {
+        val available = updateState as? UpdateCheckState.UpdateAvailable
+        if (available != null) {
+            UpdateInfoDialog(
+                release = available.release,
+                currentVersion = available.currentVersion,
+                downloadState = downloadState,
+                hazeState = homeHazeState,
+                onDismiss = { showUpdateDialog = false },
+                onDownloadAndInstall = { rel -> updateManager.downloadAndInstallUpdate(rel) },
+                onTriggerInstall = { file, fallbackUrl -> updateManager.triggerInstallApk(file, fallbackUrl) },
+                onSkipVersion = { version ->
+                    updateManager.skipVersion(version)
+                    showUpdateDialog = false
+                }
+            )
+        }
     }
 } // Close outer Box
 } // Close CompositionLocalProvider

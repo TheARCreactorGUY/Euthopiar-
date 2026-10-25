@@ -33,12 +33,14 @@ class EuthopiarApp : Application(), SingletonImageLoader.Factory {
 
         // Initialize 50MB HTTP disk cache and connection pool
         DohDns.initHttpCache(cacheDir)
+        com.euthopiar.ui.player.sequential.SequentialStreamManager.cleanOrphanedCache(this)
 
         // Synchronously initialize JsPluginStorage, AddonRepository, and P2P engine instances
         com.euthopiar.core.js.JsPluginStorage.getInstance(this)
         com.euthopiar.core.addons.AddonRepository.getInstance(this)
         com.euthopiar.core.p2p.P2pStreamingEngine.initialize(this)
         com.euthopiar.core.p2p.P2pSettingsRepository.initialize(this)
+        com.euthopiar.core.browser.HeadlessWebResolver.getInstance(this)
 
         // Initialize plugins, prefetch DNS, and restore default selected provider across restarts
         CoroutineScope(Dispatchers.IO).launch {
@@ -49,10 +51,43 @@ class EuthopiarApp : Application(), SingletonImageLoader.Factory {
 
             // DNS pre-fetch for critical media & metadata hosts
             DohDns.DEFAULT.prefetch(
+                "euthopiar-vault.sehgalvansh716.workers.dev",
                 "api.themoviedb.org",
                 "image.tmdb.org",
                 "graphql.anilist.co"
             )
+
+            try {
+                val prefsRepo = PreferencesRepository.getInstance(this@EuthopiarApp)
+                launch {
+                    kotlinx.coroutines.flow.combine(
+                        prefsRepo.debridEnabled,
+                        prefsRepo.activeDebridProvider,
+                        prefsRepo.realDebridApiKey,
+                        prefsRepo.allDebridApiKey,
+                        prefsRepo.torBoxApiKey
+                    ) { enabled, provider, rdKey, adKey, tbKey ->
+                        if (!enabled) {
+                            com.euthopiar.core.debrid.DebridManager.getInstance().setActiveProviders(emptyList())
+                            return@combine
+                        }
+                        val pType = com.euthopiar.core.debrid.DebridProviderType.fromId(provider)
+                        val key = when (pType) {
+                            com.euthopiar.core.debrid.DebridProviderType.REAL_DEBRID -> rdKey
+                            com.euthopiar.core.debrid.DebridProviderType.ALL_DEBRID -> adKey
+                            com.euthopiar.core.debrid.DebridProviderType.TORBOX -> tbKey
+                            com.euthopiar.core.debrid.DebridProviderType.NONE -> ""
+                        }
+                        if (pType != com.euthopiar.core.debrid.DebridProviderType.NONE && key.isNotBlank()) {
+                            com.euthopiar.core.debrid.DebridManager.getInstance().setActiveProviders(
+                                listOf(com.euthopiar.core.debrid.DebridManager.ActiveDebridProvider(pType, true))
+                            )
+                        } else {
+                            com.euthopiar.core.debrid.DebridManager.getInstance().setActiveProviders(emptyList())
+                        }
+                    }.collect { }
+                }
+            } catch (_: Exception) {}
 
             try {
                 val savedProvider = PreferencesRepository.getInstance(this@EuthopiarApp).activeProvider.first()

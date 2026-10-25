@@ -197,6 +197,15 @@ fun getAllSettingsSearchEntries(): List<SettingsSearchEntry> = listOf(
 
     // About
     SettingsSearchEntry(
+        id = "app_updates",
+        title = "Application Updates",
+        description = "Check for new GitHub releases, view changelog and install APK updates",
+        category = SettingsCategory.About,
+        page = SettingsPage.Updates,
+        keywords = listOf("update", "upgrade", "version", "github", "release", "apk", "changelog"),
+        icon = Icons.Outlined.SystemUpdateAlt
+    ),
+    SettingsSearchEntry(
         id = "about_euthopiar",
         title = "About Euthopiar",
         description = "App version, open-source licenses, GitHub repository and acknowledgments",

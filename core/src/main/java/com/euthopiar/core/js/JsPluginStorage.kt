@@ -37,7 +37,18 @@ class JsPluginStorage(private val context: Context) {
     }
 
     fun getPluginScriptFile(repoId: String, pluginId: String): File {
-        return File(getRepoDir(repoId), "$pluginId.js")
+        val cleanPluginId = pluginId.substringAfter(":")
+        val namespacedFile = File(getRepoDir(repoId), "$cleanPluginId.js")
+        if (namespacedFile.exists()) return namespacedFile
+        val legacyFile = File(legacyPluginsDir, "$cleanPluginId.js")
+        if (legacyFile.exists()) return legacyFile
+        return namespacedFile
+    }
+
+    fun getStorageKey(repoId: String, scraperId: String): String {
+        val cleanRepo = repoId.ifBlank { "local" }
+        val cleanId = scraperId.substringAfter(":")
+        return "$cleanRepo:$cleanId"
     }
 
     private val _scrapersFlow = MutableStateFlow<List<PluginScraper>>(emptyList())
@@ -75,8 +86,10 @@ class JsPluginStorage(private val context: Context) {
 
         val populated = scrapers.map { scraper ->
             val rId = scraper.canonicalRepoId
-            val namespacedFile = getPluginScriptFile(rId, scraper.id)
-            val legacyFile = File(legacyPluginsDir, "${scraper.id}.js")
+            val cleanId = scraper.id.substringAfter(":")
+            val namespacedId = if (scraper.id.contains(":")) scraper.id else getStorageKey(rId, cleanId)
+            val namespacedFile = getPluginScriptFile(rId, cleanId)
+            val legacyFile = File(legacyPluginsDir, "$cleanId.js")
             val code = when {
                 namespacedFile.exists() -> namespacedFile.readText()
                 legacyFile.exists() -> {
@@ -87,7 +100,11 @@ class JsPluginStorage(private val context: Context) {
                 else -> scraper.code
             }
             val supported = if (scraper.supportedTypes.isEmpty()) listOf("movie", "tv") else scraper.supportedTypes
-            scraper.copy(code = code, supportedTypes = supported, repoId = rId)
+            scraper.copy(id = namespacedId, code = code, supportedTypes = supported, repoId = rId)
+        }.distinctBy { it.id }
+
+        if (populated.size != scrapers.size) {
+            try { scrapersMetadataFile.writeText(json.encodeToString(populated)) } catch (_: Exception) {}
         }
         _scrapersFlow.value = populated
 
@@ -122,8 +139,9 @@ class JsPluginStorage(private val context: Context) {
         val baseUrl = manifestUrl.substringBeforeLast("/") + "/"
         val repoId = computeCanonicalRepoId(manifestUrl)
 
+        val distinctScrapers = manifest.scrapers.distinctBy { it.id.lowercase().trim() }
         val downloadedScrapers = coroutineScope {
-            manifest.scrapers.map { scraperMeta ->
+            distinctScrapers.map { scraperMeta ->
                 async(Dispatchers.IO) {
                     val scriptUrl = if (scraperMeta.filename.startsWith("http")) {
                         scraperMeta.filename
@@ -155,12 +173,16 @@ class JsPluginStorage(private val context: Context) {
             val updatedScrapers = _scrapersFlow.value.toMutableList()
 
             for ((scraperMeta, code) in downloadedScrapers) {
-                val codeFile = getPluginScriptFile(repoId, scraperMeta.id)
+                val cleanScraperId = scraperMeta.id.substringAfter(":")
+                val namespacedId = getStorageKey(repoId, cleanScraperId)
+                val codeFile = getPluginScriptFile(repoId, cleanScraperId)
                 codeFile.writeText(code)
 
-                val existingIndex = updatedScrapers.indexOfFirst { it.id == scraperMeta.id }
+                val existingIndex = updatedScrapers.indexOfFirst {
+                    it.id == namespacedId || (it.canonicalRepoId == repoId && (it.id == cleanScraperId || it.id.substringAfter(":") == cleanScraperId))
+                }
                 val item = PluginScraper(
-                    id = scraperMeta.id,
+                    id = namespacedId,
                     repositoryUrl = manifestUrl,
                     repoId = repoId,
                     name = scraperMeta.name,
@@ -182,8 +204,9 @@ class JsPluginStorage(private val context: Context) {
                 }
             }
 
-            scrapersMetadataFile.writeText(json.encodeToString(updatedScrapers))
-            _scrapersFlow.value = updatedScrapers
+            val distinctUpdated = updatedScrapers.distinctBy { it.id }
+            scrapersMetadataFile.writeText(json.encodeToString(distinctUpdated))
+            _scrapersFlow.value = distinctUpdated
 
             for (scraper in updatedScrapers) {
                 com.euthopiar.core.registry.PluginRegistry.Default.registerPlugin(JsUniversalPlugin(scraper))
@@ -240,11 +263,13 @@ class JsPluginStorage(private val context: Context) {
     ): PluginScraper = withContext(Dispatchers.IO) {
         val repoId = if (repositoryUrl.isNotBlank()) computeCanonicalRepoId(repositoryUrl) else "local"
         mutex.withLock {
-            val codeFile = getPluginScriptFile(repoId, id)
+            val cleanId = id.substringAfter(":")
+            val namespacedId = getStorageKey(repoId, cleanId)
+            val codeFile = getPluginScriptFile(repoId, cleanId)
             codeFile.writeText(code)
 
             val item = PluginScraper(
-                id = id,
+                id = namespacedId,
                 repositoryUrl = repositoryUrl,
                 repoId = repoId,
                 name = name,
@@ -258,7 +283,9 @@ class JsPluginStorage(private val context: Context) {
                 code = code
             )
 
-            val updated = _scrapersFlow.value.filter { it.id != id } + item
+            val updated = (_scrapersFlow.value.filterNot {
+                it.id == namespacedId || (it.canonicalRepoId == repoId && (it.id == id || it.id.substringAfter(":") == cleanId))
+            } + item).distinctBy { it.id }
             scrapersMetadataFile.writeText(json.encodeToString(updated))
             _scrapersFlow.value = updated
             com.euthopiar.core.registry.PluginRegistry.Default.registerPlugin(JsUniversalPlugin(item))
@@ -270,17 +297,19 @@ class JsPluginStorage(private val context: Context) {
     suspend fun installLocalScript(id: String, name: String, code: String): PluginScraper = withContext(Dispatchers.IO) {
         val repoId = "local"
         mutex.withLock {
-            val codeFile = getPluginScriptFile(repoId, id)
+            val cleanId = id.substringAfter(":")
+            val canonicalKey = getStorageKey(repoId, cleanId)
+            val codeFile = getPluginScriptFile(repoId, cleanId)
             codeFile.writeText(code)
 
             val item = PluginScraper(
-                id = id,
+                id = canonicalKey,
                 repositoryUrl = "local",
                 repoId = repoId,
                 name = name,
                 description = "Local provider script",
                 version = "1.0.0",
-                filename = "$id.js",
+                filename = "$cleanId.js",
                 supportedTypes = listOf("movie", "tv"),
                 enabled = true,
                 hasSettings = false,
@@ -288,7 +317,9 @@ class JsPluginStorage(private val context: Context) {
                 code = code
             )
 
-            val updated = _scrapersFlow.value.filter { it.id != id } + item
+            val updated = (_scrapersFlow.value.filterNot {
+                it.id == canonicalKey || (it.canonicalRepoId == repoId && (it.id == id || it.id.substringAfter(":") == cleanId))
+            } + item).distinctBy { it.id }
             scrapersMetadataFile.writeText(json.encodeToString(updated))
             _scrapersFlow.value = updated
             com.euthopiar.core.registry.PluginRegistry.Default.registerPlugin(JsUniversalPlugin(item))
@@ -299,8 +330,14 @@ class JsPluginStorage(private val context: Context) {
 
     suspend fun toggleScraper(id: String, enabled: Boolean) = withContext(Dispatchers.IO) {
         mutex.withLock {
+            val isNamespaced = id.contains(":")
             val updated = _scrapersFlow.value.map {
-                if (it.id == id) {
+                val matches = if (isNamespaced) {
+                    it.id == id
+                } else {
+                    it.id == id || it.id.substringAfter(":") == id
+                }
+                if (matches) {
                     com.euthopiar.core.registry.PluginRegistry.Default.setPluginEnabled(it.name, enabled)
                     it.copy(enabled = enabled)
                 } else it
@@ -312,14 +349,27 @@ class JsPluginStorage(private val context: Context) {
 
     suspend fun deleteScraper(id: String) = withContext(Dispatchers.IO) {
         mutex.withLock {
-            val target = _scrapersFlow.value.find { it.id == id }
+            val isNamespaced = id.contains(":")
+            val target = _scrapersFlow.value.find {
+                if (isNamespaced) {
+                    it.id == id
+                } else {
+                    it.id == id || it.id.substringAfter(":") == id
+                }
+            }
+            val targetId = target?.id ?: id
+            val cleanId = targetId.substringAfter(":")
             if (target != null) {
                 com.euthopiar.core.registry.PluginRegistry.Default.unregisterPlugin(target.name)
                 val rId = target.canonicalRepoId
-                getPluginScriptFile(rId, id).delete()
+                getPluginScriptFile(rId, target.id).delete()
+                getPluginScriptFile(rId, cleanId).delete()
             }
-            File(legacyPluginsDir, "$id.js").delete()
-            val updated = _scrapersFlow.value.filter { it.id != id }
+            File(legacyPluginsDir, "$targetId.js").delete()
+            File(legacyPluginsDir, "$cleanId.js").delete()
+            val updated = _scrapersFlow.value.filterNot {
+                it.id == targetId || it.id == id
+            }
             scrapersMetadataFile.writeText(json.encodeToString(updated))
             _scrapersFlow.value = updated
         }
@@ -347,5 +397,11 @@ class JsPluginStorage(private val context: Context) {
         }
 
         fun getInstanceOrNull(): JsPluginStorage? = instance
+
+        fun getStorageKey(repoId: String, scraperId: String): String {
+            val cleanRepo = repoId.ifBlank { "local" }
+            val cleanId = scraperId.substringAfter(":")
+            return "$cleanRepo:$cleanId"
+        }
     }
 }

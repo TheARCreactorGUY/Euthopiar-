@@ -1,13 +1,22 @@
 package com.euthopiar.ui.library
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -50,6 +59,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
@@ -232,54 +243,81 @@ fun LibraryScreen(
         hazeState = hazeState,
         modifier = modifier
     ) {
-        if (selectedPlaylistForDetail != null) {
-            // Full-screen Playlist Detail Screen
-            val currentPlaylist = selectedPlaylistForDetail!!
-            PlaylistDetailView(
-                playlist = currentPlaylist,
-                historyMap = historyMap,
-                onBack = { selectedPlaylistForDetail = null },
-                onResumeAll = {
-                    val firstUnfinished = currentPlaylist.items.firstOrNull { item ->
-                        val h = historyMap[item.mediaId]
-                        h == null || !h.isCompleted
-                    } ?: currentPlaylist.items.firstOrNull()
+        AnimatedContent(
+            targetState = selectedPlaylistForDetail,
+            transitionSpec = {
+                if (targetState != null) {
+                    (slideInHorizontally(
+                        animationSpec = tween(320, easing = CubicBezierEasing(0.23f, 1f, 0.32f, 1f)),
+                        initialOffsetX = { fullWidth -> fullWidth }
+                    ) + fadeIn(tween(260))).togetherWith(
+                        slideOutHorizontally(
+                            animationSpec = tween(320, easing = CubicBezierEasing(0.23f, 1f, 0.32f, 1f)),
+                            targetOffsetX = { fullWidth -> -fullWidth / 4 }
+                        ) + fadeOut(tween(200))
+                    )
+                } else {
+                    (slideInHorizontally(
+                        animationSpec = tween(300, easing = CubicBezierEasing(0.23f, 1f, 0.32f, 1f)),
+                        initialOffsetX = { fullWidth -> -fullWidth / 4 }
+                    ) + fadeIn(tween(240))).togetherWith(
+                        slideOutHorizontally(
+                            animationSpec = tween(300, easing = CubicBezierEasing(0.23f, 1f, 0.32f, 1f)),
+                            targetOffsetX = { fullWidth -> fullWidth }
+                        ) + fadeOut(tween(220))
+                    )
+                }
+            },
+            label = "playlistTransition",
+            modifier = Modifier.fillMaxSize()
+        ) { currentPlaylist ->
+            if (currentPlaylist != null) {
+                // Full-screen Playlist Detail Screen
+                PlaylistDetailView(
+                    playlist = currentPlaylist,
+                    historyMap = historyMap,
+                    onBack = { selectedPlaylistForDetail = null },
+                    onResumeAll = {
+                        val firstUnfinished = currentPlaylist.items.firstOrNull { item ->
+                            val h = historyMap[item.mediaId]
+                            h == null || !h.isCompleted
+                        } ?: currentPlaylist.items.firstOrNull()
 
-                    if (firstUnfinished != null) {
-                        val h = historyMap[firstUnfinished.mediaId]
-                        val s = h?.seasonNumber ?: (if (firstUnfinished.isTvSeries) 1 else null)
-                        val ep = h?.episodeNumber ?: (if (firstUnfinished.isTvSeries) 1 else null)
-                        val epTitle = h?.episodeTitle ?: firstUnfinished.episodeTitle
-                        val epData = h?.episodeData ?: firstUnfinished.episodeData ?: (if (firstUnfinished.isTvSeries) "${firstUnfinished.mediaId}:$s:$ep" else firstUnfinished.mediaId)
-                        val type = if (firstUnfinished.isTvSeries) MediaType.TV_SERIES else MediaType.MOVIE
+                        if (firstUnfinished != null) {
+                            val h = historyMap[firstUnfinished.mediaId]
+                            val s = h?.seasonNumber ?: (if (firstUnfinished.isTvSeries) 1 else null)
+                            val ep = h?.episodeNumber ?: (if (firstUnfinished.isTvSeries) 1 else null)
+                            val epTitle = h?.episodeTitle ?: firstUnfinished.episodeTitle
+                            val epData = h?.episodeData ?: firstUnfinished.episodeData ?: (if (firstUnfinished.isTvSeries) "${firstUnfinished.mediaId}:$s:$ep" else firstUnfinished.mediaId)
+                            val type = if (firstUnfinished.isTvSeries) MediaType.TV_SERIES else MediaType.MOVIE
+
+                            viewModel.updatePlaylistLastPlayed(currentPlaylist.id)
+                            onPlayMedia(firstUnfinished.mediaId, firstUnfinished.title, epTitle, s, ep, type, firstUnfinished.provider, epData)
+                        }
+                    },
+                    onDownloadAll = {
+                        snackbarController.show("Downloading all available titles in ${currentPlaylist.title}")
+                    },
+                    onPlayItem = { item, history ->
+                        val s = history?.seasonNumber ?: (if (item.isTvSeries) 1 else null)
+                        val ep = history?.episodeNumber ?: (if (item.isTvSeries) 1 else null)
+                        val epTitle = history?.episodeTitle ?: item.episodeTitle
+                        val epData = history?.episodeData ?: item.episodeData ?: (if (item.isTvSeries) "${item.mediaId}:$s:$ep" else item.mediaId)
+                        val type = if (item.isTvSeries) MediaType.TV_SERIES else MediaType.MOVIE
 
                         viewModel.updatePlaylistLastPlayed(currentPlaylist.id)
-                        onPlayMedia(firstUnfinished.mediaId, firstUnfinished.title, epTitle, s, ep, type, firstUnfinished.provider, epData)
-                    }
-                },
-                onDownloadAll = {
-                    snackbarController.show("Downloading all available titles in ${currentPlaylist.title}")
-                },
-                onPlayItem = { item, history ->
-                    val s = history?.seasonNumber ?: (if (item.isTvSeries) 1 else null)
-                    val ep = history?.episodeNumber ?: (if (item.isTvSeries) 1 else null)
-                    val epTitle = history?.episodeTitle ?: item.episodeTitle
-                    val epData = history?.episodeData ?: item.episodeData ?: (if (item.isTvSeries) "${item.mediaId}:$s:$ep" else item.mediaId)
-                    val type = if (item.isTvSeries) MediaType.TV_SERIES else MediaType.MOVIE
-
-                    viewModel.updatePlaylistLastPlayed(currentPlaylist.id)
-                    onPlayMedia(item.mediaId, item.title, epTitle, s, ep, type, item.provider, epData)
-                },
-                onDeletePlaylist = { id ->
-                    viewModel.deletePlaylist(id)
-                    selectedPlaylistForDetail = null
-                },
-                onRemoveItem = { itemKey ->
-                    viewModel.removeItemFromPlaylist(currentPlaylist.id, itemKey)
-                },
-                hazeState = hazeState
-            )
-        } else {
+                        onPlayMedia(item.mediaId, item.title, epTitle, s, ep, type, item.provider, epData)
+                    },
+                    onDeletePlaylist = { id ->
+                        viewModel.deletePlaylist(id)
+                        selectedPlaylistForDetail = null
+                    },
+                    onRemoveItem = { itemKey ->
+                        viewModel.removeItemFromPlaylist(currentPlaylist.id, itemKey)
+                    },
+                    hazeState = hazeState
+                )
+            } else {
             Column(modifier = Modifier.fillMaxSize()) {
                 // 1. Pinned Header: "Library" left, "Select" right (or "{N} selected" / "Done")
                 Box(
@@ -288,6 +326,21 @@ fun LibraryScreen(
                         .statusBarsPadding()
                         .padding(horizontal = 16.dp, vertical = 12.dp)
                 ) {
+                    val isDownloadsTab = pagerState.currentPage == 0
+                    val selectableIds = remember(isDownloadsTab, downloads, items, isOfflineOnly, downloadsMap) {
+                        if (isDownloadsTab) {
+                            downloads.map { it.id }.toSet()
+                        } else if (isOfflineOnly) {
+                            items.filter { item ->
+                                val dl = downloadsMap[item.mediaId] ?: downloadsMap[item.id]
+                                dl?.state == com.euthopiar.download.DownloadState.COMPLETED
+                            }.map { it.id }.toSet()
+                        } else {
+                            items.map { it.id }.toSet()
+                        }
+                    }
+                    val canSelect = (pagerState.currentPage == 0 || pagerState.currentPage == 1) && selectableIds.isNotEmpty()
+
                     Crossfade(targetState = isSelectionMode, label = "headerCrossfade") { selectionModeActive ->
                         if (!selectionModeActive) {
                             Row(
@@ -302,11 +355,6 @@ fun LibraryScreen(
                                 )
 
                                 // Select action pill (Downloads and Saved only)
-                                val canSelect = when (pagerState.currentPage) {
-                                    0 -> downloads.isNotEmpty()
-                                    1 -> items.isNotEmpty()
-                                    else -> false
-                                }
                                 if (canSelect) {
                                     LibraryGlassPill(
                                         text = "Select",
@@ -327,17 +375,57 @@ fun LibraryScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 val count = selectedItemIds.size
-                                Text(
-                                    text = "$count selected",
-                                    style = LibraryTypography.pageHeadline.copy(fontSize = 22.sp),
-                                    color = Color.White
-                                )
+                                val allSelected = selectableIds.isNotEmpty() && selectedItemIds.containsAll(selectableIds)
 
-                                LibraryGlassPill(
-                                    text = "Done",
-                                    onClick = { viewModel.exitSelectionMode() },
-                                    hazeState = hazeState
-                                )
+                                AnimatedContent(
+                                    targetState = count,
+                                    transitionSpec = {
+                                        if (targetState > initialState) {
+                                            (slideInVertically { it / 2 } + fadeIn()).togetherWith(
+                                                slideOutVertically { -it / 2 } + fadeOut()
+                                            )
+                                        } else {
+                                            (slideInVertically { -it / 2 } + fadeIn()).togetherWith(
+                                                slideOutVertically { it / 2 } + fadeOut()
+                                            )
+                                        }
+                                    },
+                                    label = "selectedCountAnim"
+                                ) { currentCount ->
+                                    Text(
+                                        text = "$currentCount selected",
+                                        style = LibraryTypography.pageHeadline.copy(fontSize = 22.sp),
+                                        color = Color.White
+                                    )
+                                }
+
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    if (selectableIds.isNotEmpty()) {
+                                        LibraryGlassPill(
+                                            text = if (allSelected) "Deselect all" else "Select all",
+                                            onClick = {
+                                                if (!reduceMotion) {
+                                                    hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                                }
+                                                if (isDownloadsTab || isOfflineOnly) {
+                                                    viewModel.selectAllIds(selectableIds)
+                                                } else {
+                                                    viewModel.selectAll(items)
+                                                }
+                                            },
+                                            hazeState = hazeState
+                                        )
+                                    }
+
+                                    LibraryGlassPill(
+                                        text = "Done",
+                                        onClick = { viewModel.exitSelectionMode() },
+                                        hazeState = hazeState
+                                    )
+                                }
                             }
                         }
                     }
@@ -345,7 +433,7 @@ fun LibraryScreen(
 
                 // 2. Tabs Row: Downloads / Saved / Playlists (14sp text with 1.5dp sliding white underline)
                 val tabTitles = listOf("Downloads", "Saved", "Playlists")
-                val tabPositions = remember { mutableStateMapOf<Int, Pair<Dp, Dp>>() }
+                val tabCoordinates = remember { mutableStateMapOf<Int, androidx.compose.ui.layout.LayoutCoordinates>() }
                 var tabContainerCoordinates by remember { mutableStateOf<androidx.compose.ui.layout.LayoutCoordinates?>(null) }
 
                 Column(modifier = Modifier.fillMaxWidth()) {
@@ -363,18 +451,23 @@ fun LibraryScreen(
                         ) {
                             tabTitles.forEachIndexed { index, title ->
                                 val isSelected = pagerState.currentPage == index
+                                val pageOffset = (pagerState.currentPage + pagerState.currentPageOffsetFraction) - index
+                                val selectionFraction = (1f - kotlin.math.abs(pageOffset)).coerceIn(0f, 1f)
+                                val textColor = androidx.compose.ui.graphics.lerp(
+                                    Color.White.copy(alpha = 0.50f),
+                                    Color.White,
+                                    selectionFraction
+                                )
+                                val countColor = androidx.compose.ui.graphics.lerp(
+                                    Color.White.copy(alpha = 0.40f),
+                                    Color.White.copy(alpha = 0.70f),
+                                    selectionFraction
+                                )
 
                                 Row(
                                     modifier = Modifier
                                         .onGloballyPositioned { coordinates ->
-                                            tabContainerCoordinates?.let { parent ->
-                                                if (parent.isAttached && coordinates.isAttached) {
-                                                    with(density) {
-                                                        val pos = parent.localPositionOf(coordinates, androidx.compose.ui.geometry.Offset.Zero)
-                                                        tabPositions[index] = pos.x.toDp() to coordinates.size.width.toDp()
-                                                    }
-                                                }
-                                            }
+                                            tabCoordinates[index] = coordinates
                                         }
                                         .pressable(
                                             scaleDown = 0.98f,
@@ -395,10 +488,10 @@ fun LibraryScreen(
                                 ) {
                                     Text(
                                         text = title,
-                                        style = if (isSelected) LibraryTypography.tab14Active else LibraryTypography.tab14Inactive
+                                        style = (if (isSelected) LibraryTypography.tab14Active else LibraryTypography.tab14Inactive).copy(color = textColor)
                                     )
 
-                                    // Tab counts styled small (11 sp, white at about 45 percent)
+                                    // Tab counts styled small (11 sp)
                                     val countForTab = when (title) {
                                         "Downloads" -> downloads.size
                                         "Saved" -> items.size
@@ -412,20 +505,28 @@ fun LibraryScreen(
                                             text = "$countForTab",
                                             style = LibraryTypography.metadata11.copy(
                                                 fontSize = 11.sp,
-                                                color = if (isSelected) Color.White.copy(alpha = 0.70f) else Color.White.copy(alpha = 0.45f)
+                                                color = countColor
                                             )
                                         )
                                     }
 
                                     // Downloads tab: subtle 5dp white dot if any active download
-                                    if (title == "Downloads" && hasActiveDownloads) {
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Box(
-                                            modifier = Modifier
-                                                .size(5.dp)
-                                                .clip(CircleShape)
-                                                .background(Color.White.copy(alpha = 0.85f))
-                                        )
+                                    if (title == "Downloads") {
+                                        AnimatedVisibility(
+                                            visible = hasActiveDownloads,
+                                            enter = scaleIn() + fadeIn(),
+                                            exit = scaleOut() + fadeOut()
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(5.dp)
+                                                        .clip(CircleShape)
+                                                        .background(Color.White.copy(alpha = 0.85f))
+                                                )
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -434,39 +535,49 @@ fun LibraryScreen(
                         // Full-width 0.5px hairline divider under the entire tab row
                         LibraryHairlineDivider(modifier = Modifier.align(Alignment.BottomStart))
 
-                        // Sliding & Resizing 1.5dp White Underline
-                        val continuousPosition = (pagerState.currentPage + pagerState.currentPageOffsetFraction).coerceIn(0f, 2f)
-                        val baseIndex = continuousPosition.toInt().coerceIn(0, 2)
-                        val nextIndex = (baseIndex + 1).coerceIn(0, 2)
-                        val fraction = (continuousPosition - baseIndex).coerceIn(0f, 1f)
+                        // Sliding & Resizing 1.5dp White Underline (GPU compositor graphicsLayer, zero layout reflow)
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.BottomStart)
+                                .height(LibraryDimens.underlineHeight)
+                                .graphicsLayer {
+                                    val continuousPosition = (pagerState.currentPage + pagerState.currentPageOffsetFraction).coerceIn(0f, 2f)
+                                    val baseIndex = continuousPosition.toInt().coerceIn(0, 2)
+                                    val nextIndex = (baseIndex + 1).coerceIn(0, 2)
+                                    val fraction = (continuousPosition - baseIndex).coerceIn(0f, 1f)
 
-                        val baseTab = tabPositions[baseIndex]
-                        val nextTab = tabPositions[nextIndex]
+                                    val parent = tabContainerCoordinates
+                                    val baseCoords = tabCoordinates[baseIndex]
+                                    val nextCoords = tabCoordinates[nextIndex]
 
-                        val targetOffset: Dp?
-                        val targetWidth: Dp?
+                                    if (parent != null && parent.isAttached && baseCoords != null && baseCoords.isAttached) {
+                                        val basePos = parent.localPositionOf(baseCoords, androidx.compose.ui.geometry.Offset.Zero)
+                                        val baseW = baseCoords.size.width.toFloat()
 
-                        if (baseTab != null && nextTab != null) {
-                            targetOffset = androidx.compose.ui.unit.lerp(baseTab.first, nextTab.first, fraction)
-                            targetWidth = androidx.compose.ui.unit.lerp(baseTab.second, nextTab.second, fraction)
-                        } else if (baseTab != null) {
-                            targetOffset = baseTab.first
-                            targetWidth = baseTab.second
-                        } else {
-                            targetOffset = null
-                            targetWidth = null
-                        }
+                                        val nextPos = if (nextCoords != null && nextCoords.isAttached) {
+                                            parent.localPositionOf(nextCoords, androidx.compose.ui.geometry.Offset.Zero)
+                                        } else {
+                                            basePos
+                                        }
+                                        val nextW = if (nextCoords != null && nextCoords.isAttached) {
+                                            nextCoords.size.width.toFloat()
+                                        } else {
+                                            baseW
+                                        }
 
-                        if (targetOffset != null && targetWidth != null) {
-                            Box(
-                                modifier = Modifier
-                                    .align(Alignment.BottomStart)
-                                    .offset(x = targetOffset)
-                                    .width(targetWidth)
-                                    .height(LibraryDimens.underlineHeight)
-                                    .background(Color.White)
-                            )
-                        }
+                                        val startX = androidx.compose.ui.util.lerp(basePos.x, nextPos.x, fraction)
+                                        val targetW = androidx.compose.ui.util.lerp(baseW, nextW, fraction)
+                                        translationX = startX
+                                        scaleX = targetW / 1.dp.toPx()
+                                        alpha = 1f
+                                    } else {
+                                        alpha = 0f
+                                    }
+                                    transformOrigin = TransformOrigin(0f, 0.5f)
+                                }
+                                .width(1.dp)
+                                .background(Color.White)
+                        )
                     }
                 }
 
@@ -577,18 +688,19 @@ fun LibraryScreen(
                 }
             }
         }
+    }
 
         // 4. Floating Glass Action Bar in Selection Mode (Replaces floating navbar)
         AnimatedVisibility(
             visible = isSelectionMode,
             enter = slideInVertically(
-                animationSpec = tween(220),
+                animationSpec = tween(220, easing = LinearOutSlowInEasing),
                 initialOffsetY = { it }
             ) + fadeIn(tween(220)),
             exit = slideOutVertically(
-                animationSpec = tween(220),
+                animationSpec = tween(140, easing = FastOutLinearInEasing),
                 targetOffsetY = { it }
-            ) + fadeOut(tween(220)),
+            ) + fadeOut(tween(140)),
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()
@@ -644,7 +756,32 @@ fun LibraryScreen(
         if (showConfirmDeleteDialog) {
             val isDownloadsTab = pagerState.currentPage == 0
             val count = selectedItemIds.size
-            val selectedItems = items.filter { it.id in selectedItemIds }
+            val previewItems: List<Triple<String, String, String?>> = if (isDownloadsTab) {
+                downloads.filter { it.id in selectedItemIds }.map { dl ->
+                    val meta = if (!dl.subtitle.isNullOrBlank()) {
+                        dl.subtitle
+                    } else if (dl.seasonNumber != null && dl.episodeNumber != null) {
+                        "Season ${dl.seasonNumber}, Episode ${dl.episodeNumber}"
+                    } else if (dl.isTvSeries) {
+                        "TV Series"
+                    } else {
+                        "Movie"
+                    }
+                    Triple(dl.title, meta, dl.posterUrl)
+                }
+            } else {
+                items.filter { it.id in selectedItemIds }.map { item ->
+                    val meta = if (item.seasonNumber != null && item.episodeNumber != null) {
+                        "Season ${item.seasonNumber}, Episode ${item.episodeNumber}"
+                    } else if (item.mediaType == MediaType.TV_SERIES) {
+                        "TV Series"
+                    } else {
+                        "Movie"
+                    }
+                    Triple(item.title, meta, item.posterUrl)
+                }
+            }
+
             EuthopiarGlassDialog(
                 onDismissRequest = { showConfirmDeleteDialog = false },
                 title = if (isDownloadsTab) "Delete Selected Downloads?" else "Remove from Saved?",
@@ -657,25 +794,18 @@ fun LibraryScreen(
                 dismissText = "Cancel",
                 icon = Icons.Outlined.DeleteOutline,
                 isDestructive = true,
-                itemPreview = if (selectedItems.isNotEmpty()) {
+                itemPreview = if (previewItems.isNotEmpty()) {
                     {
-                        if (selectedItems.size == 1) {
-                            val single = selectedItems.first()
-                            val meta = if (single.seasonNumber != null && single.episodeNumber != null) {
-                                "Season ${single.seasonNumber}, Episode ${single.episodeNumber}"
-                            } else if (single.mediaType == MediaType.TV_SERIES) {
-                                "TV Series"
-                            } else {
-                                "Movie"
-                            }
+                        if (previewItems.size == 1) {
+                            val (itemTitle, itemMeta, itemPoster) = previewItems.first()
                             EuthopiarDialogSingleItemRow(
-                                title = single.title,
-                                metadata = meta,
-                                posterUrl = single.posterUrl
+                                title = itemTitle,
+                                metadata = itemMeta,
+                                posterUrl = itemPoster
                             )
                         } else {
-                            val posters = selectedItems.mapNotNull { it.posterUrl }
-                            val label = "${selectedItems.first().title}, +${selectedItems.size - 1} more"
+                            val posters = previewItems.mapNotNull { it.third }
+                            val label = "${previewItems.first().first}, +${previewItems.size - 1} more"
                             EuthopiarDialogMultiItemRow(
                                 posterUrls = posters,
                                 label = label
@@ -689,8 +819,17 @@ fun LibraryScreen(
                         viewModel.deleteSelectedDownloads()
                         snackbarController.show("Deleted $count download${if (count != 1) "s" else ""}")
                     } else {
-                        viewModel.deleteSelected(items)
-                        snackbarController.show("Removed $count title${if (count != 1) "s" else ""}")
+                        val toRemove = items.filter { it.id in selectedItemIds }
+                        viewModel.removeFromCurrentFilterWithUndo(toRemove) { undoAction ->
+                            snackbarController.show(
+                                message = "Removed $count title${if (count != 1) "s" else ""}",
+                                actionLabel = "Undo",
+                                durationMillis = 4500L
+                            ) {
+                                undoAction()
+                            }
+                        }
+                        viewModel.exitSelectionMode()
                     }
                 },
                 onDismiss = { showConfirmDeleteDialog = false }

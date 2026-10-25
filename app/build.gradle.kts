@@ -14,8 +14,8 @@ android {
         applicationId = "com.euthopiar"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0-stable"
+        versionCode = 2
+        versionName = "1.0.1-stable"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -38,7 +38,7 @@ android {
 
     kotlinOptions {
         jvmTarget = "17"
-        freeCompilerArgs = listOf("-Xskip-metadata-version-check")
+        freeCompilerArgs = listOf("-Xskip-metadata-version-check", "-nowarn")
     }
 
     buildFeatures {

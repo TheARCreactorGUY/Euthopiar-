@@ -55,4 +55,25 @@ class DohDnsTest {
         org.junit.Assert.assertEquals(1, v6Bracketed.size)
         assertTrue("[::1] must be loopback", v6Bracketed[0].isLoopbackAddress)
     }
+
+    @Test
+    fun testBootstrapIpMapping() {
+        val cfPrimary = dohDns.lookup("1.1.1.1")
+        org.junit.Assert.assertEquals("1.1.1.1", cfPrimary[0].hostAddress)
+
+        val cfSecondary = dohDns.lookup("1.0.0.1")
+        org.junit.Assert.assertEquals("1.0.0.1", cfSecondary[0].hostAddress)
+
+        val googlePrimary = dohDns.lookup("8.8.8.8")
+        org.junit.Assert.assertEquals("8.8.8.8", googlePrimary[0].hostAddress)
+
+        val googleSecondary = dohDns.lookup("8.8.4.4")
+        org.junit.Assert.assertEquals("8.8.4.4", googleSecondary[0].hostAddress)
+
+        val cfHost = dohDns.lookup("cloudflare-dns.com")
+        org.junit.Assert.assertEquals("1.1.1.1", cfHost[0].hostAddress)
+
+        val googleHost = dohDns.lookup("dns.google")
+        org.junit.Assert.assertEquals("8.8.8.8", googleHost[0].hostAddress)
+    }
 }

@@ -5,6 +5,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -17,6 +19,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.SystemUpdateAlt
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -54,6 +59,7 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.euthopiar.ui.theme.AppFontFamily
 import com.euthopiar.ui.theme.LocalAmoledMode
+import com.euthopiar.ui.theme.GlassDefaults
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeTint
 import dev.chrisbanes.haze.hazeEffect
@@ -72,7 +78,9 @@ fun TopHeaderBar(
     modifier: Modifier = Modifier,
     isScrolled: Boolean = false,
     scrollFraction: () -> Float = { if (isScrolled) 1f else 0f },
-    hazeState: HazeState? = null
+    hazeState: HazeState? = null,
+    hasUpdateAvailable: Boolean = false,
+    onUpdateBadgeClick: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val windowDimensions = rememberWindowDimensions()
@@ -115,12 +123,13 @@ fun TopHeaderBar(
                 .then(
                     if (isUsingHaze) {
                         Modifier.hazeEffect(state = hazeState!!) {
-                            blurRadius = 24.dp
+                            blurRadius = GlassDefaults.BlurRadius
                             tints = listOf(
                                 HazeTint(barBg.copy(alpha = 0.88f)),
                                 HazeTint(Color.White.copy(alpha = 0.05f))
                             )
-                            fallbackTint = HazeTint(barBg.copy(alpha = 0.88f))
+                            noiseFactor = GlassDefaults.NoiseFactor
+                            fallbackTint = HazeTint(GlassDefaults.NavbarFallbackColor)
                         }
                     } else {
                         Modifier
@@ -134,9 +143,21 @@ fun TopHeaderBar(
                         drawRect(color = barBg.copy(alpha = 0.88f))
                         drawRect(color = Color.White.copy(alpha = 0.05f))
                     }
-                    // Hairline bottom border: 0.5dp white at 14% opacity
+                    // Diffuse top-down ambient environmental light wash
+                    val topLightBrush = Brush.verticalGradient(
+                        colors = listOf(
+                            Color.White.copy(alpha = 0.08f),
+                            Color.White.copy(alpha = 0.02f),
+                            Color.Transparent
+                        ),
+                        startY = 0f,
+                        endY = size.height * 0.45f
+                    )
+                    drawRect(brush = topLightBrush)
+
+                    // Hairline bottom border: specular gradient stroke matching FloatingNavbar
                     drawLine(
-                        color = Color.White.copy(alpha = 0.14f),
+                        brush = GlassDefaults.BorderBrush,
                         start = Offset(0f, size.height),
                         end = Offset(size.width, size.height),
                         strokeWidth = HairlineWidth.toPx()
@@ -170,43 +191,88 @@ fun TopHeaderBar(
                     color = Color.White
                 )
 
-                // Trailing Action: Profile avatar inside round glass ring (38 px circle, 0.5 px hairline border, glass fill, 2 px inner padding)
-                Box(
-                    modifier = Modifier
-                        .size(Dimens.minTouchTarget)
-                        .aspectRatio(1f)
-                        .pressable(
-                            scaleDown = 0.98f,
-                            onClickLabel = "Profile: ${activeProfile.name}",
-                            onClick = { showProfileSheet = true }
-                        )
-                        .tvFocusable(shape = ShapeFull),
-                    contentAlignment = Alignment.Center
+                // Trailing Actions: Update notification badge (if available) + Profile avatar
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
+                    if (hasUpdateAvailable && onUpdateBadgeClick != null) {
+                        Box(
+                            modifier = Modifier
+                                .size(Dimens.minTouchTarget)
+                                .aspectRatio(1f)
+                                .pressable(
+                                    scaleDown = 0.96f,
+                                    onClickLabel = "Update available",
+                                    onClick = onUpdateBadgeClick
+                                )
+                                .tvFocusable(shape = ShapeFull),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .clip(CircleShape)
+                                    .background(Color.White.copy(alpha = 0.09f))
+                                    .border(HairlineWidth, Color.White.copy(alpha = 0.22f), CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.SystemUpdateAlt,
+                                    contentDescription = "Update available",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(17.dp)
+                                )
+                                // Subtle pure-white notification dot at top-right
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .padding(top = 6.dp, end = 6.dp)
+                                        .size(6.dp)
+                                        .clip(CircleShape)
+                                        .background(Color.White)
+                                )
+                            }
+                        }
+                    }
+
                     Box(
                         modifier = Modifier
-                            .size(38.dp)
+                            .size(Dimens.minTouchTarget)
                             .aspectRatio(1f)
-                            .clip(CircleShape)
-                            .background(Color.White.copy(alpha = 0.07f))
-                            .border(
-                                width = HairlineWidth,
-                                color = Color.White.copy(alpha = 0.16f),
-                                shape = CircleShape
+                            .pressable(
+                                scaleDown = 0.98f,
+                                onClickLabel = "Profile: ${activeProfile.name}",
+                                onClick = { showProfileSheet = true }
                             )
-                            .padding(2.dp),
+                            .tvFocusable(shape = ShapeFull),
                         contentAlignment = Alignment.Center
                     ) {
-                        com.euthopiar.ui.profile.ProfileAvatarImage(
-                            avatarId = activeProfile.avatarId,
-                            size = 34.dp,
+                        Box(
                             modifier = Modifier
-                                .size(34.dp)
-                                .aspectRatio(1f),
-                            borderColor = Color.Transparent,
-                            borderWidth = 0.dp,
-                            contentDescription = "Profile: ${activeProfile.name}"
-                        )
+                                .size(38.dp)
+                                .aspectRatio(1f)
+                                .clip(CircleShape)
+                                .background(Color.White.copy(alpha = 0.07f))
+                                .border(
+                                    width = HairlineWidth,
+                                    color = Color.White.copy(alpha = 0.16f),
+                                    shape = CircleShape
+                                )
+                                .padding(2.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            com.euthopiar.ui.profile.ProfileAvatarImage(
+                                avatarId = activeProfile.avatarId,
+                                size = 34.dp,
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .aspectRatio(1f),
+                                borderColor = Color.Transparent,
+                                borderWidth = 0.dp,
+                                contentDescription = "Profile: ${activeProfile.name}"
+                            )
+                        }
                     }
                 }
             }

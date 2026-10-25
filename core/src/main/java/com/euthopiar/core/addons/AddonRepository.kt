@@ -42,13 +42,14 @@ class AddonRepository private constructor(private val context: Context) {
     }
 
     private fun loadFromDisk() {
-        val saved = if (addonsFile.exists()) {
+        val fileExists = addonsFile.exists()
+        val saved = if (fileExists) {
             runCatching {
                 json.decodeFromString<List<ManagedAddon>>(addonsFile.readText())
-            }.getOrElse { emptyList() }
-        } else emptyList()
+            }.getOrNull()
+        } else null
 
-        val initial = if (saved.isEmpty()) {
+        val initial = if (saved == null) {
             listOf(
                 ManagedAddon(
                     manifestUrl = DEFAULT_CATALOG_MANIFEST_URL,
@@ -64,6 +65,9 @@ class AddonRepository private constructor(private val context: Context) {
         } else saved
 
         _uiState.value = AddonsUiState(addons = initial)
+        if (!fileExists) {
+            persist()
+        }
 
         // Refresh manifests for any enabled addons in background
         initial.filter { it.enabled }.forEach { addon ->
@@ -110,24 +114,41 @@ class AddonRepository private constructor(private val context: Context) {
     }
 
     suspend fun removeAddon(manifestUrl: String) = withContext(Dispatchers.IO) {
+        val norm = normalizeAddonUrl(manifestUrl)
         mutex.withLock {
             _uiState.update { state ->
-                state.copy(addons = state.addons.filterNot { it.manifestUrl == manifestUrl })
+                state.copy(addons = state.addons.filterNot { it.manifestUrl == manifestUrl || it.manifestUrl == norm })
             }
             persist()
         }
     }
 
     suspend fun toggleAddon(manifestUrl: String, enabled: Boolean) = withContext(Dispatchers.IO) {
+        val norm = normalizeAddonUrl(manifestUrl)
         mutex.withLock {
             _uiState.update { state ->
                 state.copy(
                     addons = state.addons.map {
-                        if (it.manifestUrl == manifestUrl) it.copy(enabled = enabled) else it
+                        if (it.manifestUrl == manifestUrl || it.manifestUrl == norm) it.copy(enabled = enabled) else it
                     }
                 )
             }
             persist()
+        }
+    }
+
+    suspend fun restoreAddons(newAddons: List<ManagedAddon>) = withContext(Dispatchers.IO) {
+        if (newAddons.isEmpty()) return@withContext
+        mutex.withLock {
+            _uiState.update { state ->
+                state.copy(addons = newAddons)
+            }
+            persist()
+        }
+        newAddons.filter { it.enabled }.forEach { addon ->
+            scope.launch {
+                refreshAddonInternal(addon.manifestUrl)
+            }
         }
     }
 
@@ -181,20 +202,24 @@ class AddonRepository private constructor(private val context: Context) {
         }
     }
 
-    private fun normalizeAddonUrl(url: String): String {
-        var clean = url.trim()
-        if (clean.startsWith("stremio://")) {
-            clean = "https://" + clean.removePrefix("stremio://")
-        }
-        if (!clean.endsWith("/manifest.json") && !clean.contains("/manifest.json?")) {
-            clean = clean.trimEnd('/') + "/manifest.json"
-        }
-        return clean
-    }
-
     companion object {
         const val DEFAULT_CATALOG_MANIFEST_URL = "https://catalog.nuvio.tv/manifest.json"
         const val DEFAULT_OPENSUBTITLES_MANIFEST_URL = "https://opensubtitles-v3.strem.io/manifest.json"
+
+        fun normalizeAddonUrl(url: String): String {
+            var clean = url.trim()
+            if (clean.startsWith("stremio://", ignoreCase = true)) {
+                clean = "https://" + clean.substring("stremio://".length)
+            } else if (!clean.startsWith("http://", ignoreCase = true) && !clean.startsWith("https://", ignoreCase = true)) {
+                clean = "https://$clean"
+            }
+            val query = clean.substringAfter("?", "")
+            var path = clean.substringBefore("?").trimEnd('/')
+            if (!path.endsWith("/manifest.json") && path != "manifest.json") {
+                path = "$path/manifest.json"
+            }
+            return if (query.isNotBlank()) "$path?$query" else path
+        }
 
         @Volatile
         private var instance: AddonRepository? = null

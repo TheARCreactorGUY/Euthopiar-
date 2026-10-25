@@ -4,6 +4,7 @@ import android.app.ActivityManager
 import android.content.Context
 import android.os.Build
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -42,6 +43,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -198,8 +200,11 @@ fun Modifier.pluginsPressable(
     )
 
     this
-        .scale(scale)
-        .alpha(alpha)
+        .graphicsLayer {
+            scaleX = scale
+            scaleY = scale
+            this.alpha = alpha
+        }
         .clickable(
             interactionSource = interactionSource,
             indication = null,
@@ -225,10 +230,10 @@ fun PluginsHairlineDivider(
 }
 
 /**
- * 44x26dp Custom Glass Toggle Switch.
+ * 44x26dp Custom Glass Toggle Switch with 48dp minimum touch target.
  * - When ON: solid white track with near-black 20dp knob.
  * - When OFF: glass track (7% fill, 0.5dp hairline border) with 60% white knob.
- * - Smooth 140ms ease-out knob travel.
+ * - Smooth 140ms ease-out synchronized knob travel and track crossfade.
  */
 @Composable
 fun PluginsGlassToggle(
@@ -240,8 +245,16 @@ fun PluginsGlassToggle(
     val reduceMotion = LocalReduceMotion.current
     val haptic = LocalHapticFeedback.current
 
-    val trackBg = if (checked) Color.White else PluginsGlassTokens.GlassFill
-    val knobColor = if (checked) PluginsGlassTokens.TextDark else Color.White.copy(alpha = 0.60f)
+    val trackBg by animateColorAsState(
+        targetValue = if (checked) Color.White else PluginsGlassTokens.GlassFill,
+        animationSpec = tween(durationMillis = if (reduceMotion) 0 else 140, easing = FastOutSlowInEasing),
+        label = "pluginsToggleTrackBg"
+    )
+    val knobColor by animateColorAsState(
+        targetValue = if (checked) PluginsGlassTokens.TextDark else Color.White.copy(alpha = 0.60f),
+        animationSpec = tween(durationMillis = if (reduceMotion) 0 else 140, easing = FastOutSlowInEasing),
+        label = "pluginsToggleKnobColor"
+    )
 
     // Travel from 3.dp (left) to 21.dp (right) within 44.dp track
     val knobOffset by animateDpAsState(
@@ -252,29 +265,35 @@ fun PluginsGlassToggle(
 
     Box(
         modifier = modifier
-            .size(width = 44.dp, height = 26.dp)
-            .clip(RoundedCornerShape(PluginsGlassTokens.RadiusPill))
-            .background(trackBg)
-            .then(
-                if (!checked) Modifier.border(
-                    PluginsGlassTokens.HairlineWidth,
-                    PluginsGlassTokens.HairlineBorder,
-                    RoundedCornerShape(PluginsGlassTokens.RadiusPill)
-                ) else Modifier
-            )
+            .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
             .pluginsPressable(enabled = enabled, scaleDown = 0.98f) {
                 try { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) } catch (_: Exception) {}
                 onCheckedChange(!checked)
             },
-        contentAlignment = Alignment.CenterStart
+        contentAlignment = Alignment.Center
     ) {
         Box(
             modifier = Modifier
-                .offset(x = knobOffset)
-                .size(20.dp)
-                .clip(CircleShape)
-                .background(knobColor)
-        )
+                .size(width = 44.dp, height = 26.dp)
+                .clip(RoundedCornerShape(PluginsGlassTokens.RadiusPill))
+                .background(trackBg)
+                .then(
+                    if (!checked) Modifier.border(
+                        PluginsGlassTokens.HairlineWidth,
+                        PluginsGlassTokens.HairlineBorder,
+                        RoundedCornerShape(PluginsGlassTokens.RadiusPill)
+                    ) else Modifier
+                ),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            Box(
+                modifier = Modifier
+                    .offset(x = knobOffset)
+                    .size(20.dp)
+                    .clip(CircleShape)
+                    .background(knobColor)
+            )
+        }
     }
 }
 
@@ -666,8 +685,8 @@ fun PluginsInstallStatusDialog(
     val isBusy = state is StatusDialogState.Installing
 
     Dialog(
-        onDismissRequest = { if (!isBusy) onDismiss() },
-        properties = DialogProperties(dismissOnBackPress = !isBusy, dismissOnClickOutside = !isBusy)
+        onDismissRequest = { onDismiss() },
+        properties = DialogProperties(dismissOnBackPress = true, dismissOnClickOutside = !isBusy)
     ) {
         Box(
             modifier = Modifier
@@ -724,6 +743,30 @@ fun PluginsInstallStatusDialog(
                             ),
                             textAlign = TextAlign.Center
                         )
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(40.dp)
+                                .clip(RoundedCornerShape(PluginsGlassTokens.RadiusPill))
+                                .background(PluginsGlassTokens.GlassFill)
+                                .border(
+                                    PluginsGlassTokens.HairlineWidth,
+                                    PluginsGlassTokens.HairlineBorder,
+                                    RoundedCornerShape(PluginsGlassTokens.RadiusPill)
+                                )
+                                .pluginsPressable(scaleDown = 0.98f, onClick = onDismiss),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "Cancel",
+                                color = Color.White,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
                     }
 
                     is StatusDialogState.Success -> {

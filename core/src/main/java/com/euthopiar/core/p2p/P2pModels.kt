@@ -39,6 +39,8 @@ data class P2pStreamRequest(
     val fileIdx: Int? = null,
     val filename: String? = null,
     val trackers: List<String> = emptyList(),
+    val season: Int? = null,
+    val episode: Int? = null,
 )
 
 fun decodeBase32ToHex(base32: String): String? {
@@ -165,8 +167,15 @@ private fun Double.formatOneDecimal(): String {
 private fun Double.formatNoDecimal(): String =
     "${kotlin.math.round(this).toLong()}"
 
-fun extractP2pStreamRequest(rawUrl: String): P2pStreamRequest? {
-    val clean = rawUrl.trim()
+fun extractP2pStreamRequest(
+    rawUrl: String?,
+    fallbackInfoHash: String? = null,
+    defaultFileIdx: Int? = null,
+    defaultSeason: Int? = null,
+    defaultEpisode: Int? = null,
+    trackers: List<String> = emptyList(),
+): P2pStreamRequest? {
+    val clean = rawUrl?.trim().orEmpty()
     val hash = when {
         clean.startsWith("magnet:", ignoreCase = true) -> {
             val marker = "btih:"
@@ -198,7 +207,7 @@ fun extractP2pStreamRequest(rawUrl: String): P2pStreamRequest? {
         }
         clean.length == 32 && clean.all { it.uppercaseChar() in 'A'..'Z' || it in '2'..'7' } -> clean
         (clean.length == 40 || clean.length == 64) && clean.all { it in '0'..'9' || it.lowercaseChar() in 'a'..'f' } -> clean
-        else -> null
+        else -> fallbackInfoHash?.trim()?.takeIf { it.isNotBlank() }
     }?.takeIf { it.isNotBlank() } ?: return null
 
     val canonicalHash = try {
@@ -218,8 +227,15 @@ fun extractP2pStreamRequest(rawUrl: String): P2pStreamRequest? {
             path.substringAfter('/').trim().toIntOrNull()
         } else null
     } else {
-        Regex("""[?&]ind(?:ex|ices)=([0-9]+)""").find(clean)?.groupValues?.get(1)?.toIntOrNull()
-    }
+        Regex("""[?&](?:ind(?:ex|ices)|fileidx|so)=([0-9]+)""", RegexOption.IGNORE_CASE)
+            .find(clean)?.groupValues?.get(1)?.toIntOrNull()
+    } ?: defaultFileIdx
+
+    val parsedSeason = Regex("""[?&]season=([0-9]+)""", RegexOption.IGNORE_CASE)
+        .find(clean)?.groupValues?.get(1)?.toIntOrNull() ?: defaultSeason
+
+    val parsedEpisode = Regex("""[?&]episode=([0-9]+)""", RegexOption.IGNORE_CASE)
+        .find(clean)?.groupValues?.get(1)?.toIntOrNull() ?: defaultEpisode
 
     val filename = Regex("""[?&]dn=([^&]+)""").find(clean)?.groupValues?.get(1)?.let {
         try {
@@ -229,7 +245,7 @@ fun extractP2pStreamRequest(rawUrl: String): P2pStreamRequest? {
         }
     }
 
-    val trackers = Regex("""[?&]tr=([^&]+)""").findAll(clean).mapNotNull {
+    val parsedTrackers = Regex("""[?&]tr=([^&]+)""").findAll(clean).mapNotNull {
         try {
             java.net.URLDecoder.decode(it.groupValues[1], "UTF-8")
         } catch (_: Exception) {
@@ -237,11 +253,30 @@ fun extractP2pStreamRequest(rawUrl: String): P2pStreamRequest? {
         }
     }.toList()
 
+    val combinedTrackers = (trackers + parsedTrackers).filter(String::isNotBlank).distinct()
+
     return P2pStreamRequest(
         infoHash = canonicalHash,
         fileIdx = fileIdx,
         filename = filename,
-        trackers = trackers
+        trackers = combinedTrackers,
+        season = parsedSeason,
+        episode = parsedEpisode
     )
 }
+
+fun extractP2pStreamRequest(
+    rawUrl: String?,
+    defaultFileIdx: Int? = null,
+    defaultSeason: Int? = null,
+    defaultEpisode: Int? = null,
+    trackers: List<String> = emptyList(),
+): P2pStreamRequest? = extractP2pStreamRequest(
+    rawUrl = rawUrl,
+    fallbackInfoHash = null,
+    defaultFileIdx = defaultFileIdx,
+    defaultSeason = defaultSeason,
+    defaultEpisode = defaultEpisode,
+    trackers = trackers
+)
 

@@ -1,10 +1,13 @@
 package com.euthopiar.ui.onboarding
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextInput
 import com.euthopiar.ui.theme.EuthopiarTheme
 import org.junit.Rule
 import org.junit.Test
@@ -21,27 +24,32 @@ class OnboardingScreenTest {
 
     @Test
     fun testOnboardingPagingButtonVisibility() {
+        var completed = false
         composeTestRule.setContent {
             EuthopiarTheme {
-                OnboardingScreen(onComplete = {})
+                OnboardingScreen(onComplete = { completed = true })
             }
         }
 
-        // Page 0: Begin Journey should be displayed
-        composeTestRule.onNodeWithText("Begin Journey").assertIsDisplayed()
+        // Page 0: Get started should be displayed
+        composeTestRule.onNodeWithText("Get started").assertIsDisplayed()
 
-        // Click Begin Journey to go to Page 1
-        composeTestRule.onNodeWithText("Begin Journey").performClick()
+        // Click Get started to go to Page 1
+        composeTestRule.onNodeWithText("Get started").performClick()
         composeTestRule.waitForIdle()
 
         // Page 1: Check Back and Continue
-        val backNode = composeTestRule.onNodeWithText("Back")
+        val backNode = composeTestRule.onNodeWithContentDescription("Back")
         backNode.assertIsDisplayed()
 
-        val continueNode = composeTestRule.onNodeWithText("Continue to Canvas")
-        continueNode.performScrollTo().assertIsDisplayed()
+        // Enter profile name to satisfy validation
+        composeTestRule.onNode(hasSetTextAction()).performTextInput("Alex")
+        composeTestRule.waitForIdle()
 
-        // Click Continue to Canvas to go to Page 2
+        val continueNode = composeTestRule.onNodeWithText("Continue")
+        continueNode.assertIsDisplayed()
+
+        // Click Continue to go to Page 2
         continueNode.performClick()
         composeTestRule.waitForIdle()
 

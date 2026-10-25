@@ -1146,6 +1146,7 @@ fun PlayerActionDock(
     onOpenAudio: () -> Unit = {},
     onOpenSubtitles: () -> Unit = {},
     onOpenAudioSubtitles: (() -> Unit)? = null,
+    onOpenQuality: (() -> Unit)? = null,
     onOpenTuning: () -> Unit,
     onOpenPip: (() -> Unit)? = null,
     onOpenCast: (() -> Unit)? = null,
@@ -1212,6 +1213,19 @@ fun PlayerActionDock(
                     if (onOpenAudioSubtitles != null) onOpenAudioSubtitles() else onOpenSubtitles()
                 }
             )
+
+            // Video Quality Button
+            if (onOpenQuality != null) {
+                DockBareIcon(
+                    iconRes = R.drawable.ic_quality_fhd,
+                    contentDescription = "Video Quality",
+                    hasDot = activeSidePanel == PlayerSidePanelType.VIDEO_QUALITY,
+                    onClick = {
+                        isExpanded = false
+                        onOpenQuality()
+                    }
+                )
+            }
 
             // 3. Sources ("Stream") Button
             DockBareIcon(
@@ -1494,6 +1508,7 @@ fun PlayerBottomControls(
     onSelectServer: ((ServerSourceOption) -> Unit)? = null,
     onOpenSpeed: () -> Unit,
     onOpenAudioSubtitles: () -> Unit,
+    onOpenQuality: (() -> Unit)? = null,
     onOpenAudio: (() -> Unit)? = null,
     onOpenSubtitles: (() -> Unit)? = null,
     onOpenExternalPlayer: (() -> Unit)? = null,
@@ -1551,7 +1566,7 @@ fun PlayerBottomControls(
                 .navigationBarsPadding()
                 .padding(horizontal = 24.dp, vertical = 8.dp)
         ) {
-            // Quick Accordion row (Aspect Ratio & Speed)
+            // Quick Accordion row (Quality, Aspect Ratio & Speed)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1559,6 +1574,43 @@ fun PlayerBottomControls(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.End
             ) {
+                // Quick Video Quality Pill
+                if (onOpenQuality != null) {
+                    val qBadge = when {
+                        selectedQuality == null || selectedQuality.isAuto || selectedQuality.id == "auto" -> "Auto"
+                        selectedQuality.height != null -> "${selectedQuality.height}p"
+                        else -> selectedQuality.label
+                    }
+                    Box(
+                        modifier = Modifier
+                            .height(32.dp)
+                            .videoOverlayGlass(shape = PlayerTokens.RadiusPill)
+                            .playerPressable(
+                                role = Role.Button,
+                                onClickLabel = "Video Quality: $qBadge",
+                                onClick = onOpenQuality
+                            )
+                            .padding(horizontal = 10.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_quality_fhd),
+                                contentDescription = "Video Quality",
+                                tint = Color.White,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = qBadge,
+                                color = Color.White,
+                                style = PlayerTokens.PillText
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                }
+
                 // Quick Aspect Ratio Expandable Accordion
                 val aspectLabel = when (aspectRatioMode) {
                     AspectRatioMode.FIT -> "Fit"
@@ -1770,6 +1822,7 @@ fun PlayerBottomControls(
                 activeSidePanel = activeSidePanel,
                 onOpenEpisodes = { onOpenEpisodes?.invoke() },
                 onOpenSources = { onOpenSources?.invoke() },
+                onOpenQuality = onOpenQuality,
                 onOpenAudio = { onOpenAudio?.invoke() ?: onOpenAudioSubtitles() },
                 onOpenSubtitles = { onOpenSubtitles?.invoke() ?: onOpenAudioSubtitles() },
                 onOpenTuning = onOpenSettings,

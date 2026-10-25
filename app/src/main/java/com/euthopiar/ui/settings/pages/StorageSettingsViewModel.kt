@@ -1,6 +1,7 @@
 package com.euthopiar.ui.settings.pages
 
 import android.app.Application
+import android.net.Uri
 import android.os.Environment
 import androidx.datastore.preferences.core.*
 import androidx.lifecycle.AndroidViewModel
@@ -8,6 +9,9 @@ import androidx.lifecycle.viewModelScope
 import coil3.SingletonImageLoader
 import com.euthopiar.core.network.DohDns
 import com.euthopiar.core.p2p.P2pStreamingEngine
+import com.euthopiar.data.backup.BackupInspectionResult
+import com.euthopiar.data.backup.BackupSummary
+import com.euthopiar.data.backup.ConfigurationBackupManager
 import com.euthopiar.data.preferences.PreferencesRepository
 import com.euthopiar.data.preferences.preferencesDataStore
 import com.euthopiar.download.DownloadEngine
@@ -24,6 +28,18 @@ import org.json.JSONObject
 import java.io.File
 import java.nio.file.Files
 import java.util.Locale
+
+sealed class BackupUiState {
+    object Idle : BackupUiState()
+    object Exporting : BackupUiState()
+    data class ExportSuccess(val message: String) : BackupUiState()
+    data class ExportError(val message: String) : BackupUiState()
+    object Inspecting : BackupUiState()
+    data class ReadyToRestore(val inspection: BackupInspectionResult) : BackupUiState()
+    object Restoring : BackupUiState()
+    data class RestoreSuccess(val summary: BackupSummary?) : BackupUiState()
+    data class RestoreError(val message: String) : BackupUiState()
+}
 
 class StorageSettingsViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -216,98 +232,54 @@ class StorageSettingsViewModel(application: Application) : AndroidViewModel(appl
         }
     }
 
-    fun exportConfiguration(uri: android.net.Uri, onResult: (Boolean, String) -> Unit) {
-        viewModelScope.launch {
-            try {
-                val context = getApplication<Application>()
-                val allPrefs = context.preferencesDataStore.data.first().asMap()
-                val jsonPrefs = JSONObject()
-                for ((key, value) in allPrefs) {
-                    val keyName = key.name
-                    if (isSensitiveKey(keyName)) continue
-                    when (value) {
-                        is Boolean -> jsonPrefs.put(keyName, value)
-                        is Int -> jsonPrefs.put(keyName, value)
-                        is Long -> jsonPrefs.put(keyName, value)
-                        is Float -> jsonPrefs.put(keyName, value.toDouble())
-                        is String -> jsonPrefs.put(keyName, value)
-                        is Set<*> -> {
-                            val arr = JSONArray()
-                            value.forEach { arr.put(it.toString()) }
-                            jsonPrefs.put(keyName, arr)
-                        }
-                    }
-                }
-                val root = JSONObject().apply {
-                    put("app", "Euthopiar")
-                    put("version", 1)
-                    put("exportedAt", System.currentTimeMillis())
-                    put("preferences", jsonPrefs)
-                }
+    private val backupManager = ConfigurationBackupManager(application)
 
-                withContext(Dispatchers.IO) {
-                    context.contentResolver.openOutputStream(uri)?.use { stream ->
-                        stream.bufferedWriter().use { it.write(root.toString(2)) }
-                    } ?: throw IllegalStateException("Could not open output stream")
-                }
-                onResult(true, "Configuration exported successfully")
-            } catch (e: Exception) {
-                onResult(false, "Export failed: ${e.message}")
+    private val _backupUiState = MutableStateFlow<BackupUiState>(BackupUiState.Idle)
+    val backupUiState: StateFlow<BackupUiState> = _backupUiState.asStateFlow()
+
+    fun dismissBackupState() {
+        _backupUiState.value = BackupUiState.Idle
+    }
+
+    fun exportConfiguration(uri: Uri) {
+        viewModelScope.launch {
+            _backupUiState.value = BackupUiState.Exporting
+            val result = backupManager.exportConfiguration(uri)
+            if (result.isSuccess) {
+                _backupUiState.value = BackupUiState.ExportSuccess(result.getOrDefault("Configuration exported successfully"))
+                refreshAllStorageTelemetry()
+            } else {
+                val err = result.exceptionOrNull()?.message ?: "Export failed"
+                _backupUiState.value = BackupUiState.ExportError(err)
             }
         }
     }
 
-    fun importConfiguration(uri: android.net.Uri, onResult: (Boolean, String) -> Unit) {
+    fun inspectBackup(uri: Uri) {
         viewModelScope.launch {
-            try {
-                val context = getApplication<Application>()
-                val content = withContext(Dispatchers.IO) {
-                    context.contentResolver.openInputStream(uri)?.use { stream ->
-                        stream.bufferedReader().use { it.readText() }
-                    } ?: throw IllegalStateException("Could not open input stream")
-                }
-                val root = JSONObject(content)
-                if (root.optString("app") != "Euthopiar") {
-                    onResult(false, "Invalid configuration file (not a Euthopiar backup)")
-                    return@launch
-                }
-                val jsonPrefs = root.optJSONObject("preferences")
-                    ?: throw IllegalArgumentException("Missing preferences object")
-
-                context.preferencesDataStore.edit { prefsMap ->
-                    val keys = jsonPrefs.keys()
-                    while (keys.hasNext()) {
-                        val keyName = keys.next()
-                        if (isSensitiveKey(keyName)) continue
-                        val value = jsonPrefs.get(keyName)
-                        when (value) {
-                            is Boolean -> prefsMap[booleanPreferencesKey(keyName)] = value
-                            is Int -> prefsMap[intPreferencesKey(keyName)] = value
-                            is Long -> prefsMap[longPreferencesKey(keyName)] = value
-                            is Double -> prefsMap[floatPreferencesKey(keyName)] = value.toFloat()
-                            is String -> prefsMap[stringPreferencesKey(keyName)] = value
-                            is JSONArray -> {
-                                val set = mutableSetOf<String>()
-                                for (i in 0 until value.length()) {
-                                    set.add(value.getString(i))
-                                }
-                                prefsMap[stringSetPreferencesKey(keyName)] = set
-                            }
-                        }
-                    }
-                }
-                onResult(true, "Configuration imported successfully")
-            } catch (e: Exception) {
-                onResult(false, "Import failed: ${e.message}")
+            _backupUiState.value = BackupUiState.Inspecting
+            val inspection = backupManager.inspectBackup(uri)
+            if (inspection.isValid) {
+                _backupUiState.value = BackupUiState.ReadyToRestore(inspection)
+            } else {
+                _backupUiState.value = BackupUiState.RestoreError(inspection.errorMessage ?: "Invalid backup file")
             }
         }
     }
 
-    private fun isSensitiveKey(key: String): Boolean {
-        val lower = key.lowercase()
-        return lower.contains("token") || lower.contains("secret") ||
-               lower.contains("api_key") || lower.contains("apikey") ||
-               lower.contains("pin") || lower.contains("password")
+    fun confirmRestore(inspection: BackupInspectionResult) {
+        val root = inspection.rootJson ?: return
+        viewModelScope.launch {
+            _backupUiState.value = BackupUiState.Restoring
+            val result = backupManager.applyBackup(root)
+            if (result.isSuccess) {
+                refreshAllStorageTelemetry()
+                _backupUiState.value = BackupUiState.RestoreSuccess(inspection.summary)
+            } else {
+                val err = result.exceptionOrNull()?.message ?: "Restore failed"
+                _backupUiState.value = BackupUiState.RestoreError(err)
+            }
+        }
     }
 
     private fun formatSize(bytes: Long): String {

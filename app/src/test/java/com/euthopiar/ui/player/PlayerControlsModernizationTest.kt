@@ -191,4 +191,60 @@ class PlayerControlsModernizationTest {
         composeTestRule.onNodeWithText("4K").performClick()
         composeTestRule.onNodeWithText("UpCloud").assertExists()
     }
+
+    @Test
+    fun testPlayerActionDockRendersQualityButtonAndTriggersCallback() {
+        var qualityClicked = false
+
+        composeTestRule.setContent {
+            EuthopiarTheme {
+                PlayerActionDock(
+                    isTvSeries = false,
+                    activeSidePanel = PlayerSidePanelType.NONE,
+                    onOpenEpisodes = {},
+                    onOpenSources = {},
+                    onOpenQuality = { qualityClicked = true },
+                    onOpenTuning = {}
+                )
+            }
+        }
+
+        composeTestRule.onNodeWithContentDescription("Video Quality").assertExists()
+        composeTestRule.onNodeWithContentDescription("Video Quality").performClick()
+        assertTrue("Video Quality button was clicked", qualityClicked)
+    }
+
+    @Test
+    fun testPlayerBottomControlsShowsQualityPill() {
+        var qualityOpened = false
+
+        composeTestRule.setContent {
+            EuthopiarTheme {
+                PlayerBottomControls(
+                    visible = true,
+                    isScrubbing = false,
+                    currentPositionMs = 0L,
+                    durationMs = 60_000L,
+                    bufferedPositionMs = 0L,
+                    scrubPositionMs = 0L,
+                    playbackSpeed = 1.0f,
+                    isTvSeries = false,
+                    hasNextEpisode = false,
+                    selectedQuality = VideoQualityOption("1080p", "1080p", height = 1080),
+                    onScrubStart = {},
+                    onScrubProgress = {},
+                    onScrubEnd = {},
+                    onOpenSpeed = {},
+                    onOpenAudioSubtitles = {},
+                    onOpenQuality = { qualityOpened = true },
+                    onOpenSettings = {},
+                    onNextEpisode = {}
+                )
+            }
+        }
+
+        composeTestRule.onNodeWithText("1080p").assertExists()
+        composeTestRule.onNodeWithText("1080p").performClick()
+        assertTrue("Quality pill was clicked", qualityOpened)
+    }
 }

@@ -77,12 +77,14 @@ fun PluginRuntimeResult.toStreamItem(
         )
     } ?: emptyList()
 
-    val magnet = if (url.startsWith("magnet:", ignoreCase = true)) {
-        url
+    val (cleanStreamUrl, combinedHeaders) = com.euthopiar.core.network.PlayerPlaybackNetworking.extractUrlAndInlineHeaders(url, cleanHeaders)
+
+    val magnet = if (cleanStreamUrl.startsWith("magnet:", ignoreCase = true)) {
+        cleanStreamUrl
     } else if (!infoHash.isNullOrBlank()) {
         "magnet:?xt=urn:btih:$infoHash"
-    } else if (url.startsWith("torrent://", ignoreCase = true) || url.startsWith("torrent:", ignoreCase = true)) {
-        val raw = url.removePrefix("torrent://").removePrefix("TORRENT://")
+    } else if (cleanStreamUrl.startsWith("torrent://", ignoreCase = true) || cleanStreamUrl.startsWith("torrent:", ignoreCase = true)) {
+        val raw = cleanStreamUrl.removePrefix("torrent://").removePrefix("TORRENT://")
             .removePrefix("torrent:").removePrefix("TORRENT:")
             .substringBefore('/').substringBefore('?').trim()
         if (raw.isNotEmpty()) "magnet:?xt=urn:btih:$raw" else null
@@ -97,8 +99,9 @@ fun PluginRuntimeResult.toStreamItem(
         name = name ?: title,
         title = title,
         description = subtitleParts.joinToString(" • ").ifBlank { null },
-        url = url,
+        url = cleanStreamUrl,
         infoHash = infoHash,
+        fileIdx = fileIdx,
         magnetUrl = magnet,
         seeders = parsedSeeders,
         peers = peers,
@@ -108,7 +111,7 @@ fun PluginRuntimeResult.toStreamItem(
         addonName = addonName,
         addonId = addonId,
         streamType = type,
-        headers = cleanHeaders,
+        headers = combinedHeaders,
         externalSubtitles = extSubs,
         audioLanguages = audioLangs
     )
@@ -125,6 +128,8 @@ fun List<StreamItem>.sortedForGroupedDisplay(): List<StreamItem> =
                 q.contains("480") || q.contains("sd") -> 3
                 else -> 4
             }
-        }.thenByDescending { it.seeders ?: 0 }
+        }.thenByDescending { it.matchScore >= 0.80 }
+         .thenByDescending { it.matchScore }
+         .thenByDescending { it.seeders ?: 0 }
          .thenBy { it.sourceName.orEmpty().lowercase() }
     )

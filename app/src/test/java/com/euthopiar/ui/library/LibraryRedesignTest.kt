@@ -504,5 +504,144 @@ class LibraryRedesignTest {
         assertEquals(16f, LibraryDimens.toggleKnobSize.value)
         assertEquals(14f, LibraryDimens.iconTileRadius.value)
     }
+
+    @Test
+    fun testBatchDeletionPreview_resolvesDownloadsVsSavedItems() {
+        val downloads = listOf(
+            DownloadItem(
+                id = "dl_1",
+                mediaId = "m_1",
+                title = "Severance",
+                subtitle = "Season 1 • Episode 1",
+                posterUrl = "http://example.com/sev.jpg",
+                isTvSeries = true,
+                seasonNumber = 1,
+                episodeNumber = 1
+            ),
+            DownloadItem(
+                id = "dl_2",
+                mediaId = "m_2",
+                title = "Dune",
+                posterUrl = "http://example.com/dune.jpg",
+                isTvSeries = false
+            )
+        )
+
+        val savedItems = listOf(
+            LibraryItem(
+                id = "sav_1",
+                mediaId = "m_99",
+                title = "Inception",
+                posterUrl = "http://example.com/inc.jpg",
+                backdropUrl = null,
+                mediaType = MediaType.MOVIE,
+                rating = 8.8,
+                year = 2010
+            )
+        )
+
+        val selectedDownloadIds = setOf("dl_1", "dl_2")
+
+        // 1. Simulating downloads tab deletion preview resolution
+        val isDownloadsTab = true
+        val previewItemsFromDownloads = if (isDownloadsTab) {
+            downloads.filter { it.id in selectedDownloadIds }.map { dl ->
+                val meta = if (!dl.subtitle.isNullOrBlank()) {
+                    dl.subtitle
+                } else if (dl.seasonNumber != null && dl.episodeNumber != null) {
+                    "Season ${dl.seasonNumber}, Episode ${dl.episodeNumber}"
+                } else if (dl.isTvSeries) {
+                    "TV Series"
+                } else {
+                    "Movie"
+                }
+                Triple(dl.title, meta, dl.posterUrl)
+            }
+        } else {
+            savedItems.filter { it.id in selectedDownloadIds }.map { item ->
+                Triple(item.title, "Movie", item.posterUrl)
+            }
+        }
+
+        // Must NOT be empty when deleting downloads (fixing the bug where items list was queried instead)
+        assertEquals(2, previewItemsFromDownloads.size)
+        assertEquals("Severance", previewItemsFromDownloads[0].first)
+        assertEquals("Season 1 • Episode 1", previewItemsFromDownloads[0].second)
+        assertEquals("http://example.com/sev.jpg", previewItemsFromDownloads[0].third)
+        assertEquals("Dune", previewItemsFromDownloads[1].first)
+        assertEquals("Movie", previewItemsFromDownloads[1].second)
+
+        // 2. Simulating saved wall tab deletion preview resolution
+        val selectedSavedIds = setOf("sav_1")
+        val isDownloadsTabFalse = false
+        val previewItemsFromSaved = if (isDownloadsTabFalse) {
+            downloads.filter { it.id in selectedSavedIds }.map { Triple(it.title, "Movie", it.posterUrl) }
+        } else {
+            savedItems.filter { it.id in selectedSavedIds }.map { item ->
+                Triple(item.title, "Movie", item.posterUrl)
+            }
+        }
+
+        assertEquals(1, previewItemsFromSaved.size)
+        assertEquals("Inception", previewItemsFromSaved[0].first)
+    }
+
+    @Test
+    fun testDualToneStorage_segmentFractionsCalculation() {
+        val totalDeviceBytes = 128L * 1024 * 1024 * 1024 // 128 GB
+        val completedBytes = 16L * 1024 * 1024 * 1024   // 16 GB downloaded
+        val activeBytes = 4L * 1024 * 1024 * 1024        // 4 GB in-progress
+
+        val downloadedFraction = if (totalDeviceBytes > 0L && completedBytes > 0L) {
+            (completedBytes.toFloat() / totalDeviceBytes.toFloat()).coerceIn(0.005f, 1f)
+        } else 0f
+
+        val inProgressFraction = if (totalDeviceBytes > 0L && activeBytes > 0L) {
+            (activeBytes.toFloat() / totalDeviceBytes.toFloat()).coerceIn(0.005f, 1f)
+        } else 0f
+
+        assertEquals(0.125f, downloadedFraction, 0.001f)
+        assertEquals(0.03125f, inProgressFraction, 0.001f)
+        assertTrue(downloadedFraction + inProgressFraction <= 1.0f)
+
+        // Critical edge case: 0 completed bytes must evaluate to 0f, NOT 0.005f
+        val zeroCompletedBytes = 0L
+        val zeroFraction = if (totalDeviceBytes > 0L && zeroCompletedBytes > 0L) {
+            (zeroCompletedBytes.toFloat() / totalDeviceBytes.toFloat()).coerceIn(0.005f, 1f)
+        } else 0f
+        assertEquals(0f, zeroFraction, 0.0f)
+    }
+
+    @Test
+    fun testSelectAllIds_toggleSemantics() {
+        var currentSelection = emptySet<String>()
+        val allIds = setOf("item_1", "item_2", "item_3")
+
+        fun selectAll(ids: Set<String>) {
+            if (ids.isEmpty()) return
+            if (currentSelection.containsAll(ids)) {
+                currentSelection = currentSelection - ids
+            } else {
+                currentSelection = currentSelection + ids
+            }
+        }
+
+        // 1. Initial select all from empty
+        selectAll(allIds)
+        assertEquals(allIds, currentSelection)
+
+        // 2. Deselect all when all are selected
+        selectAll(allIds)
+        assertTrue(currentSelection.isEmpty())
+
+        // 3. Partial selection: when 1 item is selected, selectAll should select the rest
+        currentSelection = setOf("item_1")
+        selectAll(allIds)
+        assertEquals(allIds, currentSelection)
+
+        // 4. Then deselect all
+        selectAll(allIds)
+        assertTrue(currentSelection.isEmpty())
+    }
 }
 

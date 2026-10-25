@@ -1,6 +1,8 @@
 package com.euthopiar.core.js
 
+import com.euthopiar.core.model.DrmConfig
 import com.euthopiar.core.model.PluginManifest
+import com.euthopiar.core.model.StreamContainer
 import com.euthopiar.core.model.StreamSource
 import com.euthopiar.core.model.SubtitleTrack
 import kotlinx.serialization.SerialName
@@ -149,7 +151,8 @@ data class PluginSubtitleResult(
     val url: String,
     val language: String,
     val name: String? = null,
-    val headers: Map<String, String>? = null
+    val headers: Map<String, String>? = null,
+    val mimeType: String? = null
 )
 
 @Serializable
@@ -165,11 +168,63 @@ data class PluginRuntimeResult(
     val seeders: Int? = null,
     val peers: Int? = null,
     val infoHash: String? = null,
+    val fileIdx: Int? = null,
     val headers: Map<String, String>? = null,
-    val subtitles: List<PluginSubtitleResult>? = null
+    val subtitles: List<PluginSubtitleResult>? = null,
+    val format: String? = null,
+    val trackers: List<String>? = null,
+    val drm: DrmConfig? = null,
+    val manifestContent: String? = null
 ) {
-    fun toStreamSource(): StreamSource {
-        val isM3u8 = type?.equals("m3u8", ignoreCase = true) == true ||
+    fun inferContainer(scraperFormats: List<String>? = null): StreamContainer {
+        val explicit = (format ?: type)?.lowercase()?.trim()
+        if (explicit != null) {
+            when {
+                explicit == "mpd" || explicit == "dash" || explicit.contains("dash") -> return StreamContainer.DASH
+                explicit == "m3u8" || explicit == "hls" || explicit.contains("hls") -> return StreamContainer.HLS
+                explicit == "mp4" || explicit.contains("mp4") -> return StreamContainer.MP4
+                explicit == "mkv" || explicit.contains("matroska") -> return StreamContainer.MKV
+                explicit == "webm" -> return StreamContainer.WEBM
+                explicit == "ts" -> return StreamContainer.TS
+                explicit == "torrent" || explicit == "magnet" || explicit == "p2p" -> return StreamContainer.P2P
+            }
+        }
+        val cleanUrl = url.trim().lowercase()
+        if (cleanUrl.startsWith("magnet:") || cleanUrl.startsWith("torrent:") || !infoHash.isNullOrBlank()) {
+            return StreamContainer.P2P
+        }
+        val path = cleanUrl.substringBefore('?').substringBefore('#')
+        val urlContainer = when {
+            path.endsWith(".m3u8") || cleanUrl.contains("format=m3u8") -> StreamContainer.HLS
+            path.endsWith(".mpd") || cleanUrl.contains("format=mpd") -> StreamContainer.DASH
+            path.endsWith(".mp4") -> StreamContainer.MP4
+            path.endsWith(".mkv") -> StreamContainer.MKV
+            path.endsWith(".webm") -> StreamContainer.WEBM
+            path.endsWith(".ts") -> StreamContainer.TS
+            else -> StreamContainer.AUTO
+        }
+        if (urlContainer != StreamContainer.AUTO) {
+            return urlContainer
+        }
+
+        // Default to StreamContainer.HLS if scraper manifest declares ["m3u8"] or HLS
+        if (scraperFormats != null && scraperFormats.isNotEmpty()) {
+            val lowerFormats = scraperFormats.map { it.lowercase().trim() }
+            if (lowerFormats.all { it == "m3u8" || it == "hls" }) {
+                return StreamContainer.HLS
+            }
+            if (lowerFormats.all { it == "mpd" || it == "dash" }) {
+                return StreamContainer.DASH
+            }
+        }
+
+        return StreamContainer.AUTO
+    }
+
+    fun toStreamSource(scraperFormats: List<String>? = null): StreamSource {
+        val detectedContainer = inferContainer(scraperFormats)
+        val isM3u8 = detectedContainer == StreamContainer.HLS ||
+                type?.equals("m3u8", ignoreCase = true) == true ||
                 url.contains(".m3u8", ignoreCase = true) ||
                 url.contains("hls", ignoreCase = true)
         val cleanServerName = name ?: provider ?: "Server"
@@ -182,15 +237,28 @@ data class PluginRuntimeResult(
             isM3u8 = isM3u8,
             headers = headers ?: emptyMap(),
             infoHash = infoHash,
-            seeders = seeders
+            fileIdx = fileIdx,
+            seeders = seeders,
+            subtitles = toSubtitles(),
+            size = size,
+            container = detectedContainer,
+            drm = drm,
+            trackers = trackers ?: emptyList(),
+            manifestContent = manifestContent
         )
     }
 
     fun toSubtitles(): List<SubtitleTrack> {
-        return subtitles?.map { sub ->
+        return subtitles?.filter { sub ->
+            val u = sub.url.trim().lowercase()
+            u.startsWith("http://") || u.startsWith("https://") || u.startsWith("data:")
+        }?.map { sub ->
             SubtitleTrack(
-                url = sub.url,
-                language = sub.language
+                url = sub.url.trim(),
+                language = sub.language.trim(),
+                headers = sub.headers ?: headers ?: emptyMap(),
+                name = sub.name?.trim() ?: sub.language.trim(),
+                mimeType = sub.mimeType?.trim()
             )
         } ?: emptyList()
     }

@@ -20,23 +20,22 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import com.euthopiar.ui.theme.Accent
 import kotlin.math.abs
 
 /**
- * Liquid Jelly-inspired page indicator for the onboarding flow.
- * Uses real-time pager offset fraction to provide fluid elastic expansion and morphing.
+ * Page indicator for onboarding flow (kept for backward compatibility).
+ * Restyled with pure monochrome white dots, zero red accents.
  */
 @Composable
 fun OnboardingJellyIndicator(
     pagerState: PagerState,
     pageCount: Int,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     Row(
         modifier = modifier,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         repeat(pageCount) { index ->
             val isCurrent = pagerState.currentPage == index
@@ -46,9 +45,9 @@ fun OnboardingJellyIndicator(
                 derivedStateOf {
                     val distance = abs((pagerState.currentPage + offsetFraction) - index)
                     when {
-                        distance < 0.25f -> 26.dp
-                        distance < 0.65f -> 18.dp
-                        else -> 7.dp
+                        distance < 0.25f -> 24.dp
+                        distance < 0.65f -> 16.dp
+                        else -> 6.dp
                     }
                 }
             }
@@ -57,19 +56,19 @@ fun OnboardingJellyIndicator(
                 targetValue = targetWidth,
                 animationSpec = spring(
                     dampingRatio = Spring.DampingRatioMediumBouncy,
-                    stiffness = Spring.StiffnessLow
+                    stiffness = Spring.StiffnessLow,
                 ),
-                label = "jellyDotWidth_$index"
+                label = "jellyDotWidth_$index",
             )
 
-            val dotColor = if (isCurrent) Accent else Color.White.copy(alpha = 0.22f)
+            val dotColor = if (isCurrent) Color.White.copy(alpha = 0.90f) else Color.White.copy(alpha = 0.22f)
 
             Box(
                 modifier = Modifier
-                    .height(6.dp)
+                    .height(4.dp)
                     .width(animatedWidth)
                     .clip(CircleShape)
-                    .background(dotColor)
+                    .background(dotColor),
             )
         }
     }

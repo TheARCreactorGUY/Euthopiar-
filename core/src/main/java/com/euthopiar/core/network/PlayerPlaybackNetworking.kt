@@ -3,6 +3,7 @@ package com.euthopiar.core.network
 import okhttp3.ConnectionPool
 import okhttp3.CookieJar
 import okhttp3.Dns
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
@@ -103,19 +104,49 @@ object PlayerPlaybackNetworking {
 
     val playbackDns: Dns = SplitHorizonDns()
 
-    private class PreservedHeadersTag(val originalHost: String, val authorization: String?, val cookie: String?)
+    data class OriginRequestMetadata(
+        val originalHost: String,
+        val referer: String?,
+        val origin: String?,
+        val authorization: String?,
+        val cookie: String?
+    )
 
     private fun isLoopbackHost(host: String): Boolean = when (host.lowercase()) {
         "127.0.0.1", "localhost", "::1" -> true
         else -> false
     }
 
+    fun isPreSignedStorageUrl(url: okhttp3.HttpUrl): Boolean {
+        val host = url.host.lowercase()
+        val fullUrl = url.toString().lowercase()
+        val isStorageHost = host.contains("r2.cloudflarestorage.com") ||
+                host.contains(".r2.dev") ||
+                host.contains("amazonaws.com") ||
+                host.contains("storage.googleapis.com") ||
+                host.contains("blob.core.windows.net") ||
+                host.contains("digitaloceanspaces.com") ||
+                host.contains("backblazeb2.com")
+        val hasSigParams = url.queryParameterNames.any { name ->
+            val lowerName = name.lowercase()
+            lowerName.startsWith("x-amz-") ||
+                    lowerName == "sig" ||
+                    lowerName == "signature" ||
+                    lowerName.contains("signature") ||
+                    lowerName == "googleaccessid"
+        } || fullUrl.contains("x-amz-signature") || fullUrl.contains("signature=")
+        return isStorageHost || hasSigParams
+    }
+
     fun shouldStripAuthorization(url: String): Boolean {
-        val lower = url.lowercase()
-        return lower.contains("x-amz-signature") ||
-                lower.contains("signature=") ||
-                lower.contains("r2.cloudflarestorage.com") ||
-                lower.contains("storage.googleapis.com")
+        val parsed = url.toHttpUrlOrNull()
+        return if (parsed != null) isPreSignedStorageUrl(parsed) else {
+            val lower = url.lowercase()
+            lower.contains("x-amz-signature") ||
+                    lower.contains("signature=") ||
+                    lower.contains("r2.cloudflarestorage.com") ||
+                    lower.contains("storage.googleapis.com")
+        }
     }
 
     /**
@@ -145,44 +176,34 @@ object PlayerPlaybackNetworking {
                     chain
                 }
 
-                val urlStr = request.url.toString()
-                val stripAuth = shouldStripAuthorization(urlStr)
-                val cleanRequest = if (stripAuth && request.header("Authorization") != null) {
-                    request.newBuilder().removeHeader("Authorization").build()
+                val taggedRequest = if (request.tag(OriginRequestMetadata::class.java) == null) {
+                    request.newBuilder().tag(
+                        OriginRequestMetadata::class.java,
+                        OriginRequestMetadata(
+                            originalHost = request.url.host,
+                            referer = request.header("Referer"),
+                            origin = request.header("Origin"),
+                            authorization = request.header("Authorization"),
+                            cookie = request.header("Cookie")
+                        )
+                    ).build()
                 } else {
                     request
                 }
 
-                val authHeader = if (stripAuth) null else cleanRequest.header("Authorization")
-                val cookieHeader = cleanRequest.header("Cookie")
-                val taggedRequest = if (cleanRequest.tag(PreservedHeadersTag::class.java) == null) {
-                    cleanRequest.newBuilder().tag(
-                        PreservedHeadersTag::class.java,
-                        PreservedHeadersTag(
-                            originalHost = cleanRequest.url.host,
-                            authorization = authHeader,
-                            cookie = cookieHeader
-                        )
-                    ).build()
-                } else {
-                    cleanRequest
-                }
                 var resp = requestChain.proceed(taggedRequest)
 
                 // If an S3/R2/GCS presigned URL returned 403, retry once with stripped Referer/Origin headers
                 if (resp.code == 403) {
-                    val lowerUrl = taggedRequest.url.toString().lowercase()
-                    val isPreSignedCloud = lowerUrl.contains("x-amz-") ||
-                            lowerUrl.contains("signature=") ||
-                            lowerUrl.contains("r2.cloudflarestorage.com") ||
-                            lowerUrl.contains(".r2.dev") ||
-                            lowerUrl.contains("storage.googleapis.com")
+                    val isPreSigned = isPreSignedStorageUrl(taggedRequest.url)
                     val hasReferer = !taggedRequest.header("Referer").isNullOrBlank()
                     val hasOrigin = !taggedRequest.header("Origin").isNullOrBlank()
-                    if (isPreSignedCloud && (hasReferer || hasOrigin)) {
+                    if (isPreSigned && (hasReferer || hasOrigin)) {
                         val strippedReq = taggedRequest.newBuilder()
                             .removeHeader("Referer")
                             .removeHeader("Origin")
+                            .removeHeader("Authorization")
+                            .removeHeader("Cookie")
                             .build()
                         val retryResp = requestChain.proceed(strippedReq)
                         if (retryResp.isSuccessful || retryResp.code == 206) {
@@ -197,27 +218,45 @@ object PlayerPlaybackNetworking {
             }
             .addNetworkInterceptor { chain ->
                 val request = chain.request()
-                val urlStr = request.url.toString()
-                val stripAuth = shouldStripAuthorization(urlStr)
+                val meta = request.tag(OriginRequestMetadata::class.java)
+                val isPreSigned = isPreSignedStorageUrl(request.url)
+                val isSameHost = meta != null && request.url.host.equals(meta.originalHost, ignoreCase = true)
 
-                val tag = request.tag(PreservedHeadersTag::class.java)
-                var modifiedBuilder: okhttp3.Request.Builder? = null
+                val builder = request.newBuilder()
+                var modified = false
 
-                if (stripAuth && request.header("Authorization") != null) {
-                    modifiedBuilder = (modifiedBuilder ?: request.newBuilder()).removeHeader("Authorization")
+                if (isPreSigned) {
+                    if (request.header("Authorization") != null) {
+                        builder.removeHeader("Authorization")
+                        modified = true
+                    }
+                    if (request.header("Cookie") != null) {
+                        builder.removeHeader("Cookie")
+                        modified = true
+                    }
+                    if (!isSameHost) {
+                        if (request.header("Referer") != null) {
+                            builder.removeHeader("Referer")
+                            modified = true
+                        }
+                        if (request.header("Origin") != null) {
+                            builder.removeHeader("Origin")
+                            modified = true
+                        }
+                    }
+                } else if (isSameHost) {
+                    if (request.header("Authorization") == null && meta.authorization != null) {
+                        builder.header("Authorization", meta.authorization)
+                        modified = true
+                    }
+                    if (request.header("Cookie") == null && meta.cookie != null) {
+                        builder.header("Cookie", meta.cookie)
+                        modified = true
+                    }
                 }
 
-                if (tag != null) {
-                    val isSameHost = request.url.host.equals(tag.originalHost, ignoreCase = true)
-                    if (isSameHost && !stripAuth && request.header("Authorization") == null && tag.authorization != null) {
-                        modifiedBuilder = (modifiedBuilder ?: request.newBuilder()).header("Authorization", tag.authorization)
-                    }
-                    if (isSameHost && request.header("Cookie") == null && tag.cookie != null) {
-                        modifiedBuilder = (modifiedBuilder ?: request.newBuilder()).header("Cookie", tag.cookie)
-                    }
-                }
-                if (modifiedBuilder != null) {
-                    chain.proceed(modifiedBuilder.build())
+                if (modified) {
+                    chain.proceed(builder.build())
                 } else {
                     chain.proceed(request)
                 }
@@ -253,6 +292,56 @@ object PlayerPlaybackNetworking {
                 key to value
             }
         }.toMap()
+
+    private fun canonicalHeaderName(name: String): String {
+        return when (name.lowercase()) {
+            "user-agent" -> "User-Agent"
+            "referer" -> "Referer"
+            "origin" -> "Origin"
+            "cookie" -> "Cookie"
+            "authorization" -> "Authorization"
+            "accept" -> "Accept"
+            "range" -> "Range"
+            "content-type" -> "Content-Type"
+            else -> name.trim()
+        }
+    }
+
+    fun extractUrlAndInlineHeaders(
+        rawUrl: String,
+        existingHeaders: Map<String, String> = emptyMap()
+    ): Pair<String, Map<String, String>> {
+        val cleanUrl = if (rawUrl.contains('|')) rawUrl.substringBefore('|').trim() else rawUrl.trim()
+        val inlineHeadersString = if (rawUrl.contains('|')) rawUrl.substringAfter('|').trim() else ""
+
+        val normalized = LinkedHashMap<String, Pair<String, String>>()
+        for ((k, v) in existingHeaders) {
+            val trimmedKey = k.trim()
+            if (trimmedKey.isNotBlank() && v.isNotBlank()) {
+                val canonicalKey = canonicalHeaderName(trimmedKey)
+                normalized[canonicalKey.lowercase()] = canonicalKey to v.trim()
+            }
+        }
+
+        if (inlineHeadersString.isNotEmpty()) {
+            inlineHeadersString.split('&').forEach { param ->
+                val idx = param.indexOf('=')
+                if (idx > 0) {
+                    val rawK = param.substring(0, idx).trim()
+                    val rawV = param.substring(idx + 1).trim()
+                    val k = try { java.net.URLDecoder.decode(rawK, "UTF-8") } catch (_: Exception) { rawK }
+                    val v = try { java.net.URLDecoder.decode(rawV, "UTF-8") } catch (_: Exception) { rawV }
+                    if (k.isNotBlank() && v.isNotBlank()) {
+                        val canonicalKey = canonicalHeaderName(k)
+                        normalized[canonicalKey.lowercase()] = canonicalKey to v
+                    }
+                }
+            }
+        }
+
+        val resultHeaders = normalized.values.associate { it.first to it.second }
+        return Pair(cleanUrl, resultHeaders)
+    }
 
     fun createClient(cookieJar: CookieJar? = null): OkHttpClient {
         val builder = baseClient.newBuilder()

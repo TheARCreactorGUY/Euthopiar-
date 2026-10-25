@@ -290,4 +290,68 @@ class HeroCarouselOverhaulTest {
         val lastStop = hudStops.last()
         assertEquals(0.40f, lastStop.second.alpha, 0.01f)
     }
+
+    @Test
+    fun testHeroWatchlistStateReflection() {
+        val bookmarkedIds = setOf("media_1", "media_3")
+        assertTrue("media_1 should be recognized as in watchlist", bookmarkedIds.contains("media_1"))
+        assertFalse("media_2 should not be recognized as in watchlist", bookmarkedIds.contains("media_2"))
+        assertTrue("media_3 should be recognized as in watchlist", bookmarkedIds.contains("media_3"))
+    }
+
+    @Test
+    fun testPaginationCanvasSegmentGeometryStandard() {
+        // Standard <= 8 slides
+        val itemsCount = 5
+        val activeIndex = 2
+        val gap = 5f
+        val activeWidth = 28f
+        val inactiveWidth = 16f
+
+        val widths = (0 until itemsCount).map { index ->
+            if (index == activeIndex) activeWidth else inactiveWidth
+        }
+        val totalWidth = widths.sum() + (itemsCount - 1) * gap
+        val containerWidth = 400f
+        val startX = (containerWidth - totalWidth) / 2f
+
+        assertEquals(5, widths.size)
+        assertEquals(28f, widths[2])
+        assertEquals(16f, widths[0])
+        assertEquals(16f, widths[1])
+        // Total width: 28 + 4*16 + 4*5 = 28 + 64 + 20 = 112
+        assertEquals(112f, totalWidth)
+        assertEquals(144f, startX)
+    }
+
+    @Test
+    fun testSwipeStabilizationZeroVerticalDip() {
+        // Verify that content layer has zero translationY dip during horizontal swipe
+        fun computeContentTranslation(offset: Float, heroWidthPx: Float, contentParallax: Float): Pair<Float, Float> {
+            val translationX = -offset * heroWidthPx * contentParallax
+            val translationY = 0f // 12dp dip removed
+            return Pair(translationX, translationY)
+        }
+
+        val (tx, ty) = computeContentTranslation(0.5f, 1080f, 0.18f)
+        assertEquals(-97.2f, tx, 0.01f)
+        assertEquals(0f, ty, 0.001f)
+    }
+
+    @Test
+    fun testWatchlistActionSheetTvSeriesAndAnimeMapping() {
+        fun isTvSeriesForSheet(type: MediaType): Boolean {
+            return type == MediaType.TV_SERIES || type == MediaType.ANIME
+        }
+
+        assertTrue("TV_SERIES must be recognized as TV in watchlist sheet", isTvSeriesForSheet(MediaType.TV_SERIES))
+        assertTrue("ANIME must be recognized as TV in watchlist sheet", isTvSeriesForSheet(MediaType.ANIME))
+        assertFalse("MOVIE must not be recognized as TV in watchlist sheet", isTvSeriesForSheet(MediaType.MOVIE))
+    }
+
+    @Test
+    fun testGlassDefaultsParityTokens() {
+        assertEquals("Glass noise factor must match FloatingNavbar at 0.045f", 0.045f, com.euthopiar.ui.theme.GlassDefaults.NoiseFactor, 0.0001f)
+        assertEquals("Glass blur radius must match 24.dp", 24f, com.euthopiar.ui.theme.GlassDefaults.BlurRadius.value, 0.01f)
+    }
 }

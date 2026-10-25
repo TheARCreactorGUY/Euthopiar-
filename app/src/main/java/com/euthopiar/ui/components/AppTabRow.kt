@@ -2,6 +2,7 @@ package com.euthopiar.ui.components
 
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -59,14 +60,17 @@ fun AppTabRow(
         }
     }
 
+    val reduceMotion = LocalReduceMotion.current
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+
     val animatedOffset by animateDpAsState(
         targetValue = activeOffset,
-        animationSpec = if (!hasMeasured) androidx.compose.animation.core.snap() else tween(durationMillis = 220, easing = FastOutSlowInEasing),
+        animationSpec = if (reduceMotion || !hasMeasured) androidx.compose.animation.core.snap() else spring(dampingRatio = 0.75f, stiffness = 500f),
         label = "tabIndicatorOffset"
     )
     val animatedWidth by animateDpAsState(
         targetValue = activeWidth,
-        animationSpec = if (!hasMeasured) androidx.compose.animation.core.snap() else tween(durationMillis = 220, easing = FastOutSlowInEasing),
+        animationSpec = if (reduceMotion || !hasMeasured) androidx.compose.animation.core.snap() else spring(dampingRatio = 0.75f, stiffness = 500f),
         label = "tabIndicatorWidth"
     )
 
@@ -98,7 +102,12 @@ fun AppTabRow(
                             interactionSource = interactionSource,
                             indication = null,
                             role = Role.Tab,
-                            onClick = { onTabSelected(index) }
+                            onClick = {
+                                try {
+                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.Confirm)
+                                } catch (_: Throwable) {}
+                                onTabSelected(index)
+                            }
                         )
                         .semantics {
                             this.role = Role.Tab

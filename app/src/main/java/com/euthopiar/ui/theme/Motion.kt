@@ -2,10 +2,14 @@ package com.euthopiar.ui.theme
 
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -71,14 +75,14 @@ val LocalReduceMotion = compositionLocalOf { false }
 val LocalAmoledMode = compositionLocalOf { true }
 
 /**
- * Standard pressable modifier for consumer-grade streaming UI (alpha 0.85 + scale 0.98, no wobble).
+ * Standard pressable modifier for consumer-grade streaming UI (recoil scale 0.96, alpha 1.0, non-bouncy spring, haptics).
  * Exposes proper accessibility click semantics and Role.Button by default.
  */
 @OptIn(ExperimentalFoundationApi::class)
 fun Modifier.pressable(
     enabled: Boolean = true,
-    scaleDown: Float = 0.98f,
-    pressedAlpha: Float = 0.85f,
+    scaleDown: Float = 0.96f,
+    pressedAlpha: Float = 1.0f,
     role: Role? = Role.Button,
     onClickLabel: String? = null,
     interactionSource: MutableInteractionSource? = null,
@@ -86,17 +90,24 @@ fun Modifier.pressable(
     onClick: () -> Unit
 ): Modifier = composed {
     val reduceMotion = LocalReduceMotion.current
+    val haptic = LocalHapticFeedback.current
     var isPressed by remember { mutableStateOf(false) }
 
     val scale by animateFloatAsState(
         targetValue = if (isPressed && enabled && !reduceMotion) scaleDown else 1f,
-        animationSpec = tween(Motion.DurationMicro, easing = Motion.StandardEasing),
+        animationSpec = if (reduceMotion) snap() else spring(
+            dampingRatio = Spring.DampingRatioNoBouncy,
+            stiffness = Spring.StiffnessMedium
+        ),
         label = "pressScale"
     )
 
     val alpha by animateFloatAsState(
         targetValue = if (isPressed && enabled && !reduceMotion) pressedAlpha else 1f,
-        animationSpec = tween(Motion.DurationMicro, easing = Motion.StandardEasing),
+        animationSpec = if (reduceMotion) snap() else spring(
+            dampingRatio = Spring.DampingRatioNoBouncy,
+            stiffness = Spring.StiffnessMedium
+        ),
         label = "pressAlpha"
     )
 
@@ -109,8 +120,18 @@ fun Modifier.pressable(
             enabled = enabled,
             role = role,
             onClickLabel = onClickLabel,
-            onLongClick = onLongClick,
-            onClick = onClick
+            onLongClick = {
+                try {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                } catch (_: Exception) {}
+                onLongClick()
+            },
+            onClick = {
+                try {
+                    haptic.performHapticFeedback(HapticFeedbackType.Confirm)
+                } catch (_: Exception) {}
+                onClick()
+            }
         )
     } else {
         Modifier.clickable(
@@ -119,13 +140,21 @@ fun Modifier.pressable(
             enabled = enabled,
             role = role,
             onClickLabel = onClickLabel,
-            onClick = onClick
+            onClick = {
+                try {
+                    haptic.performHapticFeedback(HapticFeedbackType.Confirm)
+                } catch (_: Exception) {}
+                onClick()
+            }
         )
     }
 
     this
-        .scale(scale)
-        .alpha(alpha)
+        .graphicsLayer {
+            scaleX = scale
+            scaleY = scale
+            this.alpha = alpha
+        }
         .then(clickModifier)
         .pointerInput(enabled) {
             if (!enabled) return@pointerInput
@@ -139,7 +168,8 @@ fun Modifier.pressable(
 }
 
 /**
- * Subtle spring physics dedicated specifically to the Primary Play button.
+ * Tactile spring physics dedicated specifically to the Primary Play button.
+ * Authentic 0.96f squeeze, release spring overshoot, graphicsLayer transform, and Confirm haptic.
  * Exposes proper accessibility click semantics and Role.Button by default.
  */
 fun Modifier.playButtonSpringPress(
@@ -149,20 +179,27 @@ fun Modifier.playButtonSpringPress(
     onClick: () -> Unit
 ): Modifier = composed {
     val reduceMotion = LocalReduceMotion.current
+    val haptic = LocalHapticFeedback.current
     var isPressed by remember { mutableStateOf(false) }
 
     val scale by animateFloatAsState(
-        targetValue = if (isPressed && enabled && !reduceMotion) 0.98f else 1f,
+        targetValue = if (isPressed && enabled && !reduceMotion) 0.96f else 1f,
         animationSpec = if (isPressed) {
-            tween(durationMillis = 100, easing = FastOutSlowInEasing)
+            tween(durationMillis = 70, easing = LinearEasing)
         } else {
-            tween(durationMillis = 150, easing = FastOutSlowInEasing)
+            spring(
+                dampingRatio = 0.55f,
+                stiffness = Spring.StiffnessMedium
+            )
         },
         label = "playSpring"
     )
 
     this
-        .scale(scale)
+        .graphicsLayer {
+            scaleX = scale
+            scaleY = scale
+        }
         .clickable(
             interactionSource = remember { MutableInteractionSource() },
             indication = null,
@@ -176,6 +213,9 @@ fun Modifier.playButtonSpringPress(
             awaitEachGesture {
                 awaitFirstDown(requireUnconsumed = false)
                 isPressed = true
+                try {
+                    haptic.performHapticFeedback(HapticFeedbackType.Confirm)
+                } catch (_: Throwable) {}
                 waitForUpOrCancellation()
                 isPressed = false
             }

@@ -245,15 +245,8 @@ object ExternalSubtitleEngine {
             )
             if (!tmdbId.isNullOrBlank()) {
                 val endpoint = if (isTv) "tv" else "movie"
-                val extUrl = "https://api.themoviedb.org/3/$endpoint/$tmdbId/external_ids?api_key=${com.euthopiar.core.util.TmdbBridge.DEFAULT_API_KEY}"
-                val req = Request.Builder().url(extUrl).header("User-Agent", "Mozilla/5.0").build()
-                httpClient.newCall(req).execute().use { resp ->
-                    if (resp.isSuccessful) {
-                        val body = resp.body?.string().orEmpty()
-                        val found = JSONObject(body).optString("imdb_id").takeIf { it.startsWith("tt") }
-                        if (found != null) return found
-                    }
-                }
+                val found = com.euthopiar.core.util.TmdbBridge.resolveImdbId(endpoint, tmdbId)
+                if (found != null) return found
             }
         } catch (_: Exception) {}
 

@@ -231,11 +231,31 @@ class DownloadRepository private constructor(private val context: Context) {
         episode: EpisodeItem? = null,
         stream: StreamItem
     ): Boolean {
-        val downloadUrl = stream.playableDirectUrl
+        var downloadUrl = stream.playableDirectUrl
             ?: (if (stream.isTorrentStream) stream.effectiveMagnetOrHash else null)
             ?: return false
 
         if (!stream.isTorrentStream && !stream.isSupportedDownloadUrl()) return false
+
+        if (stream.isTorrentStream && !downloadUrl.startsWith("http", ignoreCase = true)) {
+            val s = episode?.seasonNumber
+            val epNum = episode?.episodeNumber
+            val f = stream.fileIdx
+            val extraParams = mutableListOf<String>()
+            if (f != null && f >= 0 && !downloadUrl.contains("index=", ignoreCase = true) && !downloadUrl.contains("fileidx=", ignoreCase = true) && !downloadUrl.contains("so=", ignoreCase = true)) {
+                extraParams.add("index=$f")
+            }
+            if (s != null && s > 0 && !downloadUrl.contains("season=", ignoreCase = true)) {
+                extraParams.add("season=$s")
+            }
+            if (epNum != null && epNum > 0 && !downloadUrl.contains("episode=", ignoreCase = true)) {
+                extraParams.add("episode=$epNum")
+            }
+            if (extraParams.isNotEmpty()) {
+                val delim = if (downloadUrl.contains("?")) "&" else "?"
+                downloadUrl = "$downloadUrl$delim${extraParams.joinToString("&")}"
+            }
+        }
 
         val option = DownloadOption(
             title = stream.name ?: detail.title,
@@ -244,7 +264,8 @@ class DownloadRepository private constructor(private val context: Context) {
             url = downloadUrl,
             source = stream.sourceName ?: stream.addonName,
             provider = stream.addonName,
-            headers = stream.headers
+            headers = stream.headers,
+            isM3u8 = downloadUrl.contains(".m3u8", ignoreCase = true)
         )
 
         startDownload(detail, episode, option)
@@ -307,7 +328,10 @@ class DownloadRepository private constructor(private val context: Context) {
             scraperId = option.provider,
             mediaType = if (detail.type == MediaType.TV_SERIES || detail.type == MediaType.ANIME) "tv" else "movie",
             seasonNumber = episode?.seasonNumber,
-            episodeNumber = episode?.episodeNumber
+            episodeNumber = episode?.episodeNumber,
+            isM3u8 = option.isM3u8,
+            container = option.container,
+            trackers = option.trackers
         )
 
         _downloads.update { current ->
@@ -425,10 +449,13 @@ class DownloadRepository private constructor(private val context: Context) {
         val option = DownloadOption(
             title = detail.title,
             quality = qualityLabel,
-            size = "~1.5 GB",
+            size = streamSource.size ?: "~1.5 GB",
             url = streamSource.url,
-            source = "Stream Mirror",
-            headers = streamSource.headers
+            source = streamSource.serverName.ifBlank { "Stream Mirror" },
+            headers = streamSource.headers,
+            isM3u8 = streamSource.isM3u8,
+            container = streamSource.container,
+            trackers = streamSource.trackers
         )
         startDownload(detail, episode, option)
     }

@@ -56,4 +56,17 @@ class TraktAndDebridTest {
         val res = manager.verifyAccount(DebridProviderType.REAL_DEBRID, "")
         assertTrue(res.isFailure)
     }
+
+    @Test
+    fun testDebridResolveStreamBlankApiKeyReturnsFailure() = runBlocking {
+        val manager = DebridManager.getInstance()
+        val res = manager.resolveStream(
+            providerType = DebridProviderType.REAL_DEBRID,
+            apiKey = "",
+            linkOrMagnet = "magnet:?xt=urn:btih:test",
+            originalResolutionLabel = "4K UHD",
+            originalQuality = "2160p"
+        )
+        assertTrue("Blank API key must return failure Result", res.isFailure)
+    }
 }

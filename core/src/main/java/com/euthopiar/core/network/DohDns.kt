@@ -2,6 +2,7 @@ package com.euthopiar.core.network
 
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import okhttp3.Cache
+import okhttp3.Call
 import okhttp3.ConnectionPool
 import okhttp3.Dispatcher
 import okhttp3.Dns
@@ -13,7 +14,11 @@ import okhttp3.Response
 import java.io.File
 import java.net.InetAddress
 import java.net.UnknownHostException
+import java.util.concurrent.Callable
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.ExecutorCompletionService
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.regex.Pattern
 
@@ -62,11 +67,17 @@ class DohDns(
         }
 
         // 2. DoH bootstrap endpoints
-        if (trimmed == "1.1.1.1" || trimmed == "1.0.0.1" || trimmed == "cloudflare-dns.com") {
+        if (trimmed == "1.1.1.1" || trimmed == "cloudflare-dns.com") {
             return listOf(InetAddress.getByAddress(trimmed, byteArrayOf(1, 1, 1, 1)))
         }
-        if (trimmed == "8.8.8.8" || trimmed == "8.8.4.4" || trimmed == "dns.google") {
+        if (trimmed == "1.0.0.1") {
+            return listOf(InetAddress.getByAddress(trimmed, byteArrayOf(1, 0, 0, 1)))
+        }
+        if (trimmed == "8.8.8.8" || trimmed == "dns.google") {
             return listOf(InetAddress.getByAddress(trimmed, byteArrayOf(8, 8, 8, 8)))
+        }
+        if (trimmed == "8.8.4.4") {
+            return listOf(InetAddress.getByAddress(trimmed, byteArrayOf(8, 8, 4, 4)))
         }
 
         // 3. In-memory TTL Cache
@@ -76,20 +87,10 @@ class DohDns(
             return cached.addresses
         }
 
-        // 4. Resolve via Cloudflare DoH (1.1.1.1)
-        var addresses = queryCloudflare(trimmed)
+        // 4. Concurrently race DoH endpoints: Cloudflare (1.1.1.1), Google (8.8.8.8), and Cloudflare Secondary (1.0.0.1)
+        var addresses = raceDoh(trimmed, timeoutSeconds)
 
-        // 5. Fallback: Google DoH (8.8.8.8)
-        if (addresses.isEmpty()) {
-            addresses = queryGoogle(trimmed)
-        }
-
-        // 6. Fallback: Cloudflare Secondary (1.0.0.1)
-        if (addresses.isEmpty()) {
-            addresses = queryCloudflareSecondary(trimmed)
-        }
-
-        // 7. Last Resort: System DNS
+        // 5. Fallback: System DNS
         if (addresses.isEmpty()) {
             try {
                 addresses = Dns.SYSTEM.lookup(trimmed)
@@ -113,36 +114,75 @@ class DohDns(
         return addresses
     }
 
-    private fun queryCloudflare(hostname: String): List<InetAddress> {
+    private fun raceDoh(hostname: String, timeoutSec: Long): List<InetAddress> {
+        val calls = ConcurrentLinkedQueue<Call>()
+        val tasks = listOf<Callable<List<InetAddress>>>(
+            Callable { queryCloudflare(hostname, calls) },
+            Callable { queryGoogle(hostname, calls) },
+            Callable { queryCloudflareSecondary(hostname, calls) }
+        )
+        val ecs = ExecutorCompletionService<List<InetAddress>>(dohExecutor)
+        val futures = tasks.map { task -> ecs.submit(task) }
+        val deadline = System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(timeoutSec)
+
+        var completedCount = 0
+        while (completedCount < tasks.size) {
+            val remainingMs = (deadline - System.currentTimeMillis()).coerceAtLeast(0)
+            if (remainingMs <= 0) break
+            try {
+                val future = ecs.poll(remainingMs, TimeUnit.MILLISECONDS) ?: break
+                completedCount++
+                val result = try { future.get() } catch (_: Exception) { emptyList() }
+                if (result.isNotEmpty()) {
+                    calls.forEach { runCatching { it.cancel() } }
+                    futures.forEach { it.cancel(true) }
+                    return result
+                }
+            } catch (_: Exception) {
+                break
+            }
+        }
+        calls.forEach { runCatching { it.cancel() } }
+        futures.forEach { it.cancel(true) }
+        return emptyList()
+    }
+
+    private fun queryCloudflare(hostname: String, calls: ConcurrentLinkedQueue<Call>): List<InetAddress> {
         val url = "https://1.1.1.1/dns-query?name=$hostname&type=A"
         val request = Request.Builder()
             .url(url)
             .header("Accept", "application/dns-json")
             .build()
-        return executeDohRequest(request, hostname)
+        return executeDohRequest(request, hostname, calls)
     }
 
-    private fun queryCloudflareSecondary(hostname: String): List<InetAddress> {
+    private fun queryCloudflareSecondary(hostname: String, calls: ConcurrentLinkedQueue<Call>): List<InetAddress> {
         val url = "https://1.0.0.1/dns-query?name=$hostname&type=A"
         val request = Request.Builder()
             .url(url)
             .header("Accept", "application/dns-json")
             .build()
-        return executeDohRequest(request, hostname)
+        return executeDohRequest(request, hostname, calls)
     }
 
-    private fun queryGoogle(hostname: String): List<InetAddress> {
+    private fun queryGoogle(hostname: String, calls: ConcurrentLinkedQueue<Call>): List<InetAddress> {
         val url = "https://8.8.8.8/resolve?name=$hostname&type=A"
         val request = Request.Builder()
             .url(url)
             .header("Accept", "application/json")
             .build()
-        return executeDohRequest(request, hostname)
+        return executeDohRequest(request, hostname, calls)
     }
 
-    private fun executeDohRequest(request: Request, hostname: String): List<InetAddress> {
+    private fun executeDohRequest(
+        request: Request,
+        hostname: String,
+        calls: ConcurrentLinkedQueue<Call>
+    ): List<InetAddress> {
+        val call = bootstrapClient.newCall(request)
+        calls.add(call)
         return try {
-            bootstrapClient.newCall(request).execute().use { response ->
+            call.execute().use { response ->
                 if (!response.isSuccessful) return emptyList()
                 val bodyStr = response.body?.string() ?: return emptyList()
                 parseDnsJson(bodyStr, hostname)
@@ -195,6 +235,10 @@ class DohDns(
     }
 
     companion object {
+        private val dohExecutor = Executors.newCachedThreadPool { runnable ->
+            Thread(runnable, "doh-dns-worker").apply { isDaemon = true }
+        }
+
         val DEFAULT = DohDns()
 
         val defaultPool = ConnectionPool(maxIdleConnections = 10, keepAliveDuration = 5, timeUnit = TimeUnit.MINUTES)
@@ -266,7 +310,8 @@ private object ForceCacheInterceptor : Interceptor {
     override fun intercept(chain: Interceptor.Chain): Response {
         val req = chain.request()
         val resp = chain.proceed(req)
-        if (req.method != "GET" || req.url.host != "api.themoviedb.org" || !resp.isSuccessful) return resp
+        val host = req.url.host
+        if (req.method != "GET" || (host != "api.themoviedb.org" && host != "euthopiar-vault.sehgalvansh716.workers.dev") || !resp.isSuccessful) return resp
         return resp.newBuilder()
             .removeHeader("Pragma")
             .header("Cache-Control", "public, max-age=600, stale-while-revalidate=86400")

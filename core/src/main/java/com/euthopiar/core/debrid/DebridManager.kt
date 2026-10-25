@@ -49,7 +49,16 @@ class DebridManager(
         }
     }
 
-    suspend fun resolveStream(providerType: DebridProviderType, apiKey: String, linkOrMagnet: String): Result<StreamSource> {
+    suspend fun resolveStream(
+        providerType: DebridProviderType,
+        apiKey: String,
+        linkOrMagnet: String,
+        fileIdx: Int? = null,
+        season: Int? = null,
+        episode: Int? = null,
+        originalResolutionLabel: String? = null,
+        originalQuality: String? = null
+    ): Result<StreamSource> {
         if (apiKey.isBlank()) return Result.failure(IllegalArgumentException("API key is blank"))
         return when (providerType) {
             DebridProviderType.REAL_DEBRID -> {
@@ -64,17 +73,21 @@ class DebridManager(
                 }
 
                 val unrestrictResult = if (isMagnet) {
-                    realDebridClient.unrestrictMagnet(apiKey, effectiveMagnet)
+                    realDebridClient.unrestrictMagnet(apiKey, effectiveMagnet, fileIdx, season, episode)
                 } else {
                     realDebridClient.unrestrictLink(apiKey, linkOrMagnet)
                 }
 
                 unrestrictResult.map { resp ->
+                    val resolvedLabel = originalResolutionLabel?.takeIf { it.isNotBlank() && !it.equals("Auto", ignoreCase = true) } ?: "1080p FHD"
+                    val resolvedQuality = originalQuality?.takeIf { it.isNotBlank() && !it.equals("Auto", ignoreCase = true) }
+                        ?: originalResolutionLabel?.takeIf { it.isNotBlank() && !it.equals("Auto", ignoreCase = true) }
+                        ?: "1080p"
                     StreamSource(
                         url = resp.download.ifBlank { resp.link },
                         serverName = "Real-Debrid (${resp.host.ifBlank { "High-Speed CDN" }})",
-                        resolutionLabel = "1080p FHD",
-                        quality = "1080p",
+                        resolutionLabel = resolvedLabel,
+                        quality = resolvedQuality,
                         isM3u8 = resp.download.contains(".m3u8"),
                         headers = mapOf("User-Agent" to "Euthopiar/1.0")
                     )
@@ -82,6 +95,24 @@ class DebridManager(
             }
             else -> Result.failure(UnsupportedOperationException("Stream resolving for $providerType not yet available"))
         }
+    }
+
+    data class ActiveDebridProvider(
+        val type: DebridProviderType,
+        val enabled: Boolean = true
+    )
+
+    private val activeProviders = mutableListOf<ActiveDebridProvider>()
+
+    fun getActiveProviders(): List<ActiveDebridProvider> = synchronized(this) { activeProviders.toList() }
+
+    fun setActiveProviders(providers: List<ActiveDebridProvider>) = synchronized(this) {
+        activeProviders.clear()
+        activeProviders.addAll(providers)
+    }
+
+    fun hasActiveDebrid(): Boolean = synchronized(this) {
+        activeProviders.any { it.enabled }
     }
 
     companion object {
@@ -93,5 +124,8 @@ class DebridManager(
                 instance ?: DebridManager().also { instance = it }
             }
         }
+
+        fun getActiveProviders(): List<ActiveDebridProvider> = getInstance().getActiveProviders()
+        fun hasActiveDebrid(): Boolean = getInstance().hasActiveDebrid()
     }
 }

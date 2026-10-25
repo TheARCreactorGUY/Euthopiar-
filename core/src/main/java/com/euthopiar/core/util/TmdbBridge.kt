@@ -3,6 +3,7 @@ package com.euthopiar.core.util
 import com.euthopiar.core.matcher.MatchScorer
 import com.euthopiar.core.model.*
 import com.euthopiar.core.network.DohDns
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -10,8 +11,10 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.net.URLEncoder
 import java.util.Locale
@@ -30,11 +33,20 @@ import java.util.concurrent.ConcurrentHashMap
  * - 16:9 episode stills, canonical titles, overviews, and per-episode runtimes
  * - Related recommendations and YouTube trailer keys
  */
+typealias TmdbEnrichedData = TmdbBridge.EnrichedMetadata
+
 object TmdbBridge {
 
-    const val DEFAULT_API_KEY: String = "1865f43a0549ca50d341dd9ab8b29f49"
-    private const val DEFAULT_USER_AGENT: String =
+    const val BASE_URL: String = "https://euthopiar-vault.sehgalvansh716.workers.dev/3"
+    const val DEFAULT_API_KEY: String = ""
+    const val DEFAULT_USER_AGENT: String =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
+    private fun appendApiKey(url: String, apiKey: String): String {
+        if (apiKey.isBlank()) return url
+        val sep = if (url.contains("?")) "&" else "?"
+        return "$url${sep}api_key=$apiKey"
+    }
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
     private val logoCache = ConcurrentHashMap<String, String>()
@@ -63,11 +75,63 @@ object TmdbBridge {
         val logoUrl: String?,
         val originalLanguage: String? = null,
         val originCountry: List<String> = emptyList(),
-        val seasonEpisodeCounts: Map<Int, Int> = emptyMap()
+        val seasonEpisodeCounts: Map<Int, Int> = emptyMap(),
+        val originalTitle: String? = null,
+        val alternativeTitles: Set<String> = emptySet(),
+        val premiereYear: Int? = year,
+        val latestSeasonYear: Int? = null,
+        val seasonYears: Map<Int, Int> = emptyMap(),
+        val seasonNames: Map<Int, String> = emptyMap(),
+        val tvdbId: Int? = null,
+        val runtimeMinutes: Int? = null,
+        val malId: Int? = null,
+        val anilistId: Int? = null,
+        val romajiTitle: String? = null,
+        val englishTitle: String? = null,
+        val nativeTitle: String? = null,
+        val animeSynonyms: List<String> = emptyList(),
+        val seasonSpecificTitles: Map<Int, List<String>> = emptyMap()
     ) {
         val isAnime: Boolean
             get() = genres.any { it.equals("Animation", ignoreCase = true) || it.equals("Anime", ignoreCase = true) } &&
                     (originalLanguage?.equals("ja", ignoreCase = true) == true || originCountry.contains("JP"))
+
+        fun toMatchHints(isTv: Boolean, season: Int? = null, episode: Int? = null, absoluteEpisode: Int? = null): MatchHints {
+            val ct = when {
+                isAnime -> ContentType.ANIME
+                isTv -> ContentType.TV_SERIES
+                else -> ContentType.MOVIE
+            }
+            val seasonTitles = season?.let { seasonSpecificTitles[it] }.orEmpty()
+            val allTitles = (setOfNotNull(title, originalTitle, romajiTitle, englishTitle, nativeTitle) +
+                    alternativeTitles + seasonNames.values + animeSynonyms + seasonTitles)
+                .filter { it.isNotBlank() }
+                .toSet()
+            return MatchHints(
+                tmdbId = tmdbId.toIntOrNull() ?: 0,
+                imdbId = imdbId,
+                type = ct,
+                titles = allTitles,
+                year = premiereYear ?: year,
+                runtimeMin = runtimeMinutes,
+                season = season,
+                episode = episode,
+                originalTitle = originalTitle,
+                alternativeTitles = alternativeTitles + setOfNotNull(romajiTitle, englishTitle, nativeTitle) + animeSynonyms + seasonTitles,
+                premiereYear = premiereYear ?: year,
+                seasonYears = seasonYears,
+                seasonNames = seasonNames,
+                tvdbId = tvdbId,
+                absoluteEpisode = absoluteEpisode,
+                malId = malId,
+                anilistId = anilistId,
+                romajiTitle = romajiTitle,
+                englishTitle = englishTitle,
+                nativeTitle = nativeTitle,
+                animeSynonyms = animeSynonyms,
+                seasonSpecificTitles = seasonSpecificTitles
+            )
+        }
     }
 
     data class EpisodeDetail(
@@ -81,8 +145,31 @@ object TmdbBridge {
     fun getCachedEnrichedDetails(tmdbId: String, isTv: Boolean): EnrichedMetadata? {
         val endpoint = if (isTv) "tv" else "movie"
         val altEndpoint = if (isTv) "movie" else "tv"
-        val clean = tmdbId.trim().removePrefix("tmdb:").removePrefix("tmdb/").substringBefore(':').substringBefore('/')
+        val rawClean = tmdbId.trim().removePrefix("tmdb:").removePrefix("tmdb/")
+        val clean = if (rawClean.startsWith("mal:", ignoreCase = true) ||
+            rawClean.startsWith("anilist:", ignoreCase = true) ||
+            rawClean.startsWith("jikan:", ignoreCase = true)
+        ) {
+            rawClean.substringAfter(':').substringBefore('/')
+        } else {
+            rawClean.substringBefore(':').substringBefore('/')
+        }
         if (clean.isBlank()) return null
+
+        val animeKey = when {
+            rawClean.startsWith("mal:", ignoreCase = true) || rawClean.startsWith("jikan:", ignoreCase = true) -> "mal:$clean"
+            rawClean.startsWith("anilist:", ignoreCase = true) -> "anilist:$clean"
+            else -> null
+        }
+        if (animeKey != null) {
+            enrichedCache["$endpoint:$animeKey"]?.let { return it }
+            enrichedCache["$altEndpoint:$animeKey"]?.let { return it }
+            aniZipCache[animeKey]?.tmdbId?.let { mappedTmdb ->
+                enrichedCache["$endpoint:$mappedTmdb"]?.let { return it }
+                enrichedCache["$altEndpoint:$mappedTmdb"]?.let { return it }
+            }
+        }
+
         val key = "$endpoint:$clean"
         val altKey = "$altEndpoint:$clean"
         return enrichedCache[key] ?: enrichedCache[altKey] ?: if (clean.startsWith("tt")) {
@@ -105,6 +192,89 @@ object TmdbBridge {
         }
     }
 
+    private val rawDetailsJsonCache = ConcurrentHashMap<String, String>()
+    private val rawExternalIdsJsonCache = ConcurrentHashMap<String, String>()
+
+    fun getCachedTmdbDetailsJson(tmdbId: String, isTv: Boolean): String? {
+        val endpoint = if (isTv) "tv" else "movie"
+        val altEndpoint = if (isTv) "movie" else "tv"
+        val clean = tmdbId.trim().removePrefix("tmdb:").removePrefix("tmdb/").substringBefore(':').substringBefore('/')
+        if (clean.isBlank()) return null
+        val mappedId = if (clean.startsWith("tt")) imdbIdCache[clean] ?: clean else clean
+        return rawDetailsJsonCache["$endpoint:$clean"]
+            ?: rawDetailsJsonCache["$altEndpoint:$clean"]
+            ?: rawDetailsJsonCache["$endpoint:$mappedId"]
+            ?: rawDetailsJsonCache["$altEndpoint:$mappedId"]
+            ?: getCachedEnrichedDetails(clean, isTv)?.let { buildCanonicalDetailsJson(it, isTv) }
+    }
+
+    fun getCachedTmdbExternalIdsJson(tmdbId: String, isTv: Boolean): String? {
+        val endpoint = if (isTv) "tv" else "movie"
+        val altEndpoint = if (isTv) "movie" else "tv"
+        val clean = tmdbId.trim().removePrefix("tmdb:").removePrefix("tmdb/").substringBefore(':').substringBefore('/')
+        if (clean.isBlank()) return null
+        val mappedId = if (clean.startsWith("tt")) imdbIdCache[clean] ?: clean else clean
+        return rawExternalIdsJsonCache["$endpoint:$clean"]
+            ?: rawExternalIdsJsonCache["$altEndpoint:$clean"]
+            ?: rawExternalIdsJsonCache["$endpoint:$mappedId"]
+            ?: rawExternalIdsJsonCache["$altEndpoint:$mappedId"]
+            ?: getCachedEnrichedDetails(clean, isTv)?.let { buildCanonicalExternalIdsJson(it) }
+    }
+
+    fun cacheTmdbDetailsJson(endpoint: String, tmdbId: String, json: String) {
+        val clean = tmdbId.trim().removePrefix("tmdb:").removePrefix("tmdb/").substringBefore(':').substringBefore('/')
+        if (clean.isNotBlank()) {
+            rawDetailsJsonCache["$endpoint:$clean"] = json
+        }
+    }
+
+    fun cacheTmdbExternalIdsJson(endpoint: String, tmdbId: String, json: String) {
+        val clean = tmdbId.trim().removePrefix("tmdb:").removePrefix("tmdb/").substringBefore(':').substringBefore('/')
+        if (clean.isNotBlank()) {
+            rawExternalIdsJsonCache["$endpoint:$clean"] = json
+        }
+    }
+
+    internal fun clearCachesForTesting() {
+        logoCache.clear()
+        enrichedCache.clear()
+        seasonCache.clear()
+        cachedHomeCatalog = null
+        imdbIdCache.clear()
+        rawDetailsJsonCache.clear()
+        rawExternalIdsJsonCache.clear()
+    }
+
+    private fun buildCanonicalDetailsJson(meta: EnrichedMetadata, isTv: Boolean): String {
+        val root = JSONObject()
+        root.put("id", meta.tmdbId.toIntOrNull() ?: meta.tmdbId)
+        root.put(if (isTv) "name" else "title", meta.title)
+        if (meta.originalTitle != null) {
+            root.put(if (isTv) "original_name" else "original_title", meta.originalTitle)
+        }
+        if (meta.originalLanguage != null) {
+            root.put("original_language", meta.originalLanguage)
+        }
+        if (meta.year != null) {
+            root.put(if (isTv) "first_air_date" else "release_date", "${meta.year}-01-01")
+        }
+        if (meta.imdbId != null) {
+            root.put("imdb_id", meta.imdbId)
+        }
+        if (meta.synopsis != null) {
+            root.put("overview", meta.synopsis)
+        }
+        return root.toString()
+    }
+
+    private fun buildCanonicalExternalIdsJson(meta: EnrichedMetadata): String {
+        val root = JSONObject()
+        root.put("id", meta.tmdbId.toIntOrNull() ?: meta.tmdbId)
+        if (meta.imdbId != null) root.put("imdb_id", meta.imdbId)
+        if (meta.tvdbId != null) root.put("tvdb_id", meta.tvdbId)
+        return root.toString()
+    }
+
 
     /**
      * Finds a TMDB ID using an IMDb ID (e.g. "tt0944947").
@@ -119,7 +289,7 @@ object TmdbBridge {
         if (!cleanImdb.startsWith("tt")) return@withContext null
         imdbIdCache[cleanImdb]?.let { return@withContext it }
         try {
-            val url = "https://api.themoviedb.org/3/find/$cleanImdb?api_key=$apiKey&external_source=imdb_id"
+            val url = appendApiKey("$BASE_URL/find/$cleanImdb?external_source=imdb_id", apiKey)
             val req = Request.Builder().url(url).header("User-Agent", DEFAULT_USER_AGENT).build()
             client.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) return@withContext null
@@ -155,7 +325,7 @@ object TmdbBridge {
             if (!metaName.isNullOrBlank()) {
                 val encodedQuery = java.net.URLEncoder.encode(metaName, "UTF-8")
                 val searchEndpoint = if (isTv) "tv" else "movie"
-                val searchUrl = "https://api.themoviedb.org/3/search/$searchEndpoint?api_key=$apiKey&query=$encodedQuery"
+                val searchUrl = appendApiKey("$BASE_URL/search/$searchEndpoint?query=$encodedQuery", apiKey)
                 val searchReq = Request.Builder().url(searchUrl).header("User-Agent", DEFAULT_USER_AGENT).build()
                 client.newCall(searchReq).execute().use { resp ->
                     if (resp.isSuccessful) {
@@ -195,13 +365,25 @@ object TmdbBridge {
             return@withContext it
         }
 
+        getCachedTmdbExternalIdsJson(clean, isTv)?.let { cachedJson ->
+            try {
+                val parsed = json.parseToJsonElement(cachedJson).jsonObject
+                val found = parsed["imdb_id"]?.jsonPrimitive?.contentOrNull?.takeIf { it.startsWith("tt") }
+                if (found != null) {
+                    recordIdMapping(clean, found, isTv)
+                    return@withContext found
+                }
+            } catch (_: Exception) {}
+        }
+
         try {
             val endpoint = if (isTv) "tv" else "movie"
-            val url = "https://api.themoviedb.org/3/$endpoint/$clean/external_ids?api_key=$apiKey"
+            val url = appendApiKey("$BASE_URL/$endpoint/$clean/external_ids", apiKey)
             val req = Request.Builder().url(url).header("User-Agent", DEFAULT_USER_AGENT).build()
             client.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) return@withContext null
                 val body = resp.body?.string() ?: return@withContext null
+                cacheTmdbExternalIdsJson(endpoint, clean, body)
                 val root = json.parseToJsonElement(body).jsonObject
                 val found = root["imdb_id"]?.jsonPrimitive?.contentOrNull?.takeIf { it.startsWith("tt") }
                 if (found != null) {
@@ -213,11 +395,535 @@ object TmdbBridge {
         null
     }
 
+    /**
+     * Centralized lookup for external IDs (IMDb ID) from an endpoint type ("movie", "tv", "series", "anime", etc.) and TMDB ID.
+     */
+    suspend fun resolveImdbId(
+        type: String,
+        tmdbId: String,
+        client: OkHttpClient = DohDns.metadataClient,
+        apiKey: String = DEFAULT_API_KEY
+    ): String? {
+        val norm = type.trim().lowercase(Locale.US)
+        val isTv = norm == "tv" || norm == "series" || norm == "tv_series" || norm == "tvseries" ||
+                norm == "show" || norm == "shows" || norm == "anime" || norm.contains("tv")
+        return resolveImdbId(client = client, tmdbId = tmdbId, isTv = isTv, apiKey = apiKey)
+    }
+
+    /**
+     * Centralized lookup for external IDs (IMDb ID) from MediaType and TMDB ID.
+     */
+    suspend fun resolveImdbId(
+        type: MediaType,
+        tmdbId: String,
+        client: OkHttpClient = DohDns.metadataClient,
+        apiKey: String = DEFAULT_API_KEY
+    ): String? {
+        val isTv = type == MediaType.TV_SERIES || type == MediaType.ANIME
+        return resolveImdbId(client = client, tmdbId = tmdbId, isTv = isTv, apiKey = apiKey)
+    }
+
+    /**
+     * Centralized method to fetch the top 10 trending items for a media type from TMDB.
+     */
+    suspend fun fetchTrendingTopTen(
+        type: MediaType,
+        language: String = "en-US",
+        client: OkHttpClient = DohDns.metadataClient,
+        apiKey: String = DEFAULT_API_KEY,
+        dispatcher: CoroutineDispatcher = Dispatchers.IO
+    ): List<MediaItem> = withContext(dispatcher) {
+        try {
+            val endpointType = when (type) {
+                MediaType.TV_SERIES, MediaType.ANIME -> "tv"
+                else -> "movie"
+            }
+            val url = appendApiKey("$BASE_URL/trending/$endpointType/day?language=$language", apiKey)
+            val request = Request.Builder()
+                .url(url)
+                .header("User-Agent", DEFAULT_USER_AGENT)
+                .get()
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@withContext emptyList()
+                val body = response.body?.string() ?: return@withContext emptyList()
+                val parsed = json.parseToJsonElement(body).jsonObject
+                val results = parsed["results"]?.jsonArray ?: return@withContext emptyList()
+
+                val items = mutableListOf<MediaItem>()
+                for (elem in results) {
+                    if (items.size >= 10) break
+                    val obj = elem.jsonObject
+                    val id = obj["id"]?.jsonPrimitive?.contentOrNull ?: continue
+                    val posterPath = obj["poster_path"]?.jsonPrimitive?.contentOrNull
+                    if (posterPath.isNullOrBlank()) continue
+
+                    val title = obj["title"]?.jsonPrimitive?.contentOrNull
+                        ?: obj["name"]?.jsonPrimitive?.contentOrNull
+                        ?: "Untitled"
+                    val backdropPath = obj["backdrop_path"]?.jsonPrimitive?.contentOrNull
+                    val voteAverage = obj["vote_average"]?.jsonPrimitive?.doubleOrNull
+                    val releaseDate = obj["release_date"]?.jsonPrimitive?.contentOrNull
+                        ?: obj["first_air_date"]?.jsonPrimitive?.contentOrNull
+                    val year = releaseDate?.take(4)?.toIntOrNull()
+
+                    val posterUrl = "https://image.tmdb.org/t/p/w780$posterPath"
+                    val backdropUrl = backdropPath?.let { "https://image.tmdb.org/t/p/w1280$it" }
+                    val ratingStr = voteAverage?.let { String.format(Locale.US, "%.1f", it) }
+
+                    items.add(
+                        MediaItem(
+                            id = id,
+                            title = title,
+                            url = "",
+                            posterUrl = posterUrl,
+                            backdropUrl = backdropUrl,
+                            type = type,
+                            year = year,
+                            rating = ratingStr,
+                            quality = "1080p",
+                            provider = "tmdb"
+                        )
+                    )
+                }
+                items
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    /**
+     * Fetches top trending items (movies and TV series) across all categories from TMDB.
+     */
+    suspend fun fetchTrendingAll(
+        timeWindow: String = "day",
+        language: String = "en-US",
+        client: OkHttpClient = DohDns.metadataClient,
+        apiKey: String = DEFAULT_API_KEY,
+        dispatcher: CoroutineDispatcher = Dispatchers.IO
+    ): List<MediaItem> = withContext(dispatcher) {
+        try {
+            val url = appendApiKey("$BASE_URL/trending/all/$timeWindow?language=$language", apiKey)
+            val request = Request.Builder()
+                .url(url)
+                .header("User-Agent", DEFAULT_USER_AGENT)
+                .get()
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@withContext emptyList()
+                val body = response.body?.string() ?: return@withContext emptyList()
+                val parsed = json.parseToJsonElement(body).jsonObject
+                val results = parsed["results"]?.jsonArray ?: return@withContext emptyList()
+
+                val items = mutableListOf<MediaItem>()
+                for (elem in results) {
+                    if (items.size >= 10) break
+                    val obj = elem.jsonObject
+                    val mediaTypeStr = obj["media_type"]?.jsonPrimitive?.contentOrNull
+                    if (mediaTypeStr == "person") continue
+
+                    val id = obj["id"]?.jsonPrimitive?.contentOrNull ?: continue
+                    val posterPath = obj["poster_path"]?.jsonPrimitive?.contentOrNull
+                    if (posterPath.isNullOrBlank()) continue
+
+                    val isTv = mediaTypeStr == "tv" || obj.containsKey("first_air_date") || (obj.containsKey("name") && !obj.containsKey("title"))
+                    val title = obj["title"]?.jsonPrimitive?.contentOrNull
+                        ?: obj["name"]?.jsonPrimitive?.contentOrNull
+                        ?: "Untitled"
+                    val backdropPath = obj["backdrop_path"]?.jsonPrimitive?.contentOrNull
+                    val voteAverage = obj["vote_average"]?.jsonPrimitive?.doubleOrNull
+                    val releaseDate = obj["release_date"]?.jsonPrimitive?.contentOrNull
+                        ?: obj["first_air_date"]?.jsonPrimitive?.contentOrNull
+                    val year = releaseDate?.take(4)?.toIntOrNull()
+
+                    val posterUrl = "https://image.tmdb.org/t/p/w780$posterPath"
+                    val backdropUrl = backdropPath?.let { "https://image.tmdb.org/t/p/w1280$it" }
+                    val ratingStr = voteAverage?.let { String.format(Locale.US, "%.1f", it) }
+
+                    items.add(
+                        MediaItem(
+                            id = id,
+                            title = title,
+                            url = "",
+                            posterUrl = posterUrl,
+                            backdropUrl = backdropUrl,
+                            type = if (isTv) MediaType.TV_SERIES else MediaType.MOVIE,
+                            year = year,
+                            rating = ratingStr,
+                            quality = "1080p",
+                            provider = "tmdb"
+                        )
+                    )
+                }
+                items
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    data class OnboardingShowcase(
+        val trendingMovies: List<MediaItem> = emptyList(),
+        val trendingTv: List<MediaItem> = emptyList(),
+        val topTen: List<MediaItem> = emptyList(),
+        val mixed: List<MediaItem> = emptyList()
+    )
+
+    /**
+     * Concurrently fetches a balanced mix of Trending Movies, Trending TV Shows,
+     * and Top 10 items for onboarding previewers via the centralized Cloudflare worker gateway.
+     */
+    suspend fun fetchOnboardingShowcasePosters(
+        language: String = "en-US",
+        client: OkHttpClient = DohDns.metadataClient,
+        apiKey: String = DEFAULT_API_KEY,
+        dispatcher: CoroutineDispatcher = Dispatchers.IO
+    ): OnboardingShowcase = coroutineScope {
+        val moviesDeferred = async(dispatcher) { fetchTrendingTopTen(MediaType.MOVIE, language, client, apiKey, dispatcher) }
+        val tvDeferred = async(dispatcher) { fetchTrendingTopTen(MediaType.TV_SERIES, language, client, apiKey, dispatcher) }
+        val topTenDeferred = async(dispatcher) { fetchTrendingAll("day", language, client, apiKey, dispatcher) }
+
+        val movies = moviesDeferred.await()
+        val tv = tvDeferred.await()
+        val topTen = topTenDeferred.await()
+
+        val mixed = mutableListOf<MediaItem>()
+        val seenKeys = mutableSetOf<String>()
+
+        fun tryAdd(item: MediaItem) {
+            val key = "${item.type.name}:${item.id}"
+            if (seenKeys.add(key)) {
+                mixed.add(item)
+            }
+        }
+
+        val maxLen = maxOf(topTen.size, maxOf(movies.size, tv.size))
+        for (i in 0 until maxLen) {
+            if (i < topTen.size) tryAdd(topTen[i])
+            if (i < movies.size) tryAdd(movies[i])
+            if (i < tv.size) tryAdd(tv[i])
+        }
+
+        OnboardingShowcase(
+            trendingMovies = movies,
+            trendingTv = tv,
+            topTen = topTen,
+            mixed = mixed
+        )
+    }
+
+    data class AniZipData(
+        val malId: Int? = null,
+        val anilistId: Int? = null,
+        val tmdbId: String? = null,
+        val imdbId: String? = null,
+        val romajiTitle: String? = null,
+        val englishTitle: String? = null,
+        val nativeTitle: String? = null,
+        val synonyms: List<String> = emptyList(),
+        val episodeAbsoluteMap: Map<Pair<Int, Int>, Int> = emptyMap()
+    )
+
+    data class AnimeEnrichmentResult(
+        val malId: Int? = null,
+        val anilistId: Int? = null,
+        val romajiTitle: String? = null,
+        val englishTitle: String? = null,
+        val nativeTitle: String? = null,
+        val synonyms: List<String> = emptyList(),
+        val seasonSpecificTitles: Map<Int, List<String>> = emptyMap()
+    )
+
+    private val aniZipCache = ConcurrentHashMap<String, AniZipData>()
+    private val animeEnrichCache = ConcurrentHashMap<String, AnimeEnrichmentResult>()
     private val animeAbsoluteEpisodeCache = ConcurrentHashMap<String, Int>()
 
     /**
+     * Fetches AniZip mappings and caches the result across all mapped IDs.
+     */
+    suspend fun fetchAniZipMappings(
+        client: OkHttpClient = DohDns.metadataClient,
+        tmdbId: String? = null,
+        malId: Int? = null,
+        anilistId: Int? = null,
+        imdbId: String? = null
+    ): AniZipData? = withContext(Dispatchers.IO) {
+        val cacheKeys = listOfNotNull(
+            tmdbId?.takeIf { it.isNotBlank() }?.let { "tmdb:$it" },
+            malId?.takeIf { it > 0 }?.let { "mal:$it" },
+            anilistId?.takeIf { it > 0 }?.let { "anilist:$it" },
+            imdbId?.takeIf { it.startsWith("tt") }?.let { "imdb:$it" }
+        )
+        for (k in cacheKeys) {
+            aniZipCache[k]?.let { return@withContext it }
+        }
+
+        val queryParam = when {
+            malId != null && malId > 0 -> "mal_id=$malId"
+            anilistId != null && anilistId > 0 -> "anilist_id=$anilistId"
+            !tmdbId.isNullOrBlank() && tmdbId.all { it.isDigit() } -> "themoviedb_id=$tmdbId"
+            !imdbId.isNullOrBlank() && imdbId.startsWith("tt") -> "imdb_id=$imdbId"
+            else -> null
+        } ?: return@withContext null
+
+        try {
+            val url = "https://api.ani.zip/mappings?$queryParam"
+            val req = Request.Builder()
+                .url(url)
+                .header("User-Agent", DEFAULT_USER_AGENT)
+                .build()
+            val fastClient = client.newBuilder()
+                .callTimeout(java.time.Duration.ofMillis(2500))
+                .build()
+
+            fastClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext null
+                val body = resp.body?.string().orEmpty()
+                if (body.isBlank()) return@withContext null
+
+                val root = json.parseToJsonElement(body).jsonObject
+                val mappingsObj = root["mappings"]?.jsonObject
+                val resMalId = mappingsObj?.get("mal_id")?.jsonPrimitive?.intOrNull
+                val resAnilistId = mappingsObj?.get("anilist_id")?.jsonPrimitive?.intOrNull
+                val resTmdbId = mappingsObj?.get("themoviedb_id")?.jsonPrimitive?.contentOrNull
+                val resImdbId = mappingsObj?.get("imdb_id")?.jsonPrimitive?.contentOrNull
+
+                val titlesObj = root["titles"]?.jsonObject
+                val romaji = titlesObj?.get("x-jat")?.jsonPrimitive?.contentOrNull
+                    ?: titlesObj?.get("romaji")?.jsonPrimitive?.contentOrNull
+                val english = titlesObj?.get("en")?.jsonPrimitive?.contentOrNull
+                val native = titlesObj?.get("ja")?.jsonPrimitive?.contentOrNull
+
+                val synonymsList = mutableListOf<String>()
+                titlesObj?.forEach { (k, v) ->
+                    val t = v.jsonPrimitive.contentOrNull?.trim()
+                    if (!t.isNullOrBlank() && t != romaji && t != english && t != native) {
+                        synonymsList.add(t)
+                    }
+                }
+
+                val epMap = mutableMapOf<Pair<Int, Int>, Int>()
+                root["episodes"]?.jsonObject?.values?.forEach { epElem ->
+                    val epObj = epElem as? JsonObject ?: return@forEach
+                    val s = epObj["seasonNumber"]?.jsonPrimitive?.intOrNull
+                        ?: epObj["season"]?.jsonPrimitive?.intOrNull
+                        ?: epObj["tvdbSeason"]?.jsonPrimitive?.intOrNull
+                    if (s != null && s <= 0) return@forEach
+                    val effectiveSeason = s ?: 1
+                    val e = epObj["episodeNumber"]?.jsonPrimitive?.intOrNull
+                        ?: epObj["episode"]?.jsonPrimitive?.intOrNull
+                        ?: epObj["tvdbEpisode"]?.jsonPrimitive?.intOrNull
+                        ?: return@forEach
+                    val abs = epObj["absoluteEpisodeNumber"]?.jsonPrimitive?.intOrNull
+                        ?: epObj["anidbEpisodeNumber"]?.jsonPrimitive?.intOrNull
+                        ?: epObj["kitsuEpisodeNumber"]?.jsonPrimitive?.intOrNull
+                        ?: epObj["malEpisodeNumber"]?.jsonPrimitive?.intOrNull
+                        ?: epObj["kitsuEpisode"]?.jsonPrimitive?.intOrNull
+                        ?: epObj["malEpisode"]?.jsonPrimitive?.intOrNull
+                        ?: epObj["abs"]?.jsonPrimitive?.intOrNull
+                    if (abs != null && abs > 0) {
+                        epMap[effectiveSeason to e] = abs
+                    }
+                }
+
+                val data = AniZipData(
+                    malId = resMalId ?: malId,
+                    anilistId = resAnilistId ?: anilistId,
+                    tmdbId = resTmdbId ?: tmdbId,
+                    imdbId = resImdbId ?: imdbId,
+                    romajiTitle = romaji,
+                    englishTitle = english,
+                    nativeTitle = native,
+                    synonyms = synonymsList.distinct(),
+                    episodeAbsoluteMap = epMap
+                )
+                listOfNotNull(
+                    data.tmdbId?.let { "tmdb:$it" },
+                    data.malId?.let { "mal:$it" },
+                    data.anilistId?.let { "anilist:$it" },
+                    data.imdbId?.let { "imdb:$it" }
+                ).forEach { key ->
+                    aniZipCache[key] = data
+                }
+                return@withContext data
+            }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    /**
+     * Queries AniList GraphQL to enrich Romaji, English, Native titles, synonyms, and season sequels.
+     */
+    suspend fun fetchAniListGraphQL(
+        client: OkHttpClient = DohDns.metadataClient,
+        anilistId: Int? = null,
+        malId: Int? = null,
+        searchTitle: String? = null
+    ): AnimeEnrichmentResult? = withContext(Dispatchers.IO) {
+        val cacheKey = "al:${anilistId ?: ""}:${malId ?: ""}:${searchTitle ?: ""}"
+        animeEnrichCache[cacheKey]?.let { return@withContext it }
+
+        val query = """
+            query (${'$'}id: Int, ${'$'}idMal: Int, ${'$'}search: String) {
+              Media(id: ${'$'}id, idMal: ${'$'}idMal, search: ${'$'}search, type: ANIME) {
+                id
+                idMal
+                seasonYear
+                title {
+                  romaji
+                  english
+                  native
+                }
+                synonyms
+                relations {
+                  edges {
+                    relationType
+                    node {
+                      id
+                      idMal
+                      title {
+                        romaji
+                        english
+                      }
+                      seasonYear
+                      format
+                    }
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val variables = JSONObject().apply {
+            if (anilistId != null && anilistId > 0) put("id", anilistId)
+            if (malId != null && malId > 0) put("idMal", malId)
+            if (anilistId == null && malId == null && !searchTitle.isNullOrBlank()) put("search", searchTitle)
+        }
+        val jsonBody = JSONObject().apply {
+            put("query", query)
+            put("variables", variables)
+        }
+
+        try {
+            val req = Request.Builder()
+                .url("https://graphql.anilist.co")
+                .post(jsonBody.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
+                .header("Content-Type", "application/json")
+                .header("Accept", "application/json")
+                .header("User-Agent", DEFAULT_USER_AGENT)
+                .build()
+
+            val fastClient = client.newBuilder().callTimeout(java.time.Duration.ofMillis(2500)).build()
+            fastClient.newCall(req).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val body = resp.body?.string().orEmpty()
+                    if (body.isNotBlank()) {
+                        val root = json.parseToJsonElement(body).jsonObject
+                        val media = root["data"]?.jsonObject?.get("Media")?.jsonObject ?: return@use null
+                        val resAlId = media["id"]?.jsonPrimitive?.intOrNull
+                        val resMalId = media["idMal"]?.jsonPrimitive?.intOrNull
+                        val titleObj = media["title"]?.jsonObject
+                        val romaji = titleObj?.get("romaji")?.jsonPrimitive?.contentOrNull
+                        val english = titleObj?.get("english")?.jsonPrimitive?.contentOrNull
+                        val native = titleObj?.get("native")?.jsonPrimitive?.contentOrNull
+
+                        val synonyms = media["synonyms"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
+
+                        val seasonSpecific = mutableMapOf<Int, MutableList<String>>()
+                        val relations = media["relations"]?.jsonObject?.get("edges")?.jsonArray
+                        relations?.forEach { edgeElem ->
+                            val edge = edgeElem.jsonObject
+                            val relType = edge["relationType"]?.jsonPrimitive?.contentOrNull ?: ""
+                            val node = edge["node"]?.jsonObject ?: return@forEach
+                            val nodeTitle = node["title"]?.jsonObject
+                            val nodeRomaji = nodeTitle?.get("romaji")?.jsonPrimitive?.contentOrNull
+                            val nodeEn = nodeTitle?.get("english")?.jsonPrimitive?.contentOrNull
+                            val titles = listOfNotNull(nodeRomaji, nodeEn)
+
+                            titles.forEach { t ->
+                                val sMatch = Regex("""\b(?:season|s)\s*(\d{1,2})\b""", RegexOption.IGNORE_CASE).find(t)
+                                    ?: Regex("""\b(\d{1,2})(?:nd|rd|th)\s+season\b""", RegexOption.IGNORE_CASE).find(t)
+                                val sNum = sMatch?.groupValues?.get(1)?.toIntOrNull()
+                                    ?: if (relType.equals("SEQUEL", ignoreCase = true)) 2 else null
+                                if (sNum != null) {
+                                    seasonSpecific.getOrPut(sNum) { mutableListOf() }.add(t)
+                                }
+                            }
+                        }
+
+                        val enrich = AnimeEnrichmentResult(
+                            malId = resMalId ?: malId,
+                            anilistId = resAlId ?: anilistId,
+                            romajiTitle = romaji,
+                            englishTitle = english,
+                            nativeTitle = native,
+                            synonyms = synonyms,
+                            seasonSpecificTitles = seasonSpecific.mapValues { it.value.distinct() }
+                        )
+                        animeEnrichCache[cacheKey] = enrich
+                        return@withContext enrich
+                    }
+                }
+            }
+        } catch (_: Throwable) {}
+        null
+    }
+
+    /**
+     * Fallback lookup against Jikan v4 (MyAnimeList) API.
+     */
+    suspend fun fetchJikanDetails(
+        client: OkHttpClient = DohDns.metadataClient,
+        malId: Int
+    ): AnimeEnrichmentResult? = withContext(Dispatchers.IO) {
+        if (malId <= 0) return@withContext null
+        val cacheKey = "jikan:$malId"
+        animeEnrichCache[cacheKey]?.let { return@withContext it }
+
+        try {
+            val req = Request.Builder()
+                .url("https://api.jikan.moe/v4/anime/$malId")
+                .header("User-Agent", DEFAULT_USER_AGENT)
+                .build()
+            val fastClient = client.newBuilder().callTimeout(java.time.Duration.ofMillis(2500)).build()
+            fastClient.newCall(req).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val body = resp.body?.string().orEmpty()
+                    if (body.isNotBlank()) {
+                        val root = json.parseToJsonElement(body).jsonObject
+                        val data = root["data"]?.jsonObject ?: return@use null
+                        val title = data["title"]?.jsonPrimitive?.contentOrNull
+                        val titleEn = data["title_english"]?.jsonPrimitive?.contentOrNull
+                        val titleJa = data["title_japanese"]?.jsonPrimitive?.contentOrNull
+                        val synonyms = data["title_synonyms"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
+                        val otherTitles = data["titles"]?.jsonArray?.mapNotNull {
+                            it.jsonObject["title"]?.jsonPrimitive?.contentOrNull
+                        } ?: emptyList()
+
+                        val allSynonyms = (synonyms + otherTitles).distinct()
+                        val enrich = AnimeEnrichmentResult(
+                            malId = malId,
+                            romajiTitle = title,
+                            englishTitle = titleEn,
+                            nativeTitle = titleJa,
+                            synonyms = allSynonyms
+                        )
+                        animeEnrichCache[cacheKey] = enrich
+                        return@withContext enrich
+                    }
+                }
+            }
+        } catch (_: Throwable) {}
+        null
+    }
+
+    /**
      * Resolves the absolute episode number for anime.
-     * Tries AniZip API first, with offline fallback: episode + sum(prior seasons episode counts).
+     * Tries AniZip API first (with memory cache), with offline fallback: episode + sum(prior seasons episode counts).
      */
     suspend fun resolveAnimeAbsoluteEpisode(
         client: OkHttpClient = DohDns.metadataClient,
@@ -230,56 +936,12 @@ object TmdbBridge {
         val cacheKey = "$tmdbId:$season:$episode"
         animeAbsoluteEpisodeCache[cacheKey]?.let { return@withContext it }
 
-        // 1. Try AniZip API
-        val anizipAbsolute = try {
-            val queryParam = if (tmdbId.isNotBlank() && tmdbId.all { it.isDigit() }) {
-                "themoviedb_id=$tmdbId"
-            } else if (!imdbId.isNullOrBlank() && imdbId.startsWith("tt")) {
-                "imdb_id=$imdbId"
-            } else null
-
-            if (queryParam != null) {
-                val url = "https://api.ani.zip/mappings?$queryParam"
-                val req = Request.Builder()
-                    .url(url)
-                    .header("User-Agent", DEFAULT_USER_AGENT)
-                    .build()
-                client.newCall(req).execute().use { resp ->
-                    if (resp.isSuccessful) {
-                        val body = resp.body?.string().orEmpty()
-                        if (body.isNotBlank()) {
-                            val root = json.parseToJsonElement(body).jsonObject
-                            val episodesMap = root["episodes"]?.jsonObject
-                            episodesMap?.values?.firstNotNullOfOrNull { epElem ->
-                                val epObj = epElem as? JsonObject
-                                val s = epObj?.get("seasonNumber")?.jsonPrimitive?.intOrNull
-                                    ?: epObj?.get("season")?.jsonPrimitive?.intOrNull
-                                    ?: epObj?.get("tvdbSeason")?.jsonPrimitive?.intOrNull
-                                if (s != null && s <= 0) return@firstNotNullOfOrNull null
-                                val effectiveSeason = s ?: 1
-                                val e = epObj?.get("episodeNumber")?.jsonPrimitive?.intOrNull
-                                    ?: epObj?.get("episode")?.jsonPrimitive?.intOrNull
-                                    ?: epObj?.get("tvdbEpisode")?.jsonPrimitive?.intOrNull
-                                val abs = epObj?.get("absoluteEpisodeNumber")?.jsonPrimitive?.intOrNull
-                                    ?: epObj?.get("anidbEpisodeNumber")?.jsonPrimitive?.intOrNull
-                                    ?: epObj?.get("kitsuEpisodeNumber")?.jsonPrimitive?.intOrNull
-                                    ?: epObj?.get("malEpisodeNumber")?.jsonPrimitive?.intOrNull
-                                    ?: epObj?.get("kitsuEpisode")?.jsonPrimitive?.intOrNull
-                                    ?: epObj?.get("malEpisode")?.jsonPrimitive?.intOrNull
-                                    ?: epObj?.get("abs")?.jsonPrimitive?.intOrNull
-                                if (effectiveSeason == season && e == episode && abs != null && abs > 0) abs else null
-                            }
-                        } else null
-                    } else null
-                }
-            } else null
-        } catch (_: Throwable) {
-            null
-        }
-
-        if (anizipAbsolute != null) {
-            animeAbsoluteEpisodeCache[cacheKey] = anizipAbsolute
-            return@withContext anizipAbsolute
+        // 1. Try AniZip API via cached fetchAniZipMappings
+        val aniZip = fetchAniZipMappings(client, tmdbId = tmdbId, imdbId = imdbId)
+        val cachedAbs = aniZip?.episodeAbsoluteMap?.get(season to episode)
+        if (cachedAbs != null && cachedAbs > 0) {
+            animeAbsoluteEpisodeCache[cacheKey] = cachedAbs
+            return@withContext cachedAbs
         }
 
         // 2. Offline fallback: episode + sum(prior seasons, ignoring Season 0 specials)
@@ -318,21 +980,21 @@ object TmdbBridge {
         // 1. Try with year if present
         if (year != null) {
             val urlWithYear = if (isTv) {
-                "https://api.themoviedb.org/3/search/tv?api_key=$apiKey&query=$encodedQuery&first_air_date_year=$year"
+                appendApiKey("$BASE_URL/search/tv?query=$encodedQuery&first_air_date_year=$year", apiKey)
             } else {
-                "https://api.themoviedb.org/3/search/movie?api_key=$apiKey&query=$encodedQuery&year=$year"
+                appendApiKey("$BASE_URL/search/movie?query=$encodedQuery&year=$year", apiKey)
             }
             val id = queryBestTmdbId(client, urlWithYear, hints)
             if (id != null) return@withContext id
         }
 
         // 2. Try without year
-        val urlWithoutYear = "https://api.themoviedb.org/3/search/$endpoint?api_key=$apiKey&query=$encodedQuery"
+        val urlWithoutYear = appendApiKey("$BASE_URL/search/$endpoint?query=$encodedQuery", apiKey)
         val id = queryBestTmdbId(client, urlWithoutYear, hints)
         if (id != null) return@withContext id
 
         // 3. Fallback: try multi search
-        val multiUrl = "https://api.themoviedb.org/3/search/multi?api_key=$apiKey&query=$encodedQuery"
+        val multiUrl = appendApiKey("$BASE_URL/search/multi?query=$encodedQuery", apiKey)
         queryBestTmdbId(client, multiUrl, hints)
     }
 
@@ -402,7 +1064,7 @@ object TmdbBridge {
 
         // 1. Primary: TMDB Images API with English priority
         try {
-            val url = "https://api.themoviedb.org/3/$typeStr/$clean/images?api_key=$apiKey&include_image_language=en,null"
+            val url = appendApiKey("$BASE_URL/$typeStr/$clean/images?include_image_language=en,null", apiKey)
             val req = Request.Builder().url(url).header("User-Agent", DEFAULT_USER_AGENT).build()
             client.newCall(req).execute().use { resp ->
                 if (resp.isSuccessful) {
@@ -437,7 +1099,7 @@ object TmdbBridge {
 
         // 2. Secondary: TMDB Images API unfiltered
         try {
-            val urlAll = "https://api.themoviedb.org/3/$typeStr/$clean/images?api_key=$apiKey"
+            val urlAll = appendApiKey("$BASE_URL/$typeStr/$clean/images", apiKey)
             val req = Request.Builder().url(urlAll).header("User-Agent", DEFAULT_USER_AGENT).build()
             client.newCall(req).execute().use { resp ->
                 if (resp.isSuccessful) {
@@ -475,13 +1137,30 @@ object TmdbBridge {
         apiKey: String = DEFAULT_API_KEY
     ): EnrichedMetadata? = withContext(Dispatchers.IO) {
         val cleanInputId = tmdbId.trim().removePrefix("tmdb:").removePrefix("tmdb/")
-        val cleanBase = cleanInputId.substringBefore(':').substringBefore('/')
+        val isMalInput = cleanInputId.startsWith("mal:", ignoreCase = true) || cleanInputId.startsWith("jikan:", ignoreCase = true)
+        val isAnilistInput = cleanInputId.startsWith("anilist:", ignoreCase = true)
+        val inputMalId = if (isMalInput) cleanInputId.substringAfter(':').substringBefore('/').toIntOrNull() else null
+        val inputAnilistId = if (isAnilistInput) cleanInputId.substringAfter(':').substringBefore('/').toIntOrNull() else null
+
+        val cleanBase = if (inputMalId != null || inputAnilistId != null) {
+            cleanInputId.substringAfter(':').substringBefore('/')
+        } else {
+            cleanInputId.substringBefore(':').substringBefore('/')
+        }
         if (cleanBase.isBlank()) return@withContext null
 
-        val numericTmdbId = if (cleanBase.startsWith("tt")) {
-            findTmdbIdByImdb(client, cleanBase, isTv, apiKey) ?: return@withContext null
-        } else {
-            cleanBase
+        var resolvedTmdbFromAnime: String? = null
+        var preResolvedAniZip: AniZipData? = null
+        if (inputMalId != null || inputAnilistId != null) {
+            preResolvedAniZip = fetchAniZipMappings(client, malId = inputMalId, anilistId = inputAnilistId)
+            resolvedTmdbFromAnime = preResolvedAniZip?.tmdbId
+        }
+
+        val numericTmdbId = when {
+            resolvedTmdbFromAnime != null && resolvedTmdbFromAnime.all { it.isDigit() } -> resolvedTmdbFromAnime
+            cleanBase.startsWith("tt") -> findTmdbIdByImdb(client, cleanBase, isTv, apiKey) ?: return@withContext null
+            cleanBase.all { it.isDigit() } -> cleanBase
+            else -> return@withContext null
         }
         if (!numericTmdbId.all { it.isDigit() }) return@withContext null
 
@@ -493,13 +1172,21 @@ object TmdbBridge {
             enrichedCache["$endpointPrefix:$cleanBase"]?.let { return@withContext it }
             enrichedCache["$altPrefix:$cleanBase"]?.let { return@withContext it }
         }
+        if (inputMalId != null) {
+            enrichedCache["$endpointPrefix:mal:$inputMalId"]?.let { return@withContext it }
+            enrichedCache["$altPrefix:mal:$inputMalId"]?.let { return@withContext it }
+        }
+        if (inputAnilistId != null) {
+            enrichedCache["$endpointPrefix:anilist:$inputAnilistId"]?.let { return@withContext it }
+            enrichedCache["$altPrefix:anilist:$inputAnilistId"]?.let { return@withContext it }
+        }
 
         for (attempt in 1..3) {
             try {
                 var endpoint = if (isTv) "tv" else "movie"
-                val append = "credits,external_ids,videos,recommendations,images," +
+                val append = "credits,external_ids,videos,recommendations,images,alternative_titles,translations," +
                         if (isTv) "content_ratings" else "release_dates"
-                val url = "https://api.themoviedb.org/3/$endpoint/$numericTmdbId?api_key=$apiKey&append_to_response=$append&include_image_language=en,null"
+                val url = appendApiKey("$BASE_URL/$endpoint/$numericTmdbId?append_to_response=$append&include_image_language=en,null", apiKey)
 
                 val req = Request.Builder().url(url).header("User-Agent", DEFAULT_USER_AGENT).build()
                 var (statusCode, body) = client.newCall(req).execute().use { resp ->
@@ -512,9 +1199,9 @@ object TmdbBridge {
                 }
                 if (statusCode == 404) {
                     val altEndpoint = if (endpoint == "tv") "movie" else "tv"
-                    val altAppend = "credits,external_ids,videos,recommendations,images," +
+                    val altAppend = "credits,external_ids,videos,recommendations,images,alternative_titles,translations," +
                             if (altEndpoint == "tv") "content_ratings" else "release_dates"
-                    val altUrl = "https://api.themoviedb.org/3/$altEndpoint/$numericTmdbId?api_key=$apiKey&append_to_response=$altAppend&include_image_language=en,null"
+                    val altUrl = appendApiKey("$BASE_URL/$altEndpoint/$numericTmdbId?append_to_response=$altAppend&include_image_language=en,null", apiKey)
                     val altReq = Request.Builder().url(altUrl).header("User-Agent", DEFAULT_USER_AGENT).build()
                     val (altStatus, altBody) = client.newCall(altReq).execute().use { resp ->
                         resp.code to (resp.body?.string() ?: "")
@@ -530,7 +1217,11 @@ object TmdbBridge {
                     continue
                 }
 
+                cacheTmdbDetailsJson(endpoint, numericTmdbId, body)
                 val root = json.parseToJsonElement(body).jsonObject
+                root["external_ids"]?.jsonObject?.let { ext ->
+                    cacheTmdbExternalIdsJson(endpoint, numericTmdbId, ext.toString())
+                }
 
                 val title = root["title"]?.jsonPrimitive?.contentOrNull
                     ?: root["name"]?.jsonPrimitive?.contentOrNull
@@ -629,13 +1320,17 @@ object TmdbBridge {
                     }
                 }
 
-                // Release Year: Movies = theatrical premiere year; TV = latest season year!
+                // Release Year: Movies = theatrical premiere year; TV = canonical first_air_date premiere year!
                 val initialDate = root["release_date"]?.jsonPrimitive?.contentOrNull
                     ?: root["first_air_date"]?.jsonPrimitive?.contentOrNull
-                var year = initialDate?.take(4)?.toIntOrNull()
+                val premiereYear = initialDate?.take(4)?.toIntOrNull()
+                val year = premiereYear
 
                 val seasonNumbers = mutableListOf<Int>()
                 val seasonEpisodeCounts = mutableMapOf<Int, Int>()
+                val seasonYears = mutableMapOf<Int, Int>()
+                val seasonNames = mutableMapOf<Int, String>()
+                var latestSeasonYear: Int? = null
                 if (isTv) {
                     val seasonsArr = root["seasons"]?.jsonArray
                     if (seasonsArr != null) {
@@ -643,18 +1338,54 @@ object TmdbBridge {
                             val sObj = sElem.jsonObject
                             val sNum = sObj["season_number"]?.jsonPrimitive?.intOrNull ?: continue
                             val epCount = sObj["episode_count"]?.jsonPrimitive?.intOrNull ?: 0
+                            val sName = sObj["name"]?.jsonPrimitive?.contentOrNull
                             if (sNum > 0) {
                                 seasonNumbers.add(sNum)
                                 seasonEpisodeCounts[sNum] = epCount
+                                if (!sName.isNullOrBlank()) {
+                                    seasonNames[sNum] = sName
+                                }
                                 val sAirDate = sObj["air_date"]?.jsonPrimitive?.contentOrNull
                                 val sYear = sAirDate?.take(4)?.toIntOrNull()
-                                if (sYear != null && (year == null || sYear > year)) {
-                                    year = sYear
+                                if (sYear != null) {
+                                    seasonYears[sNum] = sYear
+                                    if (latestSeasonYear == null || sYear > latestSeasonYear) {
+                                        latestSeasonYear = sYear
+                                    }
                                 }
                             }
                         }
                     }
                 }
+
+                val originalTitle = root["original_title"]?.jsonPrimitive?.contentOrNull
+                    ?: root["original_name"]?.jsonPrimitive?.contentOrNull
+
+                val altTitles = mutableSetOf<String>()
+                val altObj = root["alternative_titles"]?.jsonObject
+                val altList = altObj?.get("titles")?.jsonArray ?: altObj?.get("results")?.jsonArray
+                altList?.forEach { tElem ->
+                    val tObj = (tElem as? JsonObject) ?: return@forEach
+                    val t = tObj["title"]?.jsonPrimitive?.contentOrNull?.trim()
+                    if (!t.isNullOrBlank() && !t.equals(title, ignoreCase = true)) {
+                        altTitles.add(t)
+                    }
+                }
+
+                val translationsObj = root["translations"]?.jsonObject
+                translationsObj?.get("translations")?.jsonArray?.forEach { trElem ->
+                    val trObj = (trElem as? JsonObject) ?: return@forEach
+                    val iso = trObj["iso_639_1"]?.jsonPrimitive?.contentOrNull?.lowercase()
+                    val dataObj = trObj["data"]?.jsonObject
+                    val transTitle = (dataObj?.get("title") ?: dataObj?.get("name"))?.jsonPrimitive?.contentOrNull?.trim()
+                    if (!transTitle.isNullOrBlank() && !transTitle.equals(title, ignoreCase = true)) {
+                        if (iso == "en" || iso == origLang?.lowercase()) {
+                            altTitles.add(transTitle)
+                        }
+                    }
+                }
+
+                val tvdbId = externalIds?.get("tvdb_id")?.jsonPrimitive?.intOrNull
 
                 // External ratings (IMDb & Rotten Tomatoes)
                 val (extImdb, extRt) = fetchExternalRatings(client, imdbId, title, year)
@@ -677,7 +1408,7 @@ object TmdbBridge {
                 // If videos is empty from append_to_response, query the standalone /videos endpoint (supports all languages)
                 if (videosArr.isNullOrEmpty()) {
                     try {
-                        val vidUrl = "https://api.themoviedb.org/3/$endpoint/$numericTmdbId/videos?api_key=$apiKey"
+                        val vidUrl = appendApiKey("$BASE_URL/$endpoint/$numericTmdbId/videos", apiKey)
                         val vidReq = Request.Builder().url(vidUrl).header("User-Agent", DEFAULT_USER_AGENT).build()
                         client.newCall(vidReq).execute().use { vResp ->
                             if (vResp.isSuccessful) {
@@ -818,6 +1549,76 @@ object TmdbBridge {
                     logoUrl = resolveLogo(client, numericTmdbId, isTv, resolvedImdbId, apiKey)
                 }
 
+                // Anime Metadata Bridge Enrichment (AniZip + AniList GraphQL + Jikan)
+                val isContentAnime = genres.any { it.equals("Animation", ignoreCase = true) || it.equals("Anime", ignoreCase = true) } &&
+                        (origLang?.equals("ja", ignoreCase = true) == true || originCountry.contains("JP")) ||
+                        cleanInputId.startsWith("mal:", ignoreCase = true) ||
+                        cleanInputId.startsWith("anilist:", ignoreCase = true) ||
+                        cleanInputId.startsWith("jikan:", ignoreCase = true) ||
+                        preResolvedAniZip != null
+
+                var malId: Int? = inputMalId
+                var anilistId: Int? = inputAnilistId
+                var romajiTitle: String? = null
+                var englishTitle: String? = null
+                var nativeTitle: String? = null
+                val animeSynonymsList = mutableListOf<String>()
+                val seasonSpecificMap = mutableMapOf<Int, MutableList<String>>()
+
+                seasonNames.forEach { (sNum, sName) ->
+                    seasonSpecificMap.getOrPut(sNum) { mutableListOf() }.add(sName)
+                }
+
+                if (isContentAnime) {
+                    val aniZip = preResolvedAniZip ?: fetchAniZipMappings(
+                        client,
+                        tmdbId = numericTmdbId,
+                        malId = malId,
+                        anilistId = anilistId,
+                        imdbId = resolvedImdbId
+                    )
+                    if (aniZip != null) {
+                        malId = aniZip.malId ?: malId
+                        anilistId = aniZip.anilistId ?: anilistId
+                        romajiTitle = aniZip.romajiTitle
+                        englishTitle = aniZip.englishTitle
+                        nativeTitle = aniZip.nativeTitle
+                        animeSynonymsList.addAll(aniZip.synonyms)
+                    }
+
+                    val animeEnrich = fetchAniListGraphQL(client, anilistId = anilistId, malId = malId, searchTitle = title)
+                        ?: malId?.let { fetchJikanDetails(client, it) }
+
+                    if (animeEnrich != null) {
+                        if (malId == null) malId = animeEnrich.malId
+                        if (anilistId == null) anilistId = animeEnrich.anilistId
+                        if (romajiTitle == null) romajiTitle = animeEnrich.romajiTitle
+                        if (englishTitle == null) englishTitle = animeEnrich.englishTitle
+                        if (nativeTitle == null) nativeTitle = animeEnrich.nativeTitle
+                        animeSynonymsList.addAll(animeEnrich.synonyms)
+                        animeEnrich.seasonSpecificTitles.forEach { (sNum, sTitles) ->
+                            seasonSpecificMap.getOrPut(sNum) { mutableListOf() }.addAll(sTitles)
+                        }
+                    }
+
+                    // Merge all discovered titles into altTitles
+                    listOfNotNull(romajiTitle, englishTitle, nativeTitle).forEach { t ->
+                        if (t.isNotBlank() && !t.equals(title, ignoreCase = true)) {
+                            altTitles.add(t)
+                        }
+                    }
+                    animeSynonymsList.forEach { syn ->
+                        if (syn.isNotBlank() && !syn.equals(title, ignoreCase = true)) {
+                            altTitles.add(syn)
+                        }
+                    }
+                    seasonSpecificMap.values.flatten().forEach { st ->
+                        if (st.isNotBlank() && !st.equals(title, ignoreCase = true)) {
+                            altTitles.add(st)
+                        }
+                    }
+                }
+
                 val enriched = EnrichedMetadata(
                     tmdbId = numericTmdbId,
                     title = title,
@@ -839,7 +1640,22 @@ object TmdbBridge {
                     logoUrl = logoUrl,
                     originalLanguage = origLang,
                     originCountry = originCountry,
-                    seasonEpisodeCounts = seasonEpisodeCounts
+                    seasonEpisodeCounts = seasonEpisodeCounts,
+                    originalTitle = originalTitle,
+                    alternativeTitles = altTitles,
+                    premiereYear = premiereYear,
+                    latestSeasonYear = latestSeasonYear,
+                    seasonYears = seasonYears,
+                    seasonNames = seasonNames,
+                    tvdbId = tvdbId,
+                    runtimeMinutes = runtimeMins,
+                    malId = malId,
+                    anilistId = anilistId,
+                    romajiTitle = romajiTitle,
+                    englishTitle = englishTitle,
+                    nativeTitle = nativeTitle,
+                    animeSynonyms = animeSynonymsList.distinct(),
+                    seasonSpecificTitles = seasonSpecificMap.mapValues { it.value.distinct() }
                 )
                 enrichedCache["$endpoint:$numericTmdbId"] = enriched
                 enrichedCache["$endpointPrefix:$numericTmdbId"] = enriched
@@ -850,6 +1666,16 @@ object TmdbBridge {
                 if (!resolvedImdbId.isNullOrBlank()) {
                     enrichedCache["$endpoint:$resolvedImdbId"] = enriched
                     enrichedCache["$endpointPrefix:$resolvedImdbId"] = enriched
+                }
+                val finalMal = malId ?: inputMalId
+                if (finalMal != null) {
+                    enrichedCache["$endpoint:mal:$finalMal"] = enriched
+                    enrichedCache["$endpointPrefix:mal:$finalMal"] = enriched
+                }
+                val finalAl = anilistId ?: inputAnilistId
+                if (finalAl != null) {
+                    enrichedCache["$endpoint:anilist:$finalAl"] = enriched
+                    enrichedCache["$endpointPrefix:anilist:$finalAl"] = enriched
                 }
                 return@withContext enriched
             } catch (_: Exception) {
@@ -886,7 +1712,7 @@ object TmdbBridge {
                 async {
                     for (attempt in 1..3) {
                         try {
-                            val url = "https://api.themoviedb.org/3/tv/$tmdbId/season/$sNum?api_key=$apiKey"
+                            val url = appendApiKey("$BASE_URL/tv/$tmdbId/season/$sNum", apiKey)
                             val req = Request.Builder().url(url).header("User-Agent", DEFAULT_USER_AGENT).build()
                             val (statusCode, body) = client.newCall(req).execute().use { resp ->
                                 resp.code to (resp.body?.string() ?: "")
@@ -1021,44 +1847,44 @@ object TmdbBridge {
      * Over 35 diverse catalog rails for progressive infinite-scroll loading.
      */
     val PROGRESSIVE_RAIL_DEFINITIONS: List<Pair<String, String>> = listOf(
-        "Action & Adventure" to "https://api.themoviedb.org/3/discover/movie?with_genres=28,12&sort_by=popularity.desc",
-        "Sci-Fi Universes" to "https://api.themoviedb.org/3/discover/movie?with_genres=878&sort_by=popularity.desc",
-        "Mind-Bending Thrillers" to "https://api.themoviedb.org/3/discover/movie?with_genres=53&sort_by=vote_average.desc&vote_count.gte=500",
-        "Horror Nights" to "https://api.themoviedb.org/3/discover/movie?with_genres=27&sort_by=popularity.desc",
-        "Comedy Hits" to "https://api.themoviedb.org/3/discover/movie?with_genres=35&sort_by=popularity.desc",
-        "Animation Spotlight" to "https://api.themoviedb.org/3/discover/movie?with_genres=16&sort_by=popularity.desc",
-        "Crime Mysteries" to "https://api.themoviedb.org/3/discover/tv?with_genres=80,9648&sort_by=popularity.desc",
-        "Epic Fantasy & Magic" to "https://api.themoviedb.org/3/discover/movie?with_genres=14&sort_by=popularity.desc",
-        "Romantic Stories" to "https://api.themoviedb.org/3/discover/movie?with_genres=10749&sort_by=popularity.desc",
-        "Documentaries" to "https://api.themoviedb.org/3/discover/movie?with_genres=99&sort_by=popularity.desc",
-        "Korean Dramas & Cinema" to "https://api.themoviedb.org/3/discover/tv?with_original_language=ko&sort_by=popularity.desc",
-        "Anime Series" to "https://api.themoviedb.org/3/discover/tv?with_genres=16&with_original_language=ja&sort_by=popularity.desc",
-        "Japanese Cinema" to "https://api.themoviedb.org/3/discover/movie?with_original_language=ja&sort_by=popularity.desc",
-        "Bollywood & Indian Hits" to "https://api.themoviedb.org/3/discover/movie?with_original_language=hi&sort_by=popularity.desc",
-        "Spanish Cinema" to "https://api.themoviedb.org/3/discover/movie?with_original_language=es&sort_by=popularity.desc",
-        "French Cinema" to "https://api.themoviedb.org/3/discover/movie?with_original_language=fr&sort_by=popularity.desc",
-        "Sci-Fi & Fantasy TV" to "https://api.themoviedb.org/3/discover/tv?with_genres=10765&sort_by=popularity.desc",
-        "Action & Adventure TV" to "https://api.themoviedb.org/3/discover/tv?with_genres=10759&sort_by=popularity.desc",
-        "Drama Series" to "https://api.themoviedb.org/3/discover/tv?with_genres=18&sort_by=popularity.desc",
-        "Comedy TV Series" to "https://api.themoviedb.org/3/discover/tv?with_genres=35&sort_by=popularity.desc",
-        "Family Movie Night" to "https://api.themoviedb.org/3/discover/movie?with_genres=10751&sort_by=popularity.desc",
-        "War & Military" to "https://api.themoviedb.org/3/discover/movie?with_genres=10752&sort_by=popularity.desc",
-        "Historical Epics" to "https://api.themoviedb.org/3/discover/movie?with_genres=36&sort_by=popularity.desc",
-        "Musical & Dance" to "https://api.themoviedb.org/3/discover/movie?with_genres=10402&sort_by=popularity.desc",
-        "Western Classics" to "https://api.themoviedb.org/3/discover/movie?with_genres=37&sort_by=popularity.desc",
-        "Cyberpunk & Tech" to "https://api.themoviedb.org/3/discover/movie?with_keywords=4565|12190&sort_by=popularity.desc",
-        "Superheroes & Comics" to "https://api.themoviedb.org/3/discover/movie?with_keywords=9715|180547&sort_by=popularity.desc",
-        "Post-Apocalyptic Survival" to "https://api.themoviedb.org/3/discover/movie?with_keywords=4458|2853&sort_by=popularity.desc",
-        "Space Exploration" to "https://api.themoviedb.org/3/discover/movie?with_keywords=9882|3804&sort_by=popularity.desc",
-        "Heist & Con Artists" to "https://api.themoviedb.org/3/discover/movie?with_keywords=10051|9717&sort_by=popularity.desc",
-        "Martial Arts Legends" to "https://api.themoviedb.org/3/discover/movie?with_keywords=780|9663&sort_by=popularity.desc",
-        "Time Travel" to "https://api.themoviedb.org/3/discover/movie?with_keywords=4379&sort_by=popularity.desc",
-        "Vampires & Werewolves" to "https://api.themoviedb.org/3/discover/movie?with_keywords=3133|12564&sort_by=popularity.desc",
-        "Coming of Age" to "https://api.themoviedb.org/3/discover/movie?with_keywords=10683|207317&sort_by=popularity.desc",
-        "A24 Indie Spotlight" to "https://api.themoviedb.org/3/discover/movie?with_companies=41077&sort_by=popularity.desc",
-        "Critically Acclaimed" to "https://api.themoviedb.org/3/discover/movie?sort_by=vote_average.desc&vote_count.gte=2000",
-        "Blockbuster Legends" to "https://api.themoviedb.org/3/discover/movie?sort_by=revenue.desc",
-        "Hidden Gems" to "https://api.themoviedb.org/3/discover/movie?vote_average.gte=7.8&vote_count.gte=200&vote_count.lte=1500&sort_by=popularity.desc"
+        "Action & Adventure" to "$BASE_URL/discover/movie?with_genres=28,12&sort_by=popularity.desc",
+        "Sci-Fi Universes" to "$BASE_URL/discover/movie?with_genres=878&sort_by=popularity.desc",
+        "Mind-Bending Thrillers" to "$BASE_URL/discover/movie?with_genres=53&sort_by=vote_average.desc&vote_count.gte=500",
+        "Horror Nights" to "$BASE_URL/discover/movie?with_genres=27&sort_by=popularity.desc",
+        "Comedy Hits" to "$BASE_URL/discover/movie?with_genres=35&sort_by=popularity.desc",
+        "Animation Spotlight" to "$BASE_URL/discover/movie?with_genres=16&sort_by=popularity.desc",
+        "Crime Mysteries" to "$BASE_URL/discover/tv?with_genres=80,9648&sort_by=popularity.desc",
+        "Epic Fantasy & Magic" to "$BASE_URL/discover/movie?with_genres=14&sort_by=popularity.desc",
+        "Romantic Stories" to "$BASE_URL/discover/movie?with_genres=10749&sort_by=popularity.desc",
+        "Documentaries" to "$BASE_URL/discover/movie?with_genres=99&sort_by=popularity.desc",
+        "Korean Dramas & Cinema" to "$BASE_URL/discover/tv?with_original_language=ko&sort_by=popularity.desc",
+        "Anime Series" to "$BASE_URL/discover/tv?with_genres=16&with_original_language=ja&sort_by=popularity.desc",
+        "Japanese Cinema" to "$BASE_URL/discover/movie?with_original_language=ja&sort_by=popularity.desc",
+        "Bollywood & Indian Hits" to "$BASE_URL/discover/movie?with_original_language=hi&sort_by=popularity.desc",
+        "Spanish Cinema" to "$BASE_URL/discover/movie?with_original_language=es&sort_by=popularity.desc",
+        "French Cinema" to "$BASE_URL/discover/movie?with_original_language=fr&sort_by=popularity.desc",
+        "Sci-Fi & Fantasy TV" to "$BASE_URL/discover/tv?with_genres=10765&sort_by=popularity.desc",
+        "Action & Adventure TV" to "$BASE_URL/discover/tv?with_genres=10759&sort_by=popularity.desc",
+        "Drama Series" to "$BASE_URL/discover/tv?with_genres=18&sort_by=popularity.desc",
+        "Comedy TV Series" to "$BASE_URL/discover/tv?with_genres=35&sort_by=popularity.desc",
+        "Family Movie Night" to "$BASE_URL/discover/movie?with_genres=10751&sort_by=popularity.desc",
+        "War & Military" to "$BASE_URL/discover/movie?with_genres=10752&sort_by=popularity.desc",
+        "Historical Epics" to "$BASE_URL/discover/movie?with_genres=36&sort_by=popularity.desc",
+        "Musical & Dance" to "$BASE_URL/discover/movie?with_genres=10402&sort_by=popularity.desc",
+        "Western Classics" to "$BASE_URL/discover/movie?with_genres=37&sort_by=popularity.desc",
+        "Cyberpunk & Tech" to "$BASE_URL/discover/movie?with_keywords=4565|12190&sort_by=popularity.desc",
+        "Superheroes & Comics" to "$BASE_URL/discover/movie?with_keywords=9715|180547&sort_by=popularity.desc",
+        "Post-Apocalyptic Survival" to "$BASE_URL/discover/movie?with_keywords=4458|2853&sort_by=popularity.desc",
+        "Space Exploration" to "$BASE_URL/discover/movie?with_keywords=9882|3804&sort_by=popularity.desc",
+        "Heist & Con Artists" to "$BASE_URL/discover/movie?with_keywords=10051|9717&sort_by=popularity.desc",
+        "Martial Arts Legends" to "$BASE_URL/discover/movie?with_keywords=780|9663&sort_by=popularity.desc",
+        "Time Travel" to "$BASE_URL/discover/movie?with_keywords=4379&sort_by=popularity.desc",
+        "Vampires & Werewolves" to "$BASE_URL/discover/movie?with_keywords=3133|12564&sort_by=popularity.desc",
+        "Coming of Age" to "$BASE_URL/discover/movie?with_keywords=10683|207317&sort_by=popularity.desc",
+        "A24 Indie Spotlight" to "$BASE_URL/discover/movie?with_companies=41077&sort_by=popularity.desc",
+        "Critically Acclaimed" to "$BASE_URL/discover/movie?sort_by=vote_average.desc&vote_count.gte=2000",
+        "Blockbuster Legends" to "$BASE_URL/discover/movie?sort_by=revenue.desc",
+        "Hidden Gems" to "$BASE_URL/discover/movie?vote_average.gte=7.8&vote_count.gte=200&vote_count.lte=1500&sort_by=popularity.desc"
     )
 
     /**
@@ -1077,16 +1903,16 @@ object TmdbBridge {
         }
 
         val coreFeeds = listOf(
-            Triple("Trending Today", "https://api.themoviedb.org/3/trending/all/day?api_key=$apiKey", true),
-            Triple("Trending Movies", "https://api.themoviedb.org/3/trending/movie/week?api_key=$apiKey", true),
-            Triple("Popular Movies", "https://api.themoviedb.org/3/movie/popular?api_key=$apiKey", true),
-            Triple("Popular TV Shows", "https://api.themoviedb.org/3/tv/popular?api_key=$apiKey", true),
-            Triple("Top Rated Movies", "https://api.themoviedb.org/3/movie/top_rated?api_key=$apiKey", false),
-            Triple("Binge-Worthy TV Series", "https://api.themoviedb.org/3/trending/tv/week?api_key=$apiKey", false)
+            Triple("Trending Today", appendApiKey("$BASE_URL/trending/all/day", apiKey), true),
+            Triple("Trending Movies", appendApiKey("$BASE_URL/trending/movie/week", apiKey), true),
+            Triple("Popular Movies", appendApiKey("$BASE_URL/movie/popular", apiKey), true),
+            Triple("Popular TV Shows", appendApiKey("$BASE_URL/tv/popular", apiKey), true),
+            Triple("Top Rated Movies", appendApiKey("$BASE_URL/movie/top_rated", apiKey), false),
+            Triple("Binge-Worthy TV Series", appendApiKey("$BASE_URL/trending/tv/week", apiKey), false)
         )
 
         val discoverFeeds = PROGRESSIVE_RAIL_DEFINITIONS.map { (title, url) ->
-            val fullUrl = if (url.contains("?")) "$url&api_key=$apiKey" else "$url?api_key=$apiKey"
+            val fullUrl = appendApiKey(url, apiKey)
             Triple(title, fullUrl, false)
         }
 
@@ -1124,7 +1950,7 @@ object TmdbBridge {
         coroutineScope {
             targets.map { (title, url) ->
                 async {
-                    val fullUrl = if (url.contains("?")) "$url&api_key=$apiKey" else "$url?api_key=$apiKey"
+                    val fullUrl = appendApiKey(url, apiKey)
                     fetchCatalogRow(client, title, fullUrl, providerName = "tmdb", resolveLogos = false, apiKey = apiKey)
                 }
             }.awaitAll().filterNotNull()
@@ -1142,7 +1968,7 @@ object TmdbBridge {
         val clean = query.trim()
         if (clean.isBlank()) return@withContext emptyList()
         val encoded = URLEncoder.encode(clean, "UTF-8")
-        val url = "https://api.themoviedb.org/3/search/multi?api_key=$apiKey&query=$encoded&include_adult=false"
+        val url = appendApiKey("$BASE_URL/search/multi?query=$encoded&include_adult=false", apiKey)
 
         try {
             val req = Request.Builder().url(url).header("User-Agent", DEFAULT_USER_AGENT).build()

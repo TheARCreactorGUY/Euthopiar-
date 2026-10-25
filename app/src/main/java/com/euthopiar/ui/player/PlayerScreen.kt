@@ -65,6 +65,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
@@ -102,10 +105,7 @@ fun PlayerScreen(
     var showCastPickerSheet by remember { mutableStateOf(false) }
     var showRemainingTime by remember { mutableStateOf(true) }
     var videoSurfaceScale by remember { mutableFloatStateOf(1.0f) }
-    val targetAspectScale = when (uiState.aspectRatioMode) {
-        AspectRatioMode.ZOOM -> 1.33f
-        else -> 1.0f
-    }
+    val targetAspectScale = 1.0f
     LaunchedEffect(targetAspectScale) {
         if (kotlin.math.abs(videoSurfaceScale - targetAspectScale) > 0.001f) {
             val anim = androidx.compose.animation.core.Animatable(videoSurfaceScale)
@@ -185,6 +185,21 @@ fun PlayerScreen(
         (activity as? MainActivity)?.updatePipActions(uiState.isPlaying)
         onDispose {
             PipController.clearCallbacks()
+        }
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                if (!PipController.isInPipMode()) {
+                    viewModel.pause()
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
 
@@ -381,6 +396,10 @@ fun PlayerScreen(
                 }
             }
     ) {
+        // Multi-episode check supporting both TV series and episodic anime
+        val isMultiEpisode = uiState.mediaType == MediaType.TV_SERIES ||
+            (uiState.mediaType == MediaType.ANIME && (uiState.seasonNumber != null || uiState.availableEpisodes.isNotEmpty()))
+
         // Layer 0: Startup Backdrop
         val showBackdrop = (!uiState.isPlaying && uiState.currentPositionMs == 0L) || uiState.isLoading
         if (showBackdrop && !uiState.backdropUrl.isNullOrBlank()) {
@@ -410,7 +429,7 @@ fun PlayerScreen(
                         subtitleView?.visibility = android.view.View.GONE
                         resizeMode = when (uiState.aspectRatioMode) {
                             AspectRatioMode.FIT -> AspectRatioFrameLayout.RESIZE_MODE_FIT
-                            AspectRatioMode.ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+                            AspectRatioMode.ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                             AspectRatioMode.FIXED_16_9 -> AspectRatioFrameLayout.RESIZE_MODE_FIT
                             AspectRatioMode.STRETCH -> AspectRatioFrameLayout.RESIZE_MODE_FILL
                         }
@@ -425,7 +444,7 @@ fun PlayerScreen(
                     }
                     val targetResizeMode = when (uiState.aspectRatioMode) {
                         AspectRatioMode.FIT -> AspectRatioFrameLayout.RESIZE_MODE_FIT
-                        AspectRatioMode.ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+                        AspectRatioMode.ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                         AspectRatioMode.FIXED_16_9 -> AspectRatioFrameLayout.RESIZE_MODE_FIT
                         AspectRatioMode.STRETCH -> AspectRatioFrameLayout.RESIZE_MODE_FILL
                     }
@@ -487,7 +506,7 @@ fun PlayerScreen(
 
             // Layer 4: Playback Error Screen (Section 5: safe/primary = solid white pill, secondary = glass pill, no red)
             val activeError = uiState.userError ?: uiState.errorMessage?.let { UserError.SourceUnavailable }
-            if (activeError != null && !uiState.isLoading && !uiState.isPlaying) {
+            if (activeError != null && !uiState.isLoading && !uiState.isBuffering && !uiState.isPlaying) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -534,7 +553,7 @@ fun PlayerScreen(
                                             if (activeError is UserError.NoSources && onNavigateToPluginManager != null) {
                                                 onNavigateToPluginManager()
                                             } else if (uiState.availableServers.isNotEmpty()) {
-                                                viewModel.openSidePanel(PlayerSidePanelType.SETTINGS)
+                                                viewModel.openSidePanel(PlayerSidePanelType.SOURCES)
                                             } else {
                                                 viewModel.retry()
                                             }
@@ -589,7 +608,7 @@ fun PlayerScreen(
                 isScrubbing = uiState.isScrubbing,
                 title = uiState.mediaTitle,
                 subtitle = uiState.episodeTitle,
-                isTvSeries = uiState.mediaType == MediaType.TV_SERIES,
+                isTvSeries = isMultiEpisode,
                 seasonNumber = uiState.seasonNumber,
                 episodeNumber = uiState.episodeNumber,
                 isEpisodeSelectorOpen = uiState.isEpisodeSelectorOpen,
@@ -652,7 +671,7 @@ fun PlayerScreen(
                 isLoading = uiState.isLoading,
                 isBuffering = uiState.isBuffering,
                 seekIntervalSeconds = uiState.seekIntervalSeconds,
-                hasNextEpisode = uiState.mediaType == MediaType.TV_SERIES && uiState.hasNextEpisode,
+                hasNextEpisode = isMultiEpisode && uiState.hasNextEpisode,
                 onNextEpisode = { viewModel.playNextEpisode() },
                 onTogglePlayPause = { viewModel.togglePlayPause() },
                 onSeekRelative = { deltaMs -> viewModel.seekRelative(deltaMs) },
@@ -690,7 +709,7 @@ fun PlayerScreen(
                 bufferedPositionMs = uiState.bufferedPositionMs,
                 scrubPositionMs = uiState.scrubPositionMs,
                 playbackSpeed = uiState.playbackSpeed,
-                isTvSeries = uiState.mediaType == MediaType.TV_SERIES,
+                isTvSeries = isMultiEpisode,
                 hasNextEpisode = uiState.hasNextEpisode,
                 mediaTitle = uiState.mediaTitle,
                 episodeTitle = uiState.episodeTitle,
@@ -718,10 +737,11 @@ fun PlayerScreen(
                 onOpenAudioSubtitles = { viewModel.openSidePanel(PlayerSidePanelType.AUDIO) },
                 onOpenAudio = { viewModel.openSidePanel(PlayerSidePanelType.AUDIO) },
                 onOpenSubtitles = { viewModel.openSidePanel(PlayerSidePanelType.SUBTITLES) },
+                onOpenQuality = { viewModel.openSidePanel(PlayerSidePanelType.VIDEO_QUALITY) },
                 onEnterPip = {
                     if (isPipSupported) {
                         try {
-                            activity?.enterPictureInPictureMode(android.app.PictureInPictureParams.Builder().build())
+                            PipController.onRequestPip?.invoke() ?: (activity as? MainActivity)?.enterPipMode()
                         } catch (_: Exception) {}
                     }
                 },
@@ -755,7 +775,7 @@ fun PlayerScreen(
             )
 
             // Layer 10.5: Series Episode Selector Dropdown Panel
-            if (uiState.mediaType == MediaType.TV_SERIES) {
+            if (isMultiEpisode) {
                 EpisodeSelectorPanel(
                     isOpen = showHud && uiState.isEpisodeSelectorOpen,
                     currentSeason = uiState.seasonNumber,
@@ -801,9 +821,13 @@ fun PlayerScreen(
                 subtitleBackgroundEnabled = uiState.subtitleBackgroundEnabled,
                 subtitleOutline = uiState.subtitleOutline,
                 onApplySubtitlePreset = { preset -> viewModel.applySubtitlePreset(preset) },
+                isSearchingStreams = uiState.isSearchingStreams,
                 servers = uiState.availableServers,
                 selectedServer = uiState.selectedServer,
-                onSelectServer = { server -> viewModel.selectServer(server) },
+                onSelectServer = { server ->
+                    viewModel.selectServer(server)
+                    viewModel.closeSidePanel()
+                },
                 qualities = uiState.availableQualities,
                 selectedQuality = uiState.selectedQuality,
                 onSelectQuality = { q -> viewModel.selectQuality(q) },
@@ -812,12 +836,7 @@ fun PlayerScreen(
                 onOpenSleepTimer = { viewModel.openSidePanel(PlayerSidePanelType.SLEEP_TIMER) },
                 isPipSupported = isPipSupported,
                 onEnterPip = {
-                    val mainAct = activity as? MainActivity
-                    if (mainAct != null) {
-                        mainAct.enterPipMode()
-                    } else {
-                        PipController.requestPip()
-                    }
+                    PipController.onRequestPip?.invoke() ?: (activity as? MainActivity)?.enterPipMode()
                 },
                 onLockScreen = { viewModel.setScreenLocked(true) },
                 seekIntervalSeconds = uiState.seekIntervalSeconds,
@@ -835,7 +854,7 @@ fun PlayerScreen(
                 },
                 isEpisodesLoading = uiState.isEpisodesLoading,
                 playbackMap = uiState.episodePlaybackMap,
-                isTvSeries = uiState.mediaType == MediaType.TV_SERIES,
+                isTvSeries = isMultiEpisode,
                 onDismiss = { viewModel.closeSidePanel() },
                 onInteraction = { viewModel.resetAutoHideTimer() },
                 modifier = Modifier.zIndex(20f)

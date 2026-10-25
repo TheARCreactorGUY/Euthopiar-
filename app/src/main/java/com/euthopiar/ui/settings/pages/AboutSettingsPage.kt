@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.euthopiar.data.update.AppUpdateConfig
 import com.euthopiar.ui.settings.components.*
 import com.euthopiar.ui.theme.AppFontFamily
 
@@ -50,7 +51,8 @@ import com.euthopiar.ui.theme.AppFontFamily
 @Composable
 fun AboutSettingsPage(
     onBack: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onNavigateToUpdates: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     var showLicensesDialog by remember { mutableStateOf(false) }
@@ -169,9 +171,23 @@ fun AboutSettingsPage(
         OpenSettingsSectionHeader(title = "Community & Source")
 
         OpenSettingsRow(
+            title = "Application Updates",
+            subtitle = "Check for newer releases and view changelog",
+            onClick = { onNavigateToUpdates?.invoke() },
+            trailingContent = {
+                Icon(
+                    imageVector = Icons.Outlined.ChevronRight,
+                    contentDescription = null,
+                    tint = SettingsTokens.TextWhite42,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        )
+
+        OpenSettingsRow(
             title = "GitHub Repository",
             subtitle = "Source code, issue tracking & release notes",
-            onClick = { openUrl("https://github.com/euthopiar/euthopiar-android") },
+            onClick = { openUrl(AppUpdateConfig.GITHUB_REPO_URL) },
             trailingContent = {
                 Icon(
                     imageVector = Icons.Outlined.ChevronRight,
@@ -378,7 +394,7 @@ fun AboutSettingsPage(
                                 isSolidWhite = false,
                                 onClick = {
                                     try {
-                                        openUrl("https://github.com/euthopiar/euthopiar-android/blob/main/LICENSE")
+                                        openUrl("${AppUpdateConfig.GITHUB_REPO_URL}/blob/main/LICENSE")
                                     } catch (_: Exception) {}
                                 },
                                 hazeState = hazeState
@@ -523,7 +539,7 @@ fun AboutSettingsPage(
                                 isSolidWhite = false,
                                 onClick = {
                                     try {
-                                        openUrl("https://github.com/euthopiar/euthopiar-android/blob/main/PRIVACY.md")
+                                        openUrl("${AppUpdateConfig.GITHUB_REPO_URL}/blob/main/PRIVACY.md")
                                     } catch (_: Exception) {}
                                 },
                                 hazeState = hazeState

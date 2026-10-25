@@ -51,6 +51,7 @@ import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.HorizontalDivider
@@ -93,6 +94,8 @@ import com.euthopiar.core.model.MediaType
 import com.euthopiar.ui.library.sanitizeTitle
 import com.euthopiar.ui.theme.AppFontFamily
 import com.euthopiar.ui.theme.LocalReduceMotion
+import com.euthopiar.ui.theme.playButtonSpringPress
+import com.euthopiar.ui.theme.pressable
 import com.euthopiar.ui.components.tvFocusable
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeTint
@@ -213,37 +216,36 @@ fun SearchAmbientHazeBackground(
             .fillMaxSize()
             .background(baseBg)
             .drawBehind {
-                if (!isAmoled) {
-                    val effectiveDrift1 = if (reduceMotion) 0f else driftOffset1.value
-                    val effectiveDrift2 = if (reduceMotion) 0f else driftOffset2.value
-                    val maxDim = maxOf(size.width, size.height)
+                val washAlphaScale = if (isAmoled) 0.35f else 1.0f
+                val effectiveDrift1 = if (reduceMotion) 0f else driftOffset1.value
+                val effectiveDrift2 = if (reduceMotion) 0f else driftOffset2.value
+                val maxDim = maxOf(size.width, size.height)
 
-                    // Soft Indigo/Blue Haze atmospheric wash near Top-Right (no circular boundaries)
-                    drawRect(
-                        brush = Brush.radialGradient(
-                            0.00f to SearchTokens.HazeBlue.copy(alpha = 0.24f),
-                            0.25f to SearchTokens.HazeBlue.copy(alpha = 0.15f),
-                            0.50f to SearchTokens.HazeBlue.copy(alpha = 0.06f),
-                            0.75f to SearchTokens.HazeBlue.copy(alpha = 0.015f),
-                            1.00f to Color.Transparent,
-                            center = Offset(size.width * 0.95f + effectiveDrift1, size.height * 0.10f + effectiveDrift2),
-                            radius = maxDim * 1.15f
-                        )
+                // Soft Indigo/Blue Haze atmospheric wash near Top-Right (no circular boundaries)
+                drawRect(
+                    brush = Brush.radialGradient(
+                        0.00f to SearchTokens.HazeBlue.copy(alpha = 0.24f * washAlphaScale),
+                        0.25f to SearchTokens.HazeBlue.copy(alpha = 0.15f * washAlphaScale),
+                        0.50f to SearchTokens.HazeBlue.copy(alpha = 0.06f * washAlphaScale),
+                        0.75f to SearchTokens.HazeBlue.copy(alpha = 0.015f * washAlphaScale),
+                        1.00f to Color.Transparent,
+                        center = Offset(size.width * 0.95f + effectiveDrift1, size.height * 0.10f + effectiveDrift2),
+                        radius = maxDim * 1.15f
                     )
+                )
 
-                    // Soft Rose/Pink Haze atmospheric wash near Lower-Left (no circular boundaries)
-                    drawRect(
-                        brush = Brush.radialGradient(
-                            0.00f to SearchTokens.HazeRose.copy(alpha = 0.20f),
-                            0.25f to SearchTokens.HazeRose.copy(alpha = 0.12f),
-                            0.50f to SearchTokens.HazeRose.copy(alpha = 0.05f),
-                            0.75f to SearchTokens.HazeRose.copy(alpha = 0.01f),
-                            1.00f to Color.Transparent,
-                            center = Offset(size.width * 0.05f + effectiveDrift2, size.height * 0.85f + effectiveDrift1),
-                            radius = maxDim * 1.05f
-                        )
+                // Soft Rose/Pink Haze atmospheric wash near Lower-Left (no circular boundaries)
+                drawRect(
+                    brush = Brush.radialGradient(
+                        0.00f to SearchTokens.HazeRose.copy(alpha = 0.20f * washAlphaScale),
+                        0.25f to SearchTokens.HazeRose.copy(alpha = 0.12f * washAlphaScale),
+                        0.50f to SearchTokens.HazeRose.copy(alpha = 0.05f * washAlphaScale),
+                        0.75f to SearchTokens.HazeRose.copy(alpha = 0.01f * washAlphaScale),
+                        1.00f to Color.Transparent,
+                        center = Offset(size.width * 0.05f + effectiveDrift2, size.height * 0.85f + effectiveDrift1),
+                        radius = maxDim * 1.05f
                     )
-                }
+                )
             }
     ) {
         content()
@@ -305,7 +307,7 @@ fun SearchHairlineDivider(
 }
 
 /**
- * Press feedback animation modifier scaling to 0.98f on press.
+ * Press feedback animation modifier using app standard pressable (0.96f scale, Confirm haptics).
  */
 @Composable
 fun searchPressModifier(
@@ -313,35 +315,12 @@ fun searchPressModifier(
     onLongClick: (() -> Unit)? = null,
     role: Role = Role.Button,
     onClickLabel: String? = null
-): Modifier {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
-    val reduceMotion = LocalReduceMotion.current
-
-    val scale by animateFloatAsState(
-        targetValue = if (isPressed && !reduceMotion) 0.98f else 1f,
-        animationSpec = spring(dampingRatio = 0.65f, stiffness = 400f),
-        label = "pressScale"
-    )
-
-    return Modifier
-        .graphicsLayer {
-            scaleX = scale
-            scaleY = scale
-        }
-        .drawBehind {
-            if (isPressed) {
-                drawRect(Color.White.copy(alpha = 0.06f))
-            }
-        }
-        .clickable(
-            interactionSource = interactionSource,
-            indication = null,
-            role = role,
-            onClickLabel = onClickLabel,
-            onClick = onClick
-        )
-}
+): Modifier = Modifier.pressable(
+    role = role,
+    onClickLabel = onClickLabel,
+    onLongClick = onLongClick,
+    onClick = onClick
+)
 
 /**
  * Equal-width rounded glass dropdown box with anchored popover.
@@ -356,7 +335,8 @@ fun SearchGlassDropdown(
     onToggleExpand: () -> Unit,
     onDismiss: () -> Unit,
     hazeState: HazeState?,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isTrailing: Boolean = false
 ) {
     val isFiltered = !selectedValue.isNullOrBlank() && selectedValue != "All" && selectedValue != "All types" && selectedValue != "All genres" && selectedValue != "Any year"
     val displayLabel = if (isFiltered) selectedValue!! else label
@@ -384,14 +364,11 @@ fun SearchGlassDropdown(
                     hazeState = hazeState,
                     isActive = isFiltered || isExpanded
                 )
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
+                .pressable(
                     role = Role.DropdownList,
-                    onClickLabel = "$label filter, currently $displayLabel"
-                ) {
-                    onToggleExpand()
-                }
+                    onClickLabel = "$label filter, currently $displayLabel",
+                    onClick = onToggleExpand
+                )
                 .padding(horizontal = 10.dp),
             contentAlignment = Alignment.Center
         ) {
@@ -464,8 +441,15 @@ fun SearchGlassDropdown(
             val popoverAlpha = popupAnim.value
             val popoverOffsetY = (1f - popupAnim.value) * (-6f) * density.density
 
+            val popupAlignment = if (isTrailing) Alignment.TopEnd else Alignment.TopStart
+            val origin = if (isTrailing) {
+                androidx.compose.ui.graphics.TransformOrigin(1f, 0f)
+            } else {
+                androidx.compose.ui.graphics.TransformOrigin(0f, 0f)
+            }
+
             Popup(
-                alignment = Alignment.TopStart,
+                alignment = popupAlignment,
                 offset = IntOffset(0, with(density) { 48.dp.roundToPx() }), // anchored directly under the 48dp target
                 onDismissRequest = onDismiss,
                 properties = PopupProperties(focusable = true)
@@ -490,7 +474,7 @@ fun SearchGlassDropdown(
                             scaleY = popoverScale
                             alpha = popoverAlpha
                             translationY = popoverOffsetY
-                            transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0f)
+                            transformOrigin = origin
                         }
                         .clip(popoverShape)
                         .background(glassFill)
@@ -536,10 +520,14 @@ fun SearchGlassDropdown(
                                     .fillMaxWidth()
                                     .height(44.dp)
                                     .graphicsLayer { alpha = rowAlpha }
-                                    .clickable {
-                                        onSelect(option)
-                                        onDismiss()
-                                    }
+                                    .pressable(
+                                        role = Role.RadioButton,
+                                        onClickLabel = "Select $option",
+                                        onClick = {
+                                            onSelect(option)
+                                            onDismiss()
+                                        }
+                                    )
                                     .padding(horizontal = 14.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
@@ -604,9 +592,7 @@ fun RecentSearchRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(48.dp)
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
+                .pressable(
                     role = Role.Button,
                     onClickLabel = "Search for $query",
                     onClick = onClick
@@ -639,9 +625,7 @@ fun RecentSearchRow(
             Box(
                 modifier = Modifier
                     .size(44.dp)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
+                    .pressable(
                         role = Role.Button,
                         onClickLabel = "Remove $query from recent searches",
                         onClick = onRemove
@@ -697,11 +681,9 @@ fun TrendingRankedRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(64.dp)
-                .then(
-                    searchPressModifier(
-                        onClick = onClick,
-                        onClickLabel = "Open ${item.title}"
-                    )
+                .pressable(
+                    onClickLabel = "Open ${item.title}",
+                    onClick = onClick
                 )
                 .padding(vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -726,8 +708,15 @@ fun TrendingRankedRow(
                     .size(width = 36.dp, height = 50.dp)
                     .clip(RoundedCornerShape(10.dp))
                     .background(Color(0xFF14151F))
-                    .border(SearchTokens.HairlineThickness, SearchTokens.HairlineColor, RoundedCornerShape(10.dp))
+                    .border(SearchTokens.HairlineThickness, SearchTokens.HairlineColor, RoundedCornerShape(10.dp)),
+                contentAlignment = Alignment.Center
             ) {
+                Icon(
+                    imageVector = Icons.Outlined.Movie,
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.25f),
+                    modifier = Modifier.size(18.dp)
+                )
                 val poster = item.posterUrl ?: item.backdropUrl
                 if (!poster.isNullOrBlank()) {
                     AsyncImage(
@@ -797,11 +786,9 @@ fun BestMatchResultRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .then(
-                    searchPressModifier(
-                        onClick = onClick,
-                        onClickLabel = "Open ${item.title}"
-                    )
+                .pressable(
+                    onClickLabel = "Open ${item.title}",
+                    onClick = onClick
                 )
                 .padding(vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -812,8 +799,15 @@ fun BestMatchResultRow(
                     .size(width = 62.dp, height = 88.dp)
                     .clip(RoundedCornerShape(10.dp))
                     .background(Color(0xFF14151F))
-                    .border(SearchTokens.HairlineThickness, SearchTokens.HairlineColor, RoundedCornerShape(10.dp))
+                    .border(SearchTokens.HairlineThickness, SearchTokens.HairlineColor, RoundedCornerShape(10.dp)),
+                contentAlignment = Alignment.Center
             ) {
+                Icon(
+                    imageVector = Icons.Outlined.Movie,
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.25f),
+                    modifier = Modifier.size(28.dp)
+                )
                 val poster = item.posterUrl ?: item.backdropUrl
                 if (!poster.isNullOrBlank()) {
                     AsyncImage(
@@ -863,7 +857,7 @@ fun BestMatchResultRow(
                         .height(30.dp)
                         .clip(RoundedCornerShape(10.dp))
                         .background(Color.White)
-                        .clickable(
+                        .playButtonSpringPress(
                             role = Role.Button,
                             onClickLabel = "Play ${item.title}",
                             onClick = onPlay
@@ -951,11 +945,9 @@ fun CompactResultRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(64.dp)
-                .then(
-                    searchPressModifier(
-                        onClick = onClick,
-                        onClickLabel = "Open ${item.title}"
-                    )
+                .pressable(
+                    onClickLabel = "Open ${item.title}",
+                    onClick = onClick
                 )
                 .padding(vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -966,8 +958,15 @@ fun CompactResultRow(
                     .size(width = 40.dp, height = 56.dp)
                     .clip(RoundedCornerShape(8.dp))
                     .background(Color(0xFF14151F))
-                    .border(SearchTokens.HairlineThickness, SearchTokens.HairlineColor, RoundedCornerShape(8.dp))
+                    .border(SearchTokens.HairlineThickness, SearchTokens.HairlineColor, RoundedCornerShape(8.dp)),
+                contentAlignment = Alignment.Center
             ) {
+                Icon(
+                    imageVector = Icons.Outlined.Movie,
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.25f),
+                    modifier = Modifier.size(20.dp)
+                )
                 val poster = item.posterUrl ?: item.backdropUrl
                 if (!poster.isNullOrBlank()) {
                     AsyncImage(
@@ -1184,8 +1183,8 @@ fun SearchGlassToast(
         ) + fadeIn(tween(200)),
         exit = slideOutVertically(
             targetOffsetY = { it },
-            animationSpec = tween(200, easing = FastOutSlowInEasing)
-        ) + fadeOut(tween(180)),
+            animationSpec = tween(130, easing = FastOutSlowInEasing)
+        ) + fadeOut(tween(130)),
         modifier = modifier
     ) {
         Box(
@@ -1222,7 +1221,7 @@ fun SearchGlassToast(
                             color = Color.White
                         ),
                         modifier = Modifier
-                            .clickable(
+                            .pressable(
                                 role = Role.Button,
                                 onClick = onActionClick
                             )

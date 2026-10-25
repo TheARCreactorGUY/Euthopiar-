@@ -29,16 +29,15 @@ class EuthopiarDownloaderFactory(
             .setStreamKeys(request.streamKeys)
             .build()
 
+        val isHls = mimeType.contains("mpegurl") || mimeType.contains("m3u8") ||
+                uriStr.contains(".m3u8") || uriStr.contains("format=m3u8") || uriStr.contains("type=m3u8") || uriStr.contains("ext=m3u8")
+        val isDash = mimeType.contains("dash") || mimeType.contains("mpd") ||
+                uriStr.contains(".mpd") || uriStr.contains("format=mpd") || uriStr.contains("type=mpd") || uriStr.contains("ext=mpd")
+
         return when {
-            mimeType.contains("mpegurl") || uriStr.contains(".m3u8") || uriStr.contains("/content?v=") -> {
-                HlsDownloader(mediaItem, cacheDataSourceFactory, executor)
-            }
-            mimeType.contains("dash") || uriStr.contains(".mpd") -> {
-                DashDownloader(mediaItem, cacheDataSourceFactory, executor)
-            }
-            else -> {
-                ProgressiveDownloader(mediaItem, cacheDataSourceFactory, executor)
-            }
+            isHls -> HlsDownloader(mediaItem, cacheDataSourceFactory, executor)
+            isDash -> DashDownloader(mediaItem, cacheDataSourceFactory, executor)
+            else -> ProgressiveDownloader(mediaItem, cacheDataSourceFactory, executor)
         }
     }
 }

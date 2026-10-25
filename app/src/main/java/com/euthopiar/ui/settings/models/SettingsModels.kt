@@ -79,6 +79,13 @@ enum class SettingsPage(
         category = SettingsCategory.Advanced,
         icon = androidx.compose.material.icons.Icons.Outlined.Storage
     ),
+    Updates(
+        route = "settings/updates",
+        title = "Application Updates",
+        subtitle = "Check for updates, changelog and release channel",
+        category = SettingsCategory.About,
+        icon = androidx.compose.material.icons.Icons.Outlined.SystemUpdateAlt
+    ),
     About(
         route = "settings/about",
         title = "About Euthopiar",

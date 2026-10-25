@@ -111,65 +111,16 @@ fun SavedWallTab(
         }
     }
 
-    if (items.isEmpty()) {
-        // Frosted Glass Typographic Empty State
-        Box(
-            modifier = modifier
-                .fillMaxSize()
-                .padding(horizontal = 24.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                LibraryGlassIconTile(
-                    icon = Icons.Outlined.BookmarkBorder,
-                    contentDescription = null,
-                    size = 48.dp,
-                    radius = 16.dp,
-                    iconSize = 24.dp,
-                    hazeState = hazeState
-                )
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                Text(
-                    text = "Nothing saved yet",
-                    style = LibraryTypography.title15,
-                    color = LibraryColors.TextWhite
-                )
-
-                Spacer(modifier = Modifier.height(6.dp))
-
-                Text(
-                    text = "Titles you save show up here.",
-                    style = LibraryTypography.metadata11,
-                    color = LibraryColors.TextMuted55,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(horizontal = 20.dp)
-                )
-
-                if (onExploreClick != null) {
-                    Spacer(modifier = Modifier.height(20.dp))
-                    LibraryGlassPill(
-                        text = "Browse titles",
-                        onClick = onExploreClick,
-                        hazeState = hazeState
-                    )
-                }
-            }
-        }
-    } else {
-        LazyVerticalGrid(
-            state = gridState,
-            columns = GridCells.Fixed(2),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 110.dp),
-            modifier = modifier.fillMaxSize()
-        ) {
-            // 1. Filter Row: Sort dropdown left, Offline-only toggle right
+    LazyVerticalGrid(
+        state = gridState,
+        columns = GridCells.Fixed(2),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 110.dp),
+        modifier = modifier.fillMaxSize()
+    ) {
+        // 1. Filter Row: Sort dropdown left, Offline-only toggle right (visible when items or continue watching exists)
+        if (items.isNotEmpty() || continueWatchingItem != null) {
             item(
                 key = "filter_row",
                 span = { GridItemSpan(maxLineSpan) }
@@ -223,6 +174,7 @@ fun SavedWallTab(
                     }
                 }
             }
+        }
 
             // 2. Continue Watching Card
             if (continueWatchingItem != null && (!isOfflineOnly || downloadsMap[continueWatchingItem.mediaId]?.state == com.euthopiar.download.DownloadState.COMPLETED)) {
@@ -251,7 +203,7 @@ fun SavedWallTab(
                 }
             }
 
-            // 3. Offline-only empty state
+            // 3. Offline-only and default empty states
             if (isOfflineOnly && displayedItems.isEmpty()) {
                 item(
                     key = "empty_offline_state",
@@ -288,6 +240,52 @@ fun SavedWallTab(
                         )
                     }
                 }
+            } else if (!isOfflineOnly && displayedItems.isEmpty()) {
+                item(
+                    key = "empty_saved_state",
+                    span = { GridItemSpan(maxLineSpan) }
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 54.dp, horizontal = 24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        LibraryGlassIconTile(
+                            icon = Icons.Outlined.BookmarkBorder,
+                            contentDescription = null,
+                            size = 48.dp,
+                            radius = 16.dp,
+                            iconSize = 24.dp,
+                            hazeState = hazeState
+                        )
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        Text(
+                            text = "Your library is empty",
+                            style = LibraryTypography.title15,
+                            color = LibraryColors.TextWhite
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Save movies and series to build your personal collection.",
+                            style = LibraryTypography.metadata11,
+                            color = LibraryColors.TextMuted55,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(horizontal = 20.dp)
+                        )
+
+                        if (onExploreClick != null) {
+                            Spacer(modifier = Modifier.height(20.dp))
+                            LibraryGlassPill(
+                                text = "Explore titles",
+                                onClick = onExploreClick,
+                                hazeState = hazeState
+                            )
+                        }
+                    }
+                }
             }
 
             // 4. Poster Grid Items
@@ -296,20 +294,21 @@ fun SavedWallTab(
                 key = { _, item -> item.id }
             ) { index, item ->
                 val matchingDownload = downloadsMap[item.mediaId] ?: downloadsMap[item.id]
-                StaggeredPosterItem(
-                    index = index,
-                    item = item,
-                    downloadItem = matchingDownload,
-                    isSelectionMode = isSelectionMode,
-                    isSelected = item.id in selectedIds,
-                    onToggleSelect = { onToggleSelect(item.id) },
-                    onStartSelect = { onStartSelect(item.id) },
-                    onItemClick = { onItemClick(item) }
-                )
+                Box(modifier = Modifier.animateItem()) {
+                    StaggeredPosterItem(
+                        index = index,
+                        item = item,
+                        downloadItem = matchingDownload,
+                        isSelectionMode = isSelectionMode,
+                        isSelected = item.id in selectedIds,
+                        onToggleSelect = { onToggleSelect(item.id) },
+                        onStartSelect = { onStartSelect(item.id) },
+                        onItemClick = { onItemClick(item) }
+                    )
+                }
             }
         }
     }
-}
 
 /**
  * Editorial poster item for the Saved Wall grid:

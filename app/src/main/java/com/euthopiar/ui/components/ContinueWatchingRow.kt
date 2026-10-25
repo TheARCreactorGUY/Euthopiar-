@@ -206,6 +206,7 @@ fun ContinueWatchingCard(
                 .aspectRatio(Dimens.backdropAspectRatio)
                 .clip(ShapeM)
                 .background(SurfaceLow)
+                .border(0.5.dp, Color.White.copy(alpha = 0.08f), ShapeM)
         ) {
             AppAsyncImage(
                 model = item.backdropUrl ?: item.posterUrl,

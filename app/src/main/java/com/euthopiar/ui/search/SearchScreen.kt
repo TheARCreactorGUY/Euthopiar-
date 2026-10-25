@@ -1,8 +1,10 @@
 package com.euthopiar.ui.search
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
@@ -60,9 +62,11 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -81,6 +85,7 @@ import com.euthopiar.ui.navigation.LocalTabReselection
 import com.euthopiar.ui.navigation.NavTab
 import com.euthopiar.ui.theme.AppFontFamily
 import com.euthopiar.ui.theme.LocalReduceMotion
+import com.euthopiar.ui.theme.pressable
 import com.euthopiar.ui.theme.rememberWindowDimensions
 import com.euthopiar.ui.util.findActivity
 import dev.chrisbanes.haze.hazeSource
@@ -116,6 +121,7 @@ fun SearchScreen(
     val selectedYear by viewModel.selectedYearFilter.collectAsState()
     val selectedSort by viewModel.selectedSort.collectAsState()
     val cachedTrending by viewModel.cachedTrendingItems.collectAsState()
+    val isRefining by viewModel.isRefining.collectAsState()
 
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
@@ -139,25 +145,48 @@ fun SearchScreen(
     var isSearchFocused by remember { mutableStateOf(false) }
     val searchFocusRequester = remember { FocusRequester() }
 
+    // Text field state with cursor selection control
+    var textFieldValue by remember {
+        mutableStateOf(TextFieldValue(text = query, selection = TextRange(query.length)))
+    }
+
+    LaunchedEffect(query) {
+        if (textFieldValue.text != query) {
+            textFieldValue = TextFieldValue(text = query, selection = TextRange(query.length))
+        }
+    }
+
     // First entrance animation state
     var hasPlayedEntrance by rememberSaveable { mutableStateOf(false) }
-    val headlineAnim1 = remember { Animatable(if (reduceMotion || hasPlayedEntrance) 1f else 0f) }
-    val headlineAnim2 = remember { Animatable(if (reduceMotion || hasPlayedEntrance) 1f else 0f) }
-    val searchBarAnim = remember { Animatable(if (reduceMotion || hasPlayedEntrance) 1f else 0f) }
-    val contentAnim = remember { Animatable(if (reduceMotion || hasPlayedEntrance) 1f else 0f) }
+    val shouldAnimateEntrance = remember { !reduceMotion && !hasPlayedEntrance }
+
+    val headlineAnim1 = remember { Animatable(if (shouldAnimateEntrance) 0f else 1f) }
+    val headlineAnim2 = remember { Animatable(if (shouldAnimateEntrance) 0f else 1f) }
+    val searchBarAnim = remember { Animatable(if (shouldAnimateEntrance) 0f else 1f) }
+    val contentAnim = remember { Animatable(if (shouldAnimateEntrance) 0f else 1f) }
 
     var isClearingRecents by remember { mutableStateOf(false) }
     var removingRecentQuery by remember { mutableStateOf<String?>(null) }
     var isFilterUpdating by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        if (!reduceMotion && !hasPlayedEntrance) {
+        if (shouldAnimateEntrance) {
+            launch {
+                headlineAnim1.animateTo(1f, animationSpec = tween(240, easing = FastOutSlowInEasing))
+            }
+            launch {
+                delay(35)
+                headlineAnim2.animateTo(1f, animationSpec = tween(240, easing = FastOutSlowInEasing))
+            }
+            launch {
+                delay(70)
+                searchBarAnim.animateTo(1f, animationSpec = tween(200, easing = FastOutSlowInEasing))
+            }
+            launch {
+                delay(105)
+                contentAnim.animateTo(1f, animationSpec = tween(170, easing = FastOutSlowInEasing))
+            }
             hasPlayedEntrance = true
-            headlineAnim1.animateTo(1f, animationSpec = tween(280, easing = FastOutSlowInEasing))
-            delay(60)
-            headlineAnim2.animateTo(1f, animationSpec = tween(280, easing = FastOutSlowInEasing))
-            searchBarAnim.animateTo(1f, animationSpec = tween(260, easing = FastOutSlowInEasing))
-            contentAnim.animateTo(1f, animationSpec = tween(280, easing = FastOutSlowInEasing))
         } else {
             headlineAnim1.snapTo(1f)
             headlineAnim2.snapTo(1f)
@@ -219,12 +248,14 @@ fun SearchScreen(
         }
     }
 
-    SearchAmbientHazeBackground(
-        hazeState = searchHazeState,
-        modifier = modifier
-            .hazeSource(state = searchHazeState)
-            .statusBarsPadding()
-    ) {
+    Box(modifier = modifier.fillMaxSize()) {
+        SearchAmbientHazeBackground(
+            hazeState = searchHazeState,
+            modifier = Modifier
+                .fillMaxSize()
+                .hazeSource(state = searchHazeState)
+                .statusBarsPadding()
+        ) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -238,31 +269,32 @@ fun SearchScreen(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
+                    .imePadding()
                     .padding(horizontal = 20.dp)
             ) {
                 // 1. Collapsing Top Headline: "Find\nsomething."
-                // Smoothly collapses height (115dp -> 0dp) and fades out over 320ms when query submitted / results active.
-                val headlineHeight by animateDpAsState(
-                    targetValue = if (isResultsActive) 0.dp else 115.dp,
-                    animationSpec = if (reduceMotion) tween(0) else tween(320, easing = FastOutSlowInEasing),
-                    label = "headlineCollapseHeight"
-                )
-                val headlineAlpha by animateFloatAsState(
-                    targetValue = if (isResultsActive) 0f else 1f,
-                    animationSpec = if (reduceMotion) tween(0) else tween(240, easing = FastOutSlowInEasing),
-                    label = "headlineCollapseAlpha"
-                )
-
-                if (headlineHeight > 0.dp) {
+                // Smoothly collapses with AnimatedVisibility without layout reflows or 12dp Spacer jumps
+                AnimatedVisibility(
+                    visible = !isResultsActive,
+                    enter = if (reduceMotion) fadeIn(tween(0)) else (
+                        fadeIn(animationSpec = tween(220, easing = FastOutSlowInEasing)) +
+                        expandVertically(
+                            animationSpec = tween(280, easing = FastOutSlowInEasing),
+                            expandFrom = Alignment.Bottom
+                        )
+                    ),
+                    exit = if (reduceMotion) fadeOut(tween(0)) else (
+                        fadeOut(animationSpec = tween(160, easing = FastOutSlowInEasing)) +
+                        shrinkVertically(
+                            animationSpec = tween(220, easing = FastOutSlowInEasing),
+                            shrinkTowards = Alignment.Top
+                        )
+                    )
+                ) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(headlineHeight)
-                            .graphicsLayer {
-                                alpha = headlineAlpha
-                                translationY = (1f - headlineAlpha) * (-16.dp.toPx())
-                            }
-                            .padding(top = 16.dp, bottom = 4.dp),
+                            .padding(top = 16.dp, bottom = 8.dp),
                         contentAlignment = Alignment.CenterStart
                     ) {
                         Column(modifier = Modifier.fillMaxWidth()) {
@@ -284,21 +316,13 @@ fun SearchScreen(
                             )
                         }
                     }
-                } else {
-                    Spacer(modifier = Modifier.height(12.dp))
                 }
 
-                // 2. SEARCH BAR ROW (Shared element, height 48dp on search -> 40dp on results)
-                val searchBarHeight by animateDpAsState(
-                    targetValue = if (isResultsActive) 40.dp else 48.dp,
-                    animationSpec = if (reduceMotion) tween(0) else tween(280, easing = FastOutSlowInEasing),
-                    label = "searchBarHeight"
-                )
-
+                // 2. SEARCH BAR ROW (Stable 48dp touch target across both states)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(searchBarHeight),
+                        .height(48.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     // Back button on Results screen (fades & scales from 90% to 100%)
@@ -317,12 +341,11 @@ fun SearchScreen(
                                         shape = RoundedCornerShape(SearchTokens.BackButtonRadius),
                                         hazeState = searchHazeState
                                     )
-                                    .clickable(
+                                    .pressable(
                                         role = Role.Button,
-                                        onClickLabel = "Back to search"
-                                    ) {
-                                        viewModel.backToSearch()
-                                    },
+                                        onClickLabel = "Back to search",
+                                        onClick = { viewModel.backToSearch() }
+                                    ),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
@@ -342,7 +365,7 @@ fun SearchScreen(
                             .weight(1f)
                             .fillMaxHeight()
                             .graphicsLayer {
-                                if (!isResultsActive && !hasPlayedEntrance) {
+                                if (!isResultsActive) {
                                     alpha = searchBarAnim.value
                                     translationY = (1f - searchBarAnim.value) * 12.dp.toPx()
                                 }
@@ -356,9 +379,8 @@ fun SearchScreen(
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null
                             ) {
-                                if (isResultsActive) {
-                                    viewModel.backToSearch()
-                                }
+                                // Fix ejection bug: do not exit results; focus input, place cursor at end, and show keyboard
+                                textFieldValue = textFieldValue.copy(selection = TextRange(textFieldValue.text.length))
                                 searchFocusRequester.requestFocus()
                                 keyboardController?.show()
                             }
@@ -392,9 +414,12 @@ fun SearchScreen(
                                 }
 
                                 BasicTextField(
-                                    value = query,
-                                    onValueChange = { newText ->
-                                        viewModel.onQueryChange(newText)
+                                    value = textFieldValue,
+                                    onValueChange = { newValue ->
+                                        textFieldValue = newValue
+                                        if (newValue.text != query) {
+                                            viewModel.onQueryChange(newValue.text)
+                                        }
                                     },
                                     singleLine = true,
                                     textStyle = TextStyle(
@@ -412,28 +437,39 @@ fun SearchScreen(
                                     keyboardActions = KeyboardActions(onSearch = {
                                         keyboardController?.hide()
                                         focusManager.clearFocus()
-                                        viewModel.submitImmediateSearch(query)
+                                        viewModel.submitImmediateSearch(textFieldValue.text)
                                     })
                                 )
                             }
 
-                            if (query.isNotEmpty()) {
+                            if (isRefining) {
+                                androidx.compose.material3.CircularProgressIndicator(
+                                    modifier = Modifier
+                                        .size(16.dp)
+                                        .padding(end = 4.dp),
+                                    color = Color.White.copy(alpha = 0.7f),
+                                    strokeWidth = 2.dp
+                                )
+                            }
+
+                            AnimatedVisibility(
+                                visible = query.isNotEmpty(),
+                                enter = fadeIn(tween(150)) + scaleIn(initialScale = 0.8f, animationSpec = tween(150)),
+                                exit = fadeOut(tween(120)) + scaleOut(targetScale = 0.8f, animationSpec = tween(120))
+                            ) {
                                 Box(
                                     modifier = Modifier
                                         .size(36.dp)
-                                        .clickable(
+                                        .pressable(
                                             role = Role.Button,
-                                            onClickLabel = "Clear search"
-                                        ) {
-                                            if (isResultsActive) {
-                                                viewModel.clearQueryAndBack()
+                                            onClickLabel = "Clear search",
+                                            onClick = {
+                                                viewModel.clearQuery()
+                                                textFieldValue = TextFieldValue("", TextRange.Zero)
                                                 searchFocusRequester.requestFocus()
                                                 keyboardController?.show()
-                                            } else {
-                                                viewModel.clearQuery()
-                                                searchFocusRequester.requestFocus()
                                             }
-                                        },
+                                        ),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
@@ -473,16 +509,7 @@ fun SearchScreen(
                                 "Anime" -> MediaType.ANIME
                                 else -> null
                             }
-                            if (isResultsActive) {
-                                scope.launch {
-                                    isFilterUpdating = true
-                                    viewModel.setTypeFilter(newType)
-                                    delay(200)
-                                    isFilterUpdating = false
-                                }
-                            } else {
-                                viewModel.setTypeFilter(newType)
-                            }
+                            viewModel.setTypeFilter(newType)
                         },
                         isExpanded = openDropdown == "type",
                         onToggleExpand = { openDropdown = if (openDropdown == "type") null else "type" },
@@ -497,16 +524,7 @@ fun SearchScreen(
                         selectedValue = selectedGenre,
                         options = GENRE_OPTIONS,
                         onSelect = { option ->
-                            if (isResultsActive) {
-                                scope.launch {
-                                    isFilterUpdating = true
-                                    viewModel.setGenreFilter(option)
-                                    delay(200)
-                                    isFilterUpdating = false
-                                }
-                            } else {
-                                viewModel.setGenreFilter(option)
-                            }
+                            viewModel.setGenreFilter(option)
                         },
                         isExpanded = openDropdown == "genre",
                         onToggleExpand = { openDropdown = if (openDropdown == "genre") null else "genre" },
@@ -515,27 +533,19 @@ fun SearchScreen(
                         modifier = Modifier.weight(1f)
                     )
 
-                    // 3. Year Dropdown
+                    // 3. Year Dropdown (trailing pill anchors inward to Alignment.TopEnd)
                     SearchGlassDropdown(
                         label = "Year",
                         selectedValue = selectedYear,
                         options = YEAR_OPTIONS,
                         onSelect = { option ->
-                            if (isResultsActive) {
-                                scope.launch {
-                                    isFilterUpdating = true
-                                    viewModel.setYearFilter(option)
-                                    delay(200)
-                                    isFilterUpdating = false
-                                }
-                            } else {
-                                viewModel.setYearFilter(option)
-                            }
+                            viewModel.setYearFilter(option)
                         },
                         isExpanded = openDropdown == "year",
                         onToggleExpand = { openDropdown = if (openDropdown == "year") null else "year" },
                         onDismiss = { if (openDropdown == "year") openDropdown = null },
                         hazeState = searchHazeState,
+                        isTrailing = true,
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -593,19 +603,20 @@ fun SearchScreen(
                                                         color = SearchTokens.TextMuted
                                                     ),
                                                     modifier = Modifier
-                                                        .clickable(
+                                                        .pressable(
                                                             role = Role.Button,
-                                                            onClickLabel = "Clear all recent searches"
-                                                        ) {
-                                                            scope.launch {
-                                                                isClearingRecents = true
-                                                                delay(240)
-                                                                previousRecentSearches = recentSearches
-                                                                viewModel.clearRecentSearches()
-                                                                isClearingRecents = false
-                                                                toastVisible = true
+                                                            onClickLabel = "Clear all recent searches",
+                                                            onClick = {
+                                                                scope.launch {
+                                                                    isClearingRecents = true
+                                                                    delay(240)
+                                                                    previousRecentSearches = recentSearches
+                                                                    viewModel.clearRecentSearches()
+                                                                    isClearingRecents = false
+                                                                    toastVisible = true
+                                                                }
                                                             }
-                                                        }
+                                                        )
                                                         .padding(vertical = 4.dp, horizontal = 4.dp)
                                                 )
                                             }
@@ -673,25 +684,30 @@ fun SearchScreen(
                             } else {
                                 itemsIndexed(
                                     items = trendingList.take(10),
-                                    key = { index, item -> "trending_${item.id}_$index" }
+                                    key = { _, item -> "trending_${item.id}_${item.provider ?: "p"}" }
                                 ) { index, item ->
-                                    val rowAnim = remember { Animatable(if (reduceMotion || hasPlayedEntrance) 1f else 0f) }
+                                    val isInitial = remember { searchListState.firstVisibleItemIndex == 0 && index < 6 }
+                                    val rowAnim = remember { Animatable(if (shouldAnimateEntrance && isInitial) 0f else 1f) }
                                     LaunchedEffect(Unit) {
-                                        if (!reduceMotion && !hasPlayedEntrance) {
-                                            val staggerDelay = (index * 40).coerceAtMost(320)
+                                        if (shouldAnimateEntrance && isInitial) {
+                                            val staggerDelay = index * 25
                                             delay(staggerDelay.toLong())
-                                            rowAnim.animateTo(1f, animationSpec = tween(240, easing = FastOutSlowInEasing))
+                                            rowAnim.animateTo(1f, animationSpec = tween(200, easing = FastOutSlowInEasing))
+                                        } else {
+                                            rowAnim.snapTo(1f)
                                         }
                                     }
                                     TrendingRankedRow(
                                         rank = index + 1,
                                         item = item,
                                         onClick = { onMediaClick(item) },
-                                        modifier = Modifier.graphicsLayer {
-                                            val combinedAlpha = contentAnim.value * rowAnim.value
-                                            alpha = combinedAlpha
-                                            translationY = (1f - rowAnim.value) * 12.dp.toPx()
-                                        }
+                                        modifier = Modifier
+                                            .animateItem()
+                                            .graphicsLayer {
+                                                val combinedAlpha = contentAnim.value * rowAnim.value
+                                                alpha = combinedAlpha
+                                                translationY = (1f - rowAnim.value) * 8.dp.toPx()
+                                            }
                                     )
                                 }
                             }
@@ -707,6 +723,9 @@ fun SearchScreen(
                                 resultsHeadlineAnim.animateTo(1f, animationSpec = tween(280, easing = FastOutSlowInEasing))
                             } else {
                                 resultsHeadlineAnim.snapTo(1f)
+                            }
+                            if (resultsListState.firstVisibleItemIndex > 0 || resultsListState.firstVisibleItemScrollOffset > 0) {
+                                resultsListState.scrollToItem(0)
                             }
                         }
 
@@ -773,7 +792,7 @@ fun SearchScreen(
                         }
 
                         val listAlpha by animateFloatAsState(
-                            targetValue = if (isFilterUpdating) 0.5f else 1f,
+                            targetValue = if (isFilterUpdating) 0.5f else if (isRefining) 0.7f else 1f,
                             animationSpec = if (reduceMotion) tween(0) else tween(160, easing = FastOutSlowInEasing),
                             label = "resultsListDimming"
                         )
@@ -814,21 +833,35 @@ fun SearchScreen(
                                     ) {
                                         val countText = when (uiState) {
                                             is SearchUiState.Searching -> "Searching…"
-                                            is SearchUiState.Results -> "${filteredResults.size} result${if (filteredResults.size != 1) "s" else ""}"
+                                            is SearchUiState.Results -> if (isRefining) "Searching…" else "${filteredResults.size} result${if (filteredResults.size != 1) "s" else ""}"
                                             is SearchUiState.Empty -> "0 results"
                                             is SearchUiState.Error -> "Error"
                                             else -> ""
                                         }
 
-                                        Text(
-                                            text = countText,
-                                            style = TextStyle(
-                                                fontFamily = AppFontFamily,
-                                                fontWeight = FontWeight.Normal,
-                                                fontSize = 12.sp,
-                                                color = SearchTokens.TextMuted
+                                        AnimatedContent(
+                                            targetState = countText,
+                                            transitionSpec = {
+                                                if (reduceMotion) {
+                                                    fadeIn(tween(0)) togetherWith fadeOut(tween(0))
+                                                } else {
+                                                    (slideInVertically { height -> height / 2 } + fadeIn(tween(160))) togetherWith
+                                                    (slideOutVertically { height -> -height / 2 } + fadeOut(tween(130)))
+                                                }
+                                            },
+                                            label = "resultCountTransition"
+                                        ) { targetCount ->
+                                            Text(
+                                                text = targetCount,
+                                                style = TextStyle(
+                                                    fontFamily = AppFontFamily,
+                                                    fontWeight = FontWeight.Normal,
+                                                    fontSize = 12.sp,
+                                                    color = SearchTokens.TextMuted,
+                                                    fontFeatureSettings = "tnum"
+                                                )
                                             )
-                                        )
+                                        }
 
                                         // Small glass Sort dropdown (~120 px wide, 30 px tall)
                                         Box {
@@ -849,16 +882,16 @@ fun SearchScreen(
                                                     } else {
                                                         sortPopupAnim.animateTo(1f, tween(180, easing = FastOutSlowInEasing))
                                                     }
-                                                    } else if (isSortPopupRendered) {
-                                                        if (reduceMotion) {
-                                                            sortPopupAnim.snapTo(0f)
-                                                            isSortPopupRendered = false
-                                                        } else {
-                                                            sortPopupAnim.animateTo(0f, tween(140, easing = FastOutSlowInEasing))
-                                                            isSortPopupRendered = false
-                                                        }
+                                                } else if (isSortPopupRendered) {
+                                                    if (reduceMotion) {
+                                                        sortPopupAnim.snapTo(0f)
+                                                        isSortPopupRendered = false
+                                                    } else {
+                                                        sortPopupAnim.animateTo(0f, tween(140, easing = FastOutSlowInEasing))
+                                                        isSortPopupRendered = false
                                                     }
                                                 }
+                                            }
 
                                             Box(
                                                 modifier = Modifier
@@ -869,12 +902,13 @@ fun SearchScreen(
                                                         hazeState = searchHazeState,
                                                         isActive = false
                                                     )
-                                                    .clickable(
+                                                    .pressable(
                                                         role = Role.DropdownList,
-                                                        onClickLabel = "Sort by ${selectedSort.displayName}"
-                                                    ) {
-                                                        openDropdown = if (openDropdown == "sort") null else "sort"
-                                                    }
+                                                        onClickLabel = "Sort by ${selectedSort.displayName}",
+                                                        onClick = {
+                                                            openDropdown = if (openDropdown == "sort") null else "sort"
+                                                        }
+                                                    )
                                                     .padding(horizontal = 10.dp),
                                                 contentAlignment = Alignment.Center
                                             ) {
@@ -943,15 +977,14 @@ fun SearchScreen(
                                                                     modifier = Modifier
                                                                         .fillMaxWidth()
                                                                         .height(38.dp)
-                                                                        .clickable {
-                                                                            scope.launch {
-                                                                                isFilterUpdating = true
+                                                                        .pressable(
+                                                                            role = Role.RadioButton,
+                                                                            onClickLabel = "Sort by ${opt.displayName}",
+                                                                            onClick = {
                                                                                 viewModel.setSort(opt)
                                                                                 openDropdown = null
-                                                                                delay(200)
-                                                                                isFilterUpdating = false
                                                                             }
-                                                                        }
+                                                                        )
                                                                         .padding(horizontal = 12.dp),
                                                                     verticalAlignment = Alignment.CenterVertically,
                                                                     horizontalArrangement = Arrangement.SpaceBetween
@@ -1040,12 +1073,11 @@ fun SearchScreen(
                                                             shape = RoundedCornerShape(12.dp),
                                                             hazeState = searchHazeState
                                                         )
-                                                        .clickable(
+                                                        .pressable(
                                                             role = Role.Button,
-                                                            onClickLabel = "Clear filters"
-                                                        ) {
-                                                            viewModel.clearFilters()
-                                                        }
+                                                            onClickLabel = "Clear filters",
+                                                            onClick = { viewModel.clearFilters() }
+                                                        )
                                                         .padding(horizontal = 16.dp, vertical = 8.dp)
                                                 ) {
                                                     Text(
@@ -1077,12 +1109,13 @@ fun SearchScreen(
                                     if (cachedTrending.isNotEmpty()) {
                                         itemsIndexed(
                                             items = cachedTrending.take(6),
-                                            key = { index, item -> "empty_trending_${item.id}_$index" }
+                                            key = { _, item -> "empty_trending_${item.id}_${item.provider ?: "p"}" }
                                         ) { index, item ->
                                             TrendingRankedRow(
                                                 rank = index + 1,
                                                 item = item,
-                                                onClick = { onMediaClick(item) }
+                                                onClick = { onMediaClick(item) },
+                                                modifier = Modifier.animateItem()
                                             )
                                         }
                                     }
@@ -1114,12 +1147,11 @@ fun SearchScreen(
                                                         shape = RoundedCornerShape(12.dp),
                                                         hazeState = searchHazeState
                                                     )
-                                                    .clickable(
+                                                    .pressable(
                                                         role = Role.Button,
-                                                        onClickLabel = "Try again"
-                                                    ) {
-                                                        viewModel.retrySearch()
-                                                    }
+                                                        onClickLabel = "Try again",
+                                                        onClick = { viewModel.retrySearch() }
+                                                    )
                                                     .padding(horizontal = 18.dp, vertical = 10.dp)
                                             ) {
                                                 Text(
@@ -1146,7 +1178,7 @@ fun SearchScreen(
                                                 horizontalAlignment = Alignment.CenterHorizontally
                                             ) {
                                                 Text(
-                                                    text = "No matching results",
+                                                    text = if (query.isBlank()) "Type to search" else "No matching results",
                                                     style = TextStyle(
                                                         fontFamily = AppFontFamily,
                                                         fontWeight = FontWeight.Medium,
@@ -1156,7 +1188,7 @@ fun SearchScreen(
                                                 )
                                                 Spacer(modifier = Modifier.height(6.dp))
                                                 Text(
-                                                    text = "Try clearing or relaxing your filters.",
+                                                    text = if (query.isBlank()) "Enter a title or keyword above." else "Try clearing or relaxing your filters.",
                                                     style = TextStyle(
                                                         fontFamily = AppFontFamily,
                                                         fontWeight = FontWeight.Normal,
@@ -1164,50 +1196,85 @@ fun SearchScreen(
                                                         color = SearchTokens.TextMuted
                                                     )
                                                 )
-                                                Spacer(modifier = Modifier.height(14.dp))
-                                                Box(
-                                                    modifier = Modifier
-                                                        .searchGlassSurface(
-                                                            shape = RoundedCornerShape(12.dp),
-                                                            hazeState = searchHazeState
+
+                                                val hasActiveFilter = selectedType != null || !selectedGenre.isNullOrBlank() || !selectedYear.isNullOrBlank()
+                                                if (hasActiveFilter && query.isNotBlank()) {
+                                                    Spacer(modifier = Modifier.height(14.dp))
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .searchGlassSurface(
+                                                                shape = RoundedCornerShape(12.dp),
+                                                                hazeState = searchHazeState
+                                                            )
+                                                            .pressable(
+                                                                role = Role.Button,
+                                                                onClickLabel = "Clear filters",
+                                                                onClick = { viewModel.clearFilters() }
+                                                            )
+                                                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                                                    ) {
+                                                        Text(
+                                                            text = "Clear filters",
+                                                            style = TextStyle(
+                                                                fontFamily = AppFontFamily,
+                                                                fontWeight = FontWeight.Medium,
+                                                                fontSize = 13.sp,
+                                                                color = Color.White
+                                                            )
                                                         )
-                                                        .clickable(
-                                                            role = Role.Button,
-                                                            onClickLabel = "Clear filters"
-                                                        ) {
-                                                            viewModel.clearFilters()
-                                                        }
-                                                        .padding(horizontal = 16.dp, vertical = 8.dp)
-                                                ) {
-                                                    Text(
-                                                        text = "Clear filters",
-                                                        style = TextStyle(
-                                                            fontFamily = AppFontFamily,
-                                                            fontWeight = FontWeight.Medium,
-                                                            fontSize = 13.sp,
-                                                            color = Color.White
-                                                        )
-                                                    )
+                                                    }
                                                 }
+
+                                                if (cachedTrending.isNotEmpty()) {
+                                                    Spacer(modifier = Modifier.height(32.dp))
+                                                    Text(
+                                                        text = "TRENDING TODAY",
+                                                        style = SearchTokens.SectionLabel,
+                                                        modifier = Modifier.align(Alignment.Start)
+                                                    )
+                                                    Spacer(modifier = Modifier.height(8.dp))
+                                                    SearchHairlineDivider()
+                                                }
+                                            }
+                                        }
+
+                                        if (cachedTrending.isNotEmpty()) {
+                                            itemsIndexed(
+                                                items = cachedTrending.take(6),
+                                                key = { _, item -> "empty_filtered_trending_${item.id}_${item.provider ?: "p"}" }
+                                            ) { index, item ->
+                                                TrendingRankedRow(
+                                                    rank = index + 1,
+                                                    item = item,
+                                                    onClick = { onMediaClick(item) },
+                                                    modifier = Modifier.animateItem()
+                                                )
                                             }
                                         }
                                     } else {
                                         itemsIndexed(
                                             items = filteredResults,
-                                            key = { index, item -> "${item.id}_${item.provider}_$index" }
+                                            key = { _, item -> "${item.id}_${item.provider ?: "item"}" }
                                         ) { index, item ->
-                                            val rowAnim = remember(item.id, query) { Animatable(if (reduceMotion) 1f else 0f) }
+                                            val isInitialBatch = remember(query) {
+                                                !resultsListState.isScrollInProgress && resultsListState.firstVisibleItemIndex == 0 && index < 5
+                                            }
+                                            val rowAnim = remember(item.id, query) { Animatable(if (reduceMotion || !isInitialBatch) 1f else 0f) }
                                             LaunchedEffect(item.id, query) {
-                                                if (!reduceMotion) {
-                                                    val staggerDelay = (index * 40).coerceAtMost(320)
+                                                if (!reduceMotion && isInitialBatch) {
+                                                    val staggerDelay = index * 25
                                                     delay(staggerDelay.toLong())
-                                                    rowAnim.animateTo(1f, animationSpec = tween(240, easing = FastOutSlowInEasing))
+                                                    rowAnim.animateTo(1f, animationSpec = tween(200, easing = FastOutSlowInEasing))
+                                                } else {
+                                                    rowAnim.snapTo(1f)
                                                 }
                                             }
-                                            val rowModifier = Modifier.graphicsLayer {
-                                                alpha = rowAnim.value
-                                                translationY = (1f - rowAnim.value) * 12.dp.toPx()
-                                            }
+                                            val rowModifier = Modifier
+                                                .animateItem()
+                                                .graphicsLayer {
+                                                    alpha = rowAnim.value
+                                                    translationY = (1f - rowAnim.value) * 8.dp.toPx()
+                                                }
 
                                             if (index == 0) {
                                                 // 1. BEST MATCH Row (larger layout)
@@ -1260,6 +1327,7 @@ fun SearchScreen(
                 hazeState = searchHazeState,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
                     .padding(bottom = 96.dp)
             )
 
@@ -1271,6 +1339,6 @@ fun SearchScreen(
                 }
             }
         }
-
+    }
     }
 }

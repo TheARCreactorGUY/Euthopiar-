@@ -94,13 +94,13 @@ object DownloadTokens {
 
     // Durations & Tuning Constants
     const val DIRECT_SOURCE_SEED_THRESHOLD = 100
-    const val DISMISS_DELAY_MS = 700L
+    const val DISMISS_DELAY_MS = 140L
     const val SHIMMER_DURATION_MS = 1200
-    const val COUNT_UP_DURATION_MS = 700
+    const val COUNT_UP_DURATION_MS = 240
     const val ENTRANCE_HEADER_FADE_MS = 250
     const val ENTRANCE_TABS_DELAY_MS = 40
     const val ENTRANCE_HERO_DELAY_MS = 80
-    const val ENTRANCE_ROW_STAGGER_MS = 45
+    const val ENTRANCE_ROW_STAGGER_MS = 20
     const val ENTRANCE_ROW_MAX_STAGGER_INDEX = 7
     const val ENTRANCE_ROW_DURATION_MS = 320
     const val TAB_TEXT_COLOR_DURATION_MS = 150

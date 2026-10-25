@@ -129,6 +129,12 @@ class PreferencesRepository private constructor(private val context: Context) {
         val AMOLED_MODE = booleanPreferencesKey("amoled_mode")
         val SMART_FAILOVER_ENABLED = booleanPreferencesKey("smart_failover_enabled")
         val AUDIO_PASSTHROUGH_ENABLED = booleanPreferencesKey("audio_passthrough_enabled")
+
+        // 1.4 Application Update Preferences
+        val AUTO_CHECK_UPDATES = booleanPreferencesKey("auto_check_updates")
+        val INCLUDE_PRERELEASES = booleanPreferencesKey("include_prereleases")
+        val SKIPPED_UPDATE_VERSION = stringPreferencesKey("skipped_update_version")
+        val LAST_UPDATE_CHECK_TIMESTAMP = longPreferencesKey("last_update_check_timestamp")
     }
     val dohProvider: Flow<String> = context.preferencesDataStore.data
         .catch { exception ->
@@ -214,7 +220,7 @@ class PreferencesRepository private constructor(private val context: Context) {
             if (exception is IOException) emit(emptyPreferences()) else throw exception
         }
         .map { preferences ->
-            preferences[PreferencesKeys.REPOSITORY_URLS] ?: com.euthopiar.app.plugin.PluginRepositoryService.DEFAULT_REPOS
+            preferences[PreferencesKeys.REPOSITORY_URLS] ?: emptySet()
         }
 
     val activeProvider: Flow<String> = context.preferencesDataStore.data
@@ -663,6 +669,25 @@ class PreferencesRepository private constructor(private val context: Context) {
         }
     }
 
+    suspend fun setFavorite(mediaId: String, isFavorite: Boolean) {
+        context.preferencesDataStore.edit { preferences ->
+            val raw = preferences[PreferencesKeys.FAVORITE_MEDIA_IDS] ?: ""
+            val current = if (raw.isBlank()) emptySet() else raw.split(",").filter { it.isNotBlank() }.toSet()
+            val updated = if (isFavorite) current + mediaId else current - mediaId
+            preferences[PreferencesKeys.FAVORITE_MEDIA_IDS] = updated.joinToString(",")
+        }
+    }
+
+    suspend fun setFavoritesBatch(mediaIds: Collection<String>, isFavorite: Boolean) {
+        if (mediaIds.isEmpty()) return
+        context.preferencesDataStore.edit { preferences ->
+            val raw = preferences[PreferencesKeys.FAVORITE_MEDIA_IDS] ?: ""
+            val current = if (raw.isBlank()) emptySet() else raw.split(",").filter { it.isNotBlank() }.toSet()
+            val updated = if (isFavorite) current + mediaIds else current - mediaIds
+            preferences[PreferencesKeys.FAVORITE_MEDIA_IDS] = updated.joinToString(",")
+        }
+    }
+
     val playbackBufferSizeMb: Flow<Int> = context.preferencesDataStore.data
         .catch { exception ->
             if (exception is IOException) emit(emptyPreferences()) else throw exception
@@ -765,6 +790,66 @@ class PreferencesRepository private constructor(private val context: Context) {
     suspend fun setAudioPassthroughEnabled(enabled: Boolean) {
         context.preferencesDataStore.edit { preferences ->
             preferences[PreferencesKeys.AUDIO_PASSTHROUGH_ENABLED] = enabled
+        }
+    }
+
+    val autoCheckUpdates: Flow<Boolean> = context.preferencesDataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            preferences[PreferencesKeys.AUTO_CHECK_UPDATES] ?: true
+        }
+        .distinctUntilChanged()
+
+    suspend fun setAutoCheckUpdates(enabled: Boolean) {
+        context.preferencesDataStore.edit { preferences ->
+            preferences[PreferencesKeys.AUTO_CHECK_UPDATES] = enabled
+        }
+    }
+
+    val includePrereleases: Flow<Boolean> = context.preferencesDataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            preferences[PreferencesKeys.INCLUDE_PRERELEASES] ?: false
+        }
+        .distinctUntilChanged()
+
+    suspend fun setIncludePrereleases(enabled: Boolean) {
+        context.preferencesDataStore.edit { preferences ->
+            preferences[PreferencesKeys.INCLUDE_PRERELEASES] = enabled
+        }
+    }
+
+    val skippedUpdateVersion: Flow<String> = context.preferencesDataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            preferences[PreferencesKeys.SKIPPED_UPDATE_VERSION] ?: ""
+        }
+        .distinctUntilChanged()
+
+    suspend fun setSkippedUpdateVersion(version: String) {
+        context.preferencesDataStore.edit { preferences ->
+            preferences[PreferencesKeys.SKIPPED_UPDATE_VERSION] = version
+        }
+    }
+
+    val lastUpdateCheckTimestamp: Flow<Long> = context.preferencesDataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            preferences[PreferencesKeys.LAST_UPDATE_CHECK_TIMESTAMP] ?: 0L
+        }
+        .distinctUntilChanged()
+
+    suspend fun setLastUpdateCheckTimestamp(timestampMs: Long) {
+        context.preferencesDataStore.edit { preferences ->
+            preferences[PreferencesKeys.LAST_UPDATE_CHECK_TIMESTAMP] = timestampMs
         }
     }
 

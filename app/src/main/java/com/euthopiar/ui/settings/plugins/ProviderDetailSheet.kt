@@ -2,6 +2,7 @@ package com.euthopiar.ui.settings.plugins
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -161,7 +162,10 @@ fun ProviderDetailSheet(
 
                 // Description (Clamped to 6 lines with More/Less expander)
                 if (plugin.description.isNotBlank()) {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Column(
+                        modifier = Modifier.animateContentSize(animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
                         Text(
                             text = plugin.description,
                             style = TextStyle(

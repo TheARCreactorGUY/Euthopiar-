@@ -82,7 +82,8 @@ enum class PlayerSidePanelType {
     SETTINGS,
     SLEEP_TIMER,
     EPISODES,
-    SOURCES
+    SOURCES,
+    VIDEO_QUALITY
 }
 
 enum class SidePanelTab(val label: String) {
@@ -135,11 +136,12 @@ fun PlayerSidePanel(
     subtitleBackgroundEnabled: Boolean = false,
     subtitleOutline: Boolean = true,
     onApplySubtitlePreset: (SubtitlePreset) -> Unit = {},
+    isSearchingStreams: Boolean = false,
     servers: List<ServerSourceOption>,
     selectedServer: ServerSourceOption?,
     onSelectServer: (ServerSourceOption) -> Unit,
     qualities: List<VideoQualityOption>,
-    selectedQuality: VideoQualityOption,
+    selectedQuality: VideoQualityOption? = null,
     onSelectQuality: (VideoQualityOption) -> Unit,
     aspectRatioMode: AspectRatioMode = AspectRatioMode.FIT,
     onSelectAspectRatio: (AspectRatioMode) -> Unit = {},
@@ -181,6 +183,7 @@ fun PlayerSidePanel(
         PlayerSidePanelType.SETTINGS -> "Player Settings"
         PlayerSidePanelType.SLEEP_TIMER -> "Sleep Timer"
         PlayerSidePanelType.EPISODES -> "Episodes"
+        PlayerSidePanelType.VIDEO_QUALITY -> "Video Quality"
         else -> "Options"
     }
 
@@ -193,6 +196,7 @@ fun PlayerSidePanel(
         PlayerSidePanelType.SETTINGS -> R.drawable.ic_player_tuning
         PlayerSidePanelType.SLEEP_TIMER -> R.drawable.ic_player_tuning
         PlayerSidePanelType.EPISODES -> R.drawable.ic_player_episodes
+        PlayerSidePanelType.VIDEO_QUALITY -> R.drawable.ic_quality_fhd
         else -> R.drawable.ic_player_tuning
     }
 
@@ -348,7 +352,11 @@ fun PlayerSidePanel(
                                 SourcesListContent(
                                     servers = servers,
                                     selectedServer = selectedServer,
-                                    onSelectServer = onSelectServer
+                                    isSearching = isSearchingStreams,
+                                    onSelectServer = { server ->
+                                        onSelectServer(server)
+                                        onDismiss()
+                                    }
                                 )
                             }
                             PlayerSidePanelType.SPEED -> {
@@ -380,6 +388,13 @@ fun PlayerSidePanel(
                                     selectedSleepTimer = selectedSleepTimer,
                                     sleepTimerRemainingSeconds = sleepTimerRemainingSeconds,
                                     onSelectSleepTimer = onSelectSleepTimer
+                                )
+                            }
+                            PlayerSidePanelType.VIDEO_QUALITY -> {
+                                QualityTabContent(
+                                    qualities = qualities,
+                                    selectedQuality = selectedQuality ?: VideoQualityOption("auto", "Auto (Adaptive)", isAuto = true),
+                                    onSelectQuality = onSelectQuality
                                 )
                             }
                             else -> {}
@@ -810,7 +825,7 @@ private fun QualityTabContent(
             val isSelected = q.id == selectedQuality.id
             DrawerSelectionRow(
                 title = q.label,
-                meta = if (q.id == "auto") "Adaptive" else null,
+                meta = if (q.id == "auto" || q.isAuto) "Adaptive" else null,
                 isSelected = isSelected,
                 onClick = { onSelectQuality(q) }
             )

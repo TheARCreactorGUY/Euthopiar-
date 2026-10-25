@@ -23,6 +23,9 @@ object StreamsRepository {
 
     private var activeJob: Job? = null
     private var activeRequestKey: String? = null
+    private var lastLoadedKey: String? = null
+    private var lastLoadedHadImdb: Boolean = false
+    private var lastLoadedHadTitle: Boolean = false
 
     fun requestToken(
         type: String,
@@ -30,8 +33,9 @@ object StreamsRepository {
         season: Int? = null,
         episode: Int? = null,
         title: String? = null,
-        year: Int? = null
-    ): String = "$type::$videoId::$season::$episode::$title::$year"
+        year: Int? = null,
+        imdbId: String? = null
+    ): String = "$type::$videoId::$season::$episode::$title::$year::$imdbId"
 
     fun load(
         type: String,
@@ -41,15 +45,24 @@ object StreamsRepository {
         title: String? = null,
         year: Int? = null,
         forceRefresh: Boolean = false,
-        originalLanguage: String? = null
+        originalLanguage: String? = null,
+        imdbId: String? = null
     ) {
-        val requestToken = requestToken(type, videoId, season, episode, title, year)
+        val requestToken = requestToken(type, videoId, season, episode, title, year, imdbId)
         val currentState = _uiState.value
 
-        if (!forceRefresh && activeRequestKey == requestToken && (currentState.groups.isNotEmpty() || currentState.isAnyLoading)) {
+        if (!forceRefresh &&
+            lastLoadedKey == requestToken &&
+            currentState.allStreams.isNotEmpty() &&
+            (imdbId == null || lastLoadedHadImdb) &&
+            (title == null || lastLoadedHadTitle)
+        ) {
             return
         }
 
+        lastLoadedKey = requestToken
+        lastLoadedHadImdb = !imdbId.isNullOrBlank()
+        lastLoadedHadTitle = !title.isNullOrBlank()
         activeRequestKey = requestToken
         activeJob?.cancel()
 
@@ -104,16 +117,7 @@ object StreamsRepository {
             val baseId = cleanTmdbId.substringBefore(':')
             val isTv = normType == "series" || normType == "tv"
 
-            val canonicalImdbId = if (baseId.startsWith("tt")) {
-                baseId
-            } else {
-                com.euthopiar.core.util.TmdbBridge.resolveImdbId(
-                    tmdbId = baseId,
-                    isTv = isTv
-                )
-            }
-
-            val canonicalTmdbId = if (baseId.startsWith("tt")) {
+            var resolvedTmdbId = if (baseId.startsWith("tt")) {
                 com.euthopiar.core.util.TmdbBridge.findTmdbIdByImdb(
                     client = com.euthopiar.core.network.DohDns.metadataClient,
                     imdbId = baseId,
@@ -121,6 +125,35 @@ object StreamsRepository {
                 ) ?: baseId
             } else {
                 baseId
+            }
+
+            if (resolvedTmdbId.startsWith("mal:", ignoreCase = true) ||
+                resolvedTmdbId.startsWith("jikan:", ignoreCase = true) ||
+                (!resolvedTmdbId.all { it.isDigit() } && !resolvedTmdbId.startsWith("tt"))
+            ) {
+                if (!title.isNullOrBlank()) {
+                    val searched = com.euthopiar.core.util.TmdbBridge.searchTmdbId(
+                        client = com.euthopiar.core.network.DohDns.metadataClient,
+                        title = title,
+                        year = year,
+                        isTv = isTv
+                    )
+                    if (searched != null) {
+                        resolvedTmdbId = searched
+                    }
+                }
+            }
+
+            val canonicalTmdbId = resolvedTmdbId
+
+            val canonicalImdbId = when {
+                !imdbId.isNullOrBlank() && imdbId.startsWith("tt") -> imdbId
+                baseId.startsWith("tt") -> baseId
+                canonicalTmdbId.all { it.isDigit() } -> com.euthopiar.core.util.TmdbBridge.resolveImdbId(
+                    tmdbId = canonicalTmdbId,
+                    isTv = isTv
+                )
+                else -> null
             }
 
             var cachedEnriched = com.euthopiar.core.util.TmdbBridge.getCachedEnrichedDetails(canonicalTmdbId, isTv = isTv)
@@ -133,7 +166,14 @@ object StreamsRepository {
                 )
             }
 
-            val effectiveImdbId = canonicalImdbId ?: cachedEnriched?.imdbId
+            val effectiveImdbId = canonicalImdbId?.takeIf { it.startsWith("tt") }
+                ?: cachedEnriched?.imdbId?.takeIf { it.startsWith("tt") }
+                ?: if (canonicalTmdbId.all { it.isDigit() }) {
+                    com.euthopiar.core.util.TmdbBridge.resolveImdbId(
+                        tmdbId = canonicalTmdbId,
+                        isTv = isTv
+                    )
+                } else null
             val effectiveTitle = title ?: cachedEnriched?.title
             val effectiveYear = year ?: cachedEnriched?.year
 
@@ -154,16 +194,38 @@ object StreamsRepository {
             val effectiveAddonId = effectiveImdbId ?: canonicalTmdbId
             val addonStreamId = if (season != null && episode != null) "$effectiveAddonId:$season:$episode" else effectiveAddonId
 
+            val streamHints = cachedEnriched?.toMatchHints(
+                isTv = isTv,
+                season = season,
+                episode = episode,
+                absoluteEpisode = absoluteEpisode
+            ) ?: com.euthopiar.core.model.MatchHints(
+                tmdbId = canonicalTmdbId.toIntOrNull() ?: 0,
+                imdbId = effectiveImdbId,
+                type = if (isAnime) com.euthopiar.core.model.ContentType.ANIME else if (isTv) com.euthopiar.core.model.ContentType.TV_SERIES else com.euthopiar.core.model.ContentType.MOVIE,
+                titles = setOfNotNull(effectiveTitle).filter { it.isNotBlank() }.toSet(),
+                year = effectiveYear,
+                season = season,
+                episode = episode,
+                absoluteEpisode = absoluteEpisode
+            )
+
             // Concurrently query each enabled JS scraper
             scrapers.forEach { scraper ->
                 val addonId = "plugin:${scraper.id}"
+                val jsMediaType = when {
+                    normType.equals("movie", ignoreCase = true) && (season == null || season <= 0) -> "movie"
+                    scraper.supportedTypes.any { it.equals("tv", ignoreCase = true) } -> "tv"
+                    scraper.supportedTypes.any { it.equals("series", ignoreCase = true) } -> "tv"
+                    else -> normType.lowercase()
+                }
                 launch(Dispatchers.IO) {
                     try {
                         val results = withTimeoutOrNull(60_000L) {
                             PluginRuntime.executePlugin(
                                 code = scraper.code,
                                 tmdbId = canonicalTmdbId,
-                                mediaType = normType,
+                                mediaType = jsMediaType,
                                 season = season,
                                 episode = episode,
                                 scraperId = scraper.id,
@@ -171,7 +233,17 @@ object StreamsRepository {
                                 absoluteEpisode = absoluteEpisode,
                                 title = effectiveTitle,
                                 year = effectiveYear,
-                                repoId = scraper.canonicalRepoId
+                                repoId = scraper.canonicalRepoId,
+                                originalTitle = cachedEnriched?.originalTitle,
+                                alternativeTitles = cachedEnriched?.alternativeTitles ?: emptySet(),
+                                tvdbId = cachedEnriched?.tvdbId,
+                                seasonYear = season?.let { cachedEnriched?.seasonYears?.get(it) },
+                                seasonName = season?.let { cachedEnriched?.seasonNames?.get(it) },
+                                malId = cachedEnriched?.malId,
+                                anilistId = cachedEnriched?.anilistId,
+                                romajiTitle = cachedEnriched?.romajiTitle,
+                                englishTitle = cachedEnriched?.englishTitle,
+                                seasonSpecificTitle = season?.let { cachedEnriched?.seasonSpecificTitles?.get(it)?.firstOrNull() }
                             )
                         } ?: emptyList()
 
@@ -183,12 +255,13 @@ object StreamsRepository {
                                 originalLanguage = effectiveOriginalLanguage
                             )
                         }
+                        val verifiedStreams = com.euthopiar.core.matcher.MatchScorer.filterAndRankStreams(streamHints, streamItems)
 
                         completions.trySend(
                             StreamLoadCompletion.PluginScraper(
                                 addonId = addonId,
                                 addonName = scraper.name,
-                                streams = streamItems,
+                                streams = verifiedStreams,
                                 error = null
                             )
                         )
@@ -208,6 +281,11 @@ object StreamsRepository {
 
             // Concurrently query each enabled Stremio addon
             val stremioType = if (normType == "tv") "series" else normType
+            val stremioAddonStreamId = if (!effectiveImdbId.isNullOrBlank() && effectiveImdbId.startsWith("tt")) {
+                if (season != null && episode != null) "$effectiveImdbId:$season:$episode" else effectiveImdbId
+            } else {
+                addonStreamId
+            }
             addons.forEach { addon ->
                 val addonId = addon.streamAddonInstanceId(addon.manifest?.id ?: addon.displayTitle)
                 launch(Dispatchers.IO) {
@@ -216,7 +294,7 @@ object StreamsRepository {
                             manifestUrl = addon.manifestUrl,
                             resource = "stream",
                             type = stremioType,
-                            id = addonStreamId,
+                            id = stremioAddonStreamId,
                             extraPathSegment = null
                         )
                         val response = com.euthopiar.core.js.network.httpRequestRaw("GET", url, emptyMap(), "", followRedirects = true)
@@ -229,12 +307,13 @@ object StreamsRepository {
                                 originalLanguage = effectiveOriginalLanguage
                             )
                         } else emptyList()
+                        val verifiedStreams = com.euthopiar.core.matcher.MatchScorer.filterAndRankStreams(streamHints, streamItems)
 
                         completions.trySend(
                             StreamLoadCompletion.PluginScraper(
                                 addonId = addonId,
                                 addonName = addon.displayTitle,
-                                streams = streamItems,
+                                streams = verifiedStreams,
                                 error = null
                             )
                         )
@@ -293,9 +372,10 @@ object StreamsRepository {
         season: Int? = null,
         episode: Int? = null,
         title: String? = null,
-        year: Int? = null
+        year: Int? = null,
+        imdbId: String? = null
     ) {
-        load(type, videoId, season, episode, title, year, forceRefresh = true)
+        load(type, videoId, season, episode, title, year, forceRefresh = true, imdbId = imdbId)
     }
 
     fun clear() {

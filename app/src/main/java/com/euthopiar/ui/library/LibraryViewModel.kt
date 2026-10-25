@@ -283,6 +283,8 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 
     private val _pendingRemovalIds = MutableStateFlow<Set<String>>(emptySet())
     private val _pendingClearHistory = MutableStateFlow(false)
+    private var pendingDeletionJob: Job? = null
+    private var pendingTimeoutJob: Job? = null
 
     private data class LibraryData(
         val watchlists: List<com.euthopiar.data.local.WatchlistEntity>,
@@ -549,14 +551,18 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         _selectedItemIds.value = if (itemId in current) current - itemId else current + itemId
     }
 
-    fun selectAll(allItems: List<LibraryItem>) {
+    fun selectAllIds(allIds: Set<String>) {
+        if (allIds.isEmpty()) return
         val current = _selectedItemIds.value
-        val allIds = allItems.map { it.id }.toSet()
-        if (current == allIds) {
-            _selectedItemIds.value = emptySet()
+        if (current.containsAll(allIds)) {
+            _selectedItemIds.value = current - allIds
         } else {
-            _selectedItemIds.value = allIds
+            _selectedItemIds.value = current + allIds
         }
+    }
+
+    fun selectAll(allItems: List<LibraryItem>) {
+        selectAllIds(allItems.map { it.id }.toSet())
     }
 
     fun deleteSelected(allItems: List<LibraryItem>) {
@@ -617,9 +623,9 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         removeGroupFromCurrentFilter(listOf(item))
     }
 
-    fun removeGroupFromCurrentFilter(itemsToRemove: List<LibraryItem>) {
-        if (itemsToRemove.isEmpty()) return
-        viewModelScope.launch {
+    fun removeGroupFromCurrentFilter(itemsToRemove: List<LibraryItem>): Job {
+        if (itemsToRemove.isEmpty()) return Job().apply { complete() }
+        return viewModelScope.launch {
             val filter = _selectedFilter.value
             val mediaIds = itemsToRemove.map { it.mediaId }.distinct()
             val historyIds = itemsToRemove.map { it.id }.distinct()
@@ -630,7 +636,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                 }
                 LibraryFilter.FAVORITES -> {
                     for (item in itemsToRemove) {
-                        preferencesRepository.toggleFavorite(item.mediaId)
+                        preferencesRepository.setFavorite(item.mediaId, false)
                     }
                 }
                 LibraryFilter.WATCHING -> {
@@ -658,6 +664,11 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                     repository.removeFromWatchlistBatch(mediaIds)
                     repository.removeFromHistoryByMediaIdsBatch(mediaIds)
                     repository.removeFromHistoryBatch(historyIds)
+                    for (item in itemsToRemove) {
+                        if (item.isFavorite) {
+                            preferencesRepository.setFavorite(item.mediaId, false)
+                        }
+                    }
                 }
             }
         }
@@ -675,6 +686,9 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     ) {
         if (itemsToRemove.isEmpty()) return
 
+        val removedItemIds = itemsToRemove.map { it.id }.toSet()
+        val currentFilter = _selectedFilter.value
+
         val watchlistSnapshots = itemsToRemove.filter { it.isWatchlist }.map { item ->
             com.euthopiar.data.local.WatchlistEntity(
                 mediaId = item.mediaId,
@@ -690,31 +704,89 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
             )
         }
 
-        // Execute deletion immediately so it is permanently applied in DB
-        removeGroupFromCurrentFilter(itemsToRemove)
+        val currentHistoryMap = historyMap.value
+        val historySnapshots = itemsToRemove.filter { it.isHistory }.map { item ->
+            currentHistoryMap[item.mediaId] ?: com.euthopiar.data.local.PlaybackHistoryEntity(
+                id = item.id,
+                mediaId = item.mediaId,
+                title = item.title,
+                episodeTitle = item.episodeTitle,
+                seasonNumber = item.seasonNumber,
+                episodeNumber = item.episodeNumber,
+                posterUrl = item.posterUrl,
+                backdropUrl = item.backdropUrl,
+                currentPositionMs = item.currentPositionMs,
+                durationMs = item.durationMs,
+                lastWatchedTimestamp = item.timestamp,
+                isCompleted = item.isCompleted,
+                provider = item.provider,
+                mediaType = item.mediaType.name,
+                episodeData = item.episodeData
+            )
+        }
 
+        // Only restore favorites if the active filter actually un-favorited them
+        val favoriteMediaIdsToRestore = if (currentFilter == LibraryFilter.FAVORITES || currentFilter == LibraryFilter.ALL) {
+            itemsToRemove.filter { it.isFavorite }.map { it.mediaId }
+        } else {
+            emptyList()
+        }
+
+        // 1. Immediately reflect deletion in UI state so items disappear without any UI lag
+        _pendingRemovalIds.update { it + removedItemIds }
+
+        // 2. Launch DB deletion and save the Job
+        pendingDeletionJob?.cancel()
+        val deletionJob = removeGroupFromCurrentFilter(itemsToRemove)
+        pendingDeletionJob = deletionJob
+
+        // 3. Register undo action
         onUndoAvailable {
+            // Cancel pending deletion job if still executing to prevent delete-after-restore race
+            deletionJob.cancel()
+            pendingTimeoutJob?.cancel()
+
             viewModelScope.launch {
+                // Immediately restore to UI state
+                _pendingRemovalIds.update { it - removedItemIds }
+
+                // Restore database entities
                 if (watchlistSnapshots.isNotEmpty()) {
                     repository.insertWatchlistBatch(watchlistSnapshots)
                 }
-                if (_selectedFilter.value == LibraryFilter.FAVORITES) {
-                    for (item in itemsToRemove) {
-                        preferencesRepository.toggleFavorite(item.mediaId)
-                    }
+                if (historySnapshots.isNotEmpty()) {
+                    repository.insertPlaybackHistoryBatch(historySnapshots)
+                }
+                if (favoriteMediaIdsToRestore.isNotEmpty()) {
+                    preferencesRepository.setFavoritesBatch(favoriteMediaIdsToRestore, true)
                 }
             }
+        }
+
+        // 4. Auto-clean pending removal IDs after timeout once deletion has settled
+        pendingTimeoutJob?.cancel()
+        pendingTimeoutJob = viewModelScope.launch {
+            delay(6000L)
+            _pendingRemovalIds.update { it - removedItemIds }
         }
     }
 
     fun clearHistoryWithUndo(
         onUndoAvailable: (undoAction: () -> Unit) -> Unit
     ) {
-        viewModelScope.launch {
+        val historySnapshots = historyMap.value.values.toList()
+        _pendingClearHistory.value = true
+        val clearJob = viewModelScope.launch {
             repository.clearHistory()
         }
         onUndoAvailable {
-            // Watch history cleared
+            clearJob.cancel()
+            viewModelScope.launch {
+                _pendingClearHistory.value = false
+                if (historySnapshots.isNotEmpty()) {
+                    repository.insertPlaybackHistoryBatch(historySnapshots)
+                }
+            }
         }
     }
 

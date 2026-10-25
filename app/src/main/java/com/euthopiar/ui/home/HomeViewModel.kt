@@ -176,9 +176,34 @@ class HomeViewModel(
             emptyMap()
         )
 
+    val watchlistStatusMap: StateFlow<Map<String, String>> =
+        libraryRepository.watchlist
+            .map { list -> list.associate { it.mediaId to it.status } }
+            .stateIn(
+                viewModelScope,
+                SharingStarted.WhileSubscribed(5000),
+                emptyMap()
+            )
+
     fun toggleBookmark(item: MediaItem) {
         viewModelScope.launch {
             libraryRepository.toggleWatchlist(item)
+        }
+    }
+
+    fun setWatchlistStatus(item: MediaItem, status: String) {
+        viewModelScope.launch {
+            if (status == "REMOVE") {
+                libraryRepository.removeFromWatchlist(item.id)
+            } else {
+                libraryRepository.setWatchlistStatus(item, status)
+            }
+        }
+    }
+
+    fun removeFromWatchlist(mediaId: String) {
+        viewModelScope.launch {
+            libraryRepository.removeFromWatchlist(mediaId)
         }
     }
 

@@ -27,7 +27,9 @@ class RefreshableSource(
     val host: String? = null,
     val name: String? = null,
     initialUrl: String,
-    initialHeaders: Map<String, String> = emptyMap()
+    initialHeaders: Map<String, String> = emptyMap(),
+    val imdbId: String? = null,
+    val title: String? = null
 ) {
     private val mutex = Mutex()
 
@@ -54,18 +56,33 @@ class RefreshableSource(
             try {
                 val storage = JsPluginStorage.getInstanceOrNull() ?: return@withContext null
                 val normType = normalizePluginType(mediaType)
-                val scraper = storage.getEnabledScrapersForType(normType).firstOrNull { it.id == scraperId }
-                    ?: return@withContext null
+                val cleanScraperId = scraperId.removePrefix("plugin:").trim()
+                val scraper = storage.getEnabledScrapersForType(normType).firstOrNull {
+                    it.id.equals(cleanScraperId, ignoreCase = true) ||
+                    it.id.substringAfter(":").equals(cleanScraperId.substringAfter(":"), ignoreCase = true) ||
+                    it.id.endsWith(":$cleanScraperId", ignoreCase = true) ||
+                    cleanScraperId.endsWith(":${it.id}", ignoreCase = true) ||
+                    it.name.equals(cleanScraperId, ignoreCase = true)
+                } ?: return@withContext null
 
                 val cleanTmdbId = pluginContentId(videoId, season, episode)
+                val jsMediaType = when {
+                    normType.equals("movie", ignoreCase = true) && (season == null || season <= 0) -> "movie"
+                    scraper.supportedTypes.any { it.equals("tv", ignoreCase = true) } -> "tv"
+                    scraper.supportedTypes.any { it.equals("series", ignoreCase = true) } -> "tv"
+                    normType.equals("series", ignoreCase = true) || normType.equals("anime", ignoreCase = true) -> "tv"
+                    else -> normType.lowercase()
+                }
                 val results = withTimeoutOrNull(45_000L) {
                     PluginRuntime.executePlugin(
                         code = scraper.code,
                         tmdbId = cleanTmdbId,
-                        mediaType = normType,
+                        mediaType = jsMediaType,
                         season = season,
                         episode = episode,
                         scraperId = scraper.id,
+                        imdbId = imdbId,
+                        title = title,
                         repoId = scraper.canonicalRepoId
                     )
                 } ?: emptyList()

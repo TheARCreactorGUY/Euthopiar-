@@ -76,6 +76,9 @@ class SearchViewModel(
     // Screen navigation state: whether currently showing the Results screen
     val isResultsActive = MutableStateFlow(false)
 
+    // Background refinement indicator for live debounce without flashing skeletons
+    val isRefining = MutableStateFlow(false)
+
     // Three core filter dropdowns + Sort
     val selectedTypeFilter = MutableStateFlow<MediaType?>(null)
     val selectedGenreFilter = MutableStateFlow<String?>(null)
@@ -207,9 +210,15 @@ class SearchViewModel(
         searchJob?.cancel()
         commitSearch(trimmed)
         searchJob = viewModelScope.launch {
-            _uiState.value = SearchUiState.Searching
+            val hasExistingResults = _uiState.value is SearchUiState.Results
+            if (hasExistingResults) {
+                isRefining.value = true
+            } else {
+                _uiState.value = SearchUiState.Searching
+            }
             try {
                 val results = repository.search(trimmed, isGlobal = true)
+                isRefining.value = false
                 if (results.isEmpty()) {
                     _uiState.value = SearchUiState.Empty(trimmed)
                 } else {
@@ -217,6 +226,7 @@ class SearchViewModel(
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
+                isRefining.value = false
                 android.util.Log.w("SearchViewModel", "Immediate search failed for query '$trimmed'", e)
                 _uiState.value = SearchUiState.Error(
                     error = e.toUserError(),
@@ -231,19 +241,29 @@ class SearchViewModel(
         searchJob?.cancel()
 
         if (newQuery.isBlank()) {
+            isRefining.value = false
             if (!isResultsActive.value) {
                 loadTrending()
+            } else {
+                _uiState.value = SearchUiState.Results("", emptyList())
             }
             return
         }
 
         // Live debounce (300ms) only when results screen is active
         if (isResultsActive.value) {
+            val hasExistingResults = _uiState.value is SearchUiState.Results
+            if (hasExistingResults) {
+                isRefining.value = true
+            }
             searchJob = viewModelScope.launch {
                 delay(300)
-                _uiState.value = SearchUiState.Searching
+                if (!hasExistingResults) {
+                    _uiState.value = SearchUiState.Searching
+                }
                 try {
                     val results = repository.search(newQuery.trim(), isGlobal = true)
+                    isRefining.value = false
                     if (results.isEmpty()) {
                         _uiState.value = SearchUiState.Empty(newQuery)
                     } else {
@@ -251,6 +271,7 @@ class SearchViewModel(
                     }
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) throw e
+                    isRefining.value = false
                     android.util.Log.w("SearchViewModel", "Search failed for query '$newQuery'", e)
                     _uiState.value = SearchUiState.Error(
                         error = e.toUserError(),
@@ -262,6 +283,8 @@ class SearchViewModel(
     }
 
     fun backToSearch() {
+        searchJob?.cancel()
+        isRefining.value = false
         isResultsActive.value = false
         if (currentQuery.value.isBlank()) {
             loadTrending()
@@ -269,6 +292,8 @@ class SearchViewModel(
     }
 
     fun clearQueryAndBack() {
+        searchJob?.cancel()
+        isRefining.value = false
         currentQuery.value = ""
         isResultsActive.value = false
         loadTrending()
@@ -284,9 +309,13 @@ class SearchViewModel(
     }
 
     fun clearQuery() {
+        searchJob?.cancel()
+        isRefining.value = false
         currentQuery.value = ""
         if (!isResultsActive.value) {
             loadTrending()
+        } else {
+            _uiState.value = SearchUiState.Results("", emptyList())
         }
     }
 }

@@ -1,6 +1,8 @@
 package com.euthopiar.ui.components
 
 import android.graphics.Bitmap
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -149,7 +151,13 @@ fun rememberPosterTint(
         }
     }
 
-    return tintColor
+    val animatedTint by animateColorAsState(
+        targetValue = tintColor,
+        animationSpec = tween(durationMillis = 240, easing = com.euthopiar.ui.theme.AppleDecelCurve),
+        label = "posterTint_$itemId"
+    )
+
+    return animatedTint
 }
 
 /**
@@ -322,6 +330,7 @@ private fun TopTenRankCardPosterTinted(
                 .zIndex(2f)
                 .clip(ShapeS)
                 .background(SurfaceLow)
+                .border(0.5.dp, Color.White.copy(alpha = 0.08f), ShapeS)
         ) {
             AppAsyncImage(
                 model = item.posterUrl ?: item.backdropUrl,
@@ -442,6 +451,7 @@ private fun TopTenRankCardGlassTab(
                 .zIndex(2f)
                 .clip(ShapeS)
                 .background(SurfaceLow)
+                .border(0.5.dp, Color.White.copy(alpha = 0.08f), ShapeS)
         ) {
             AppAsyncImage(
                 model = item.posterUrl ?: item.backdropUrl,
@@ -563,6 +573,7 @@ private fun LegacyTopTenRankCard(
                 .zIndex(1f)
                 .clip(ShapeS)
                 .background(SurfaceLow)
+                .border(0.5.dp, Color.White.copy(alpha = 0.08f), ShapeS)
         ) {
             AppAsyncImage(
                 model = item.posterUrl ?: item.backdropUrl,

@@ -21,6 +21,8 @@ object PipController {
     var isPlaying: () -> Boolean = { false }
     var onRequestPip: (() -> Unit)? = null
 
+    fun isInPipMode(): Boolean = _isInPipMode.value
+
     fun setInPipMode(inPip: Boolean) {
         _isInPipMode.value = inPip
     }

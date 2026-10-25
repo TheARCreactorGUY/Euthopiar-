@@ -12,6 +12,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.tooling.preview.Preview
@@ -168,10 +169,20 @@ fun AppSnackbar(
             Box(
                 modifier = Modifier
                     .clip(ShapeS)
-                    .pressable { snackbarData.performAction() }
-                    .clickable { snackbarData.performAction() }
-                    .tvFocusable(shape = ShapeS)
-                    .padding(horizontal = Dimens.spacing8, vertical = Dimens.spacing4)
+                    .defaultMinSize(minWidth = 56.dp, minHeight = 48.dp)
+                    .pressable(
+                        role = Role.Button,
+                        onClickLabel = snackbarData.actionLabel
+                    ) {
+                        snackbarData.performAction()
+                    }
+                    .tvFocusable(
+                        shape = ShapeS,
+                        focusedScale = 1.0f,
+                        onClick = { snackbarData.performAction() }
+                    )
+                    .padding(horizontal = Dimens.spacing12, vertical = Dimens.spacing8),
+                contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = snackbarData.actionLabel,
@@ -193,6 +204,10 @@ fun AppSnackbarHost(
     bottomPadding: Dp = Dimens.spacing16
 ) {
     val currentData = hostState.currentSnackbarData
+    var displayedData by remember { mutableStateOf<AppSnackbarData?>(null) }
+    if (currentData != null) {
+        displayedData = currentData
+    }
 
     LaunchedEffect(currentData) {
         if (currentData != null) {
@@ -219,7 +234,7 @@ fun AppSnackbarHost(
                 targetOffsetY = { it / 2 }
             )
         ) {
-            currentData?.let { data ->
+            displayedData?.let { data ->
                 AppSnackbar(snackbarData = data)
             }
         }

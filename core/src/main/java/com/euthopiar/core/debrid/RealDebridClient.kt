@@ -64,7 +64,13 @@ class RealDebridClient(
         }
     }
 
-    suspend fun unrestrictMagnet(apiKey: String, magnet: String): Result<RealDebridUnrestrictResponse> = withContext(Dispatchers.IO) {
+    suspend fun unrestrictMagnet(
+        apiKey: String,
+        magnet: String,
+        fileIdx: Int? = null,
+        season: Int? = null,
+        episode: Int? = null
+    ): Result<RealDebridUnrestrictResponse> = withContext(Dispatchers.IO) {
         if (apiKey.isBlank()) return@withContext Result.failure(IllegalArgumentException("Empty API key"))
         try {
             // 1. Add magnet to Real-Debrid
@@ -81,8 +87,29 @@ class RealDebridClient(
                 json.decodeFromString<RealDebridAddMagnetResponse>(raw).id
             }
 
-            // 2. Select files (all)
-            val selForm = FormBody.Builder().add("files", "all").build()
+            // 2. Fetch torrent info to inspect files
+            val preInfoReq = Request.Builder()
+                .url("https://api.real-debrid.com/rest/1.0/torrents/info/$torrentId")
+                .header("Authorization", "Bearer $apiKey")
+                .get()
+                .build()
+
+            val files = httpClient.newCall(preInfoReq).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val raw = resp.body?.string().orEmpty()
+                    try {
+                        json.decodeFromString<RealDebridTorrentInfo>(raw).files
+                    } catch (_: Exception) {
+                        emptyList()
+                    }
+                } else emptyList()
+            }
+
+            // 3. Select target file by matching season/episode or fileIdx, or fallback to largest video
+            val targetFileId = selectTargetFileId(files, fileIdx, season, episode)
+            val filesParam = if (targetFileId != null) "$targetFileId" else "all"
+
+            val selForm = FormBody.Builder().add("files", filesParam).build()
             val selReq = Request.Builder()
                 .url("https://api.real-debrid.com/rest/1.0/torrents/selectFiles/$torrentId")
                 .header("Authorization", "Bearer $apiKey")
@@ -90,7 +117,7 @@ class RealDebridClient(
                 .build()
             httpClient.newCall(selReq).execute().close()
 
-            // 3. Get torrent info to extract download links
+            // 4. Get updated torrent info to extract download links
             val infoReq = Request.Builder()
                 .url("https://api.real-debrid.com/rest/1.0/torrents/info/$torrentId")
                 .header("Authorization", "Bearer $apiKey")
@@ -104,10 +131,56 @@ class RealDebridClient(
                 info.links.firstOrNull() ?: return@withContext Result.failure(IOException("No download links generated for torrent"))
             }
 
-            // 4. Unrestrict the direct link
+            // 5. Unrestrict the direct link
             unrestrictLink(apiKey, linkToUnrestrict)
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    private fun selectTargetFileId(
+        files: List<RealDebridTorrentFile>,
+        fileIdx: Int?,
+        season: Int?,
+        episode: Int?
+    ): Int? {
+        if (files.isEmpty()) return null
+        if (files.size == 1) return files[0].id
+
+        val videoExtensions = listOf(".mp4", ".mkv", ".avi", ".webm", ".ts", ".m4v", ".mov")
+        val videoFiles = files.filter { file ->
+            val lower = file.path.lowercase()
+            videoExtensions.any { ext -> lower.endsWith(ext) }
+        }.ifEmpty { files }
+
+        if (fileIdx != null && fileIdx >= 0) {
+            val byId = files.firstOrNull { it.id == fileIdx + 1 || it.id == fileIdx }
+            if (byId != null) return byId.id
+            if (fileIdx in files.indices) return files[fileIdx].id
+        }
+
+        if (season != null && episode != null) {
+            val patterns = listOf(
+                Regex("""(?i)\bs0*${season}\s*e0*${episode}\b"""),
+                Regex("""(?i)\b0*${season}x0*${episode}\b"""),
+                Regex("""(?i)\b(?:season|s)[\s._-]*0*${season}[\s._-]+(?:episode|ep|e)[\s._-]*0*${episode}\b"""),
+            )
+            for (pattern in patterns) {
+                val matched = videoFiles.filter { pattern.containsMatchIn(it.path) }
+                if (matched.isNotEmpty()) return matched.maxByOrNull { it.bytes }?.id
+            }
+        } else if (episode != null) {
+            val epPatterns = listOf(
+                Regex("""(?i)(?:^|[^a-zA-Z]|[sS]\d+)[eE][pP]?\.?\s*0*${episode}(?:\D|$)"""),
+                Regex("""(?i)\b(?:episode|ep)[\s._-]*0*${episode}(?:\D|$)"""),
+                Regex("""(?i)(?:\bep?\.?\s*0*${episode}\b|-\s*0*${episode}\b|\b0*${episode}\s*(?:v\d)?\s*[\[\(])""")
+            )
+            for (pattern in epPatterns) {
+                val matched = videoFiles.filter { pattern.containsMatchIn(it.path) }
+                if (matched.isNotEmpty()) return matched.maxByOrNull { it.bytes }?.id
+            }
+        }
+
+        return videoFiles.maxByOrNull { it.bytes }?.id
     }
 }

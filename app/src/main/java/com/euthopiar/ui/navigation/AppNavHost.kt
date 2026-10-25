@@ -1,7 +1,10 @@
 package com.euthopiar.ui.navigation
 
 import androidx.compose.animation.*
+import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -48,39 +51,112 @@ import dev.chrisbanes.haze.hazeSource
 
 val LocalNavbarVisible = compositionLocalOf { mutableStateOf(true) }
 
+/**
+ * Computes directional scroll delta handling item boundary transitions and heterogeneous item sizes.
+ * If currentIndex > previousIndex, user scrolled DOWN (content moved UP) past at least one item boundary,
+ * so the delta is guaranteed positive and clamped to at least [thresholdPx].
+ * If currentIndex < previousIndex, user scrolled UP (content moved DOWN) past at least one item boundary,
+ * so the delta is guaranteed negative and clamped to at most -[thresholdPx].
+ */
+internal fun computeScrollDelta(
+    currentIndex: Int,
+    currentOffset: Int,
+    previousIndex: Int,
+    previousOffset: Int,
+    itemDimension: Int,
+    thresholdPx: Float
+): Float {
+    return if (currentIndex > previousIndex) {
+        val estimatedPassed = (currentIndex - previousIndex) * itemDimension - previousOffset + currentOffset
+        maxOf(thresholdPx, estimatedPassed.toFloat())
+    } else if (currentIndex < previousIndex) {
+        val estimatedPassed = (currentIndex - previousIndex) * itemDimension - previousOffset + currentOffset
+        minOf(-thresholdPx, estimatedPassed.toFloat())
+    } else {
+        (currentOffset - previousOffset).toFloat()
+    }
+}
+
+/**
+ * Accumulates directional scroll deltas against a threshold before requesting navbar visibility changes.
+ * Direction reversals immediately reset opposing accumulation, preventing flutter and jitter.
+ */
+internal class ScrollDirectionAccumulator(val thresholdPx: Float) {
+    var accumulatedScroll = 0f
+        private set
+
+    /**
+     * Updates the accumulator with [delta].
+     * Returns true if navbar should show, false if navbar should hide, or null if threshold not reached.
+     */
+    fun onDelta(delta: Float): Boolean? {
+        if (delta > 0f) {
+            if (accumulatedScroll < 0f) {
+                accumulatedScroll = 0f
+            }
+            accumulatedScroll += delta
+            if (accumulatedScroll >= thresholdPx) {
+                accumulatedScroll = 0f
+                return false
+            }
+        } else if (delta < 0f) {
+            if (accumulatedScroll > 0f) {
+                accumulatedScroll = 0f
+            }
+            accumulatedScroll += delta
+            if (accumulatedScroll <= -thresholdPx) {
+                accumulatedScroll = 0f
+                return true
+            }
+        }
+        return null
+    }
+
+    fun reset() {
+        accumulatedScroll = 0f
+    }
+}
+
 @Composable
 fun ObserveScrollForNavbar(lazyListState: androidx.compose.foundation.lazy.LazyListState) {
     val navbarVisible = LocalNavbarVisible.current
+    val thresholdPx = with(LocalDensity.current) { 28.dp.toPx() }
 
-    LaunchedEffect(lazyListState) {
+    LaunchedEffect(lazyListState, thresholdPx) {
         var previousIndex = lazyListState.firstVisibleItemIndex
         var previousOffset = lazyListState.firstVisibleItemScrollOffset
+        val accumulator = ScrollDirectionAccumulator(thresholdPx)
 
         snapshotFlow {
             Pair(lazyListState.firstVisibleItemIndex, lazyListState.firstVisibleItemScrollOffset)
         }
             .distinctUntilChanged()
             .collect { (currentIndex, currentOffset) ->
-                val isScrollingDown = when {
-                    currentIndex > previousIndex -> true
-                    currentIndex < previousIndex -> false
-                    else -> currentOffset > previousOffset + 6
-                }
-                val isScrollingUp = when {
-                    currentIndex < previousIndex -> true
-                    currentIndex > previousIndex -> false
-                    else -> currentOffset < previousOffset - 6
-                }
-                val isNearTop = currentIndex == 0 && currentOffset < 80
-
-                if (isNearTop || isScrollingUp) {
+                val isNearTop = currentIndex == 0 && currentOffset < thresholdPx
+                if (isNearTop) {
                     navbarVisible.value = true
+                    accumulator.reset()
                     previousIndex = currentIndex
                     previousOffset = currentOffset
-                } else if (isScrollingDown) {
-                    navbarVisible.value = false
-                    previousIndex = currentIndex
-                    previousOffset = currentOffset
+                    return@collect
+                }
+
+                val itemSize = lazyListState.layoutInfo.visibleItemsInfo.firstOrNull()?.size ?: thresholdPx.toInt()
+                val delta = computeScrollDelta(
+                    currentIndex = currentIndex,
+                    currentOffset = currentOffset,
+                    previousIndex = previousIndex,
+                    previousOffset = previousOffset,
+                    itemDimension = itemSize,
+                    thresholdPx = thresholdPx
+                )
+
+                previousIndex = currentIndex
+                previousOffset = currentOffset
+
+                val visibilityChange = accumulator.onDelta(delta)
+                if (visibilityChange != null) {
+                    navbarVisible.value = visibilityChange
                 }
             }
     }
@@ -89,36 +165,43 @@ fun ObserveScrollForNavbar(lazyListState: androidx.compose.foundation.lazy.LazyL
 @Composable
 fun ObserveScrollForNavbar(gridState: androidx.compose.foundation.lazy.grid.LazyGridState) {
     val navbarVisible = LocalNavbarVisible.current
+    val thresholdPx = with(LocalDensity.current) { 28.dp.toPx() }
 
-    LaunchedEffect(gridState) {
+    LaunchedEffect(gridState, thresholdPx) {
         var previousIndex = gridState.firstVisibleItemIndex
         var previousOffset = gridState.firstVisibleItemScrollOffset
+        val accumulator = ScrollDirectionAccumulator(thresholdPx)
 
         snapshotFlow {
             Pair(gridState.firstVisibleItemIndex, gridState.firstVisibleItemScrollOffset)
         }
             .distinctUntilChanged()
             .collect { (currentIndex, currentOffset) ->
-                val isScrollingDown = when {
-                    currentIndex > previousIndex -> true
-                    currentIndex < previousIndex -> false
-                    else -> currentOffset > previousOffset + 6
-                }
-                val isScrollingUp = when {
-                    currentIndex < previousIndex -> true
-                    currentIndex > previousIndex -> false
-                    else -> currentOffset < previousOffset - 6
-                }
-                val isNearTop = currentIndex == 0 && currentOffset < 80
-
-                if (isNearTop || isScrollingUp) {
+                val isNearTop = currentIndex == 0 && currentOffset < thresholdPx
+                if (isNearTop) {
                     navbarVisible.value = true
+                    accumulator.reset()
                     previousIndex = currentIndex
                     previousOffset = currentOffset
-                } else if (isScrollingDown) {
-                    navbarVisible.value = false
-                    previousIndex = currentIndex
-                    previousOffset = currentOffset
+                    return@collect
+                }
+
+                val itemHeight = gridState.layoutInfo.visibleItemsInfo.firstOrNull()?.size?.height ?: thresholdPx.toInt()
+                val delta = computeScrollDelta(
+                    currentIndex = currentIndex,
+                    currentOffset = currentOffset,
+                    previousIndex = previousIndex,
+                    previousOffset = previousOffset,
+                    itemDimension = itemHeight,
+                    thresholdPx = thresholdPx
+                )
+
+                previousIndex = currentIndex
+                previousOffset = currentOffset
+
+                val visibilityChange = accumulator.onDelta(delta)
+                if (visibilityChange != null) {
+                    navbarVisible.value = visibilityChange
                 }
             }
     }
@@ -720,10 +803,10 @@ fun AppNavHost(
                 exitTransition = { fadeOut(animationSpec = tween(180)) },
                 popEnterTransition = { fadeIn(animationSpec = tween(180)) },
                 popExitTransition = {
-                    if (reduceMotion) fadeOut(animationSpec = tween(180)) else slideOutHorizontally(
+                    if (reduceMotion) fadeOut(animationSpec = tween(140)) else slideOutHorizontally(
                         targetOffsetX = { it },
-                        animationSpec = tween(250, easing = FastOutSlowInEasing)
-                    ) + fadeOut(animationSpec = tween(200))
+                        animationSpec = tween(160, easing = FastOutLinearInEasing)
+                    ) + fadeOut(animationSpec = tween(140))
                 }
             ) {
                 com.euthopiar.ui.settings.pages.PlaybackSettingsPage(
@@ -742,10 +825,10 @@ fun AppNavHost(
                 exitTransition = { fadeOut(animationSpec = tween(180)) },
                 popEnterTransition = { fadeIn(animationSpec = tween(180)) },
                 popExitTransition = {
-                    if (reduceMotion) fadeOut(animationSpec = tween(180)) else slideOutHorizontally(
+                    if (reduceMotion) fadeOut(animationSpec = tween(140)) else slideOutHorizontally(
                         targetOffsetX = { it },
-                        animationSpec = tween(250, easing = FastOutSlowInEasing)
-                    ) + fadeOut(animationSpec = tween(200))
+                        animationSpec = tween(160, easing = FastOutLinearInEasing)
+                    ) + fadeOut(animationSpec = tween(140))
                 }
             ) {
                 com.euthopiar.ui.settings.pages.AppearanceSettingsPage(
@@ -764,10 +847,10 @@ fun AppNavHost(
                 exitTransition = { fadeOut(animationSpec = tween(180)) },
                 popEnterTransition = { fadeIn(animationSpec = tween(180)) },
                 popExitTransition = {
-                    if (reduceMotion) fadeOut(animationSpec = tween(180)) else slideOutHorizontally(
+                    if (reduceMotion) fadeOut(animationSpec = tween(140)) else slideOutHorizontally(
                         targetOffsetX = { it },
-                        animationSpec = tween(250, easing = FastOutSlowInEasing)
-                    ) + fadeOut(animationSpec = tween(200))
+                        animationSpec = tween(160, easing = FastOutLinearInEasing)
+                    ) + fadeOut(animationSpec = tween(140))
                 }
             ) {
                 com.euthopiar.ui.settings.pages.IntegrationsSettingsPage(
@@ -786,10 +869,10 @@ fun AppNavHost(
                 exitTransition = { fadeOut(animationSpec = tween(180)) },
                 popEnterTransition = { fadeIn(animationSpec = tween(180)) },
                 popExitTransition = {
-                    if (reduceMotion) fadeOut(animationSpec = tween(180)) else slideOutHorizontally(
+                    if (reduceMotion) fadeOut(animationSpec = tween(140)) else slideOutHorizontally(
                         targetOffsetX = { it },
-                        animationSpec = tween(250, easing = FastOutSlowInEasing)
-                    ) + fadeOut(animationSpec = tween(200))
+                        animationSpec = tween(160, easing = FastOutLinearInEasing)
+                    ) + fadeOut(animationSpec = tween(140))
                 }
             ) {
                 com.euthopiar.ui.settings.pages.PluginsSettingsPage(
@@ -814,10 +897,10 @@ fun AppNavHost(
                 exitTransition = { fadeOut(animationSpec = tween(180)) },
                 popEnterTransition = { fadeIn(animationSpec = tween(180)) },
                 popExitTransition = {
-                    if (reduceMotion) fadeOut(animationSpec = tween(180)) else slideOutHorizontally(
+                    if (reduceMotion) fadeOut(animationSpec = tween(140)) else slideOutHorizontally(
                         targetOffsetX = { it },
-                        animationSpec = tween(250, easing = FastOutSlowInEasing)
-                    ) + fadeOut(animationSpec = tween(200))
+                        animationSpec = tween(160, easing = FastOutLinearInEasing)
+                    ) + fadeOut(animationSpec = tween(140))
                 }
             ) { backStackEntry ->
                 val encodedUrl = backStackEntry.arguments?.getString("encodedRepoUrl") ?: ""
@@ -843,13 +926,35 @@ fun AppNavHost(
                 exitTransition = { fadeOut(animationSpec = tween(180)) },
                 popEnterTransition = { fadeIn(animationSpec = tween(180)) },
                 popExitTransition = {
-                    if (reduceMotion) fadeOut(animationSpec = tween(180)) else slideOutHorizontally(
+                    if (reduceMotion) fadeOut(animationSpec = tween(140)) else slideOutHorizontally(
                         targetOffsetX = { it },
-                        animationSpec = tween(250, easing = FastOutSlowInEasing)
-                    ) + fadeOut(animationSpec = tween(200))
+                        animationSpec = tween(160, easing = FastOutLinearInEasing)
+                    ) + fadeOut(animationSpec = tween(140))
                 }
             ) {
                 com.euthopiar.ui.settings.pages.StorageSettingsPage(
+                    onBack = { navController.popBackStack() }
+                )
+            }
+
+            composable(
+                route = "settings/updates",
+                enterTransition = {
+                    if (reduceMotion) fadeIn(animationSpec = tween(180)) else slideInHorizontally(
+                        initialOffsetX = { it },
+                        animationSpec = tween(280, easing = FastOutSlowInEasing)
+                    ) + fadeIn(animationSpec = tween(200))
+                },
+                exitTransition = { fadeOut(animationSpec = tween(180)) },
+                popEnterTransition = { fadeIn(animationSpec = tween(180)) },
+                popExitTransition = {
+                    if (reduceMotion) fadeOut(animationSpec = tween(140)) else slideOutHorizontally(
+                        targetOffsetX = { it },
+                        animationSpec = tween(160, easing = FastOutLinearInEasing)
+                    ) + fadeOut(animationSpec = tween(140))
+                }
+            ) {
+                com.euthopiar.ui.settings.pages.UpdateSettingsPage(
                     onBack = { navController.popBackStack() }
                 )
             }
@@ -865,14 +970,15 @@ fun AppNavHost(
                 exitTransition = { fadeOut(animationSpec = tween(180)) },
                 popEnterTransition = { fadeIn(animationSpec = tween(180)) },
                 popExitTransition = {
-                    if (reduceMotion) fadeOut(animationSpec = tween(180)) else slideOutHorizontally(
+                    if (reduceMotion) fadeOut(animationSpec = tween(140)) else slideOutHorizontally(
                         targetOffsetX = { it },
-                        animationSpec = tween(250, easing = FastOutSlowInEasing)
-                    ) + fadeOut(animationSpec = tween(200))
+                        animationSpec = tween(160, easing = FastOutLinearInEasing)
+                    ) + fadeOut(animationSpec = tween(140))
                 }
             ) {
                 com.euthopiar.ui.settings.pages.AboutSettingsPage(
-                    onBack = { navController.popBackStack() }
+                    onBack = { navController.popBackStack() },
+                    onNavigateToUpdates = { navController.navigate("settings/updates") }
                 )
             }
 
@@ -936,7 +1042,18 @@ fun AppNavHost(
                 )
             }
 
-            val snackbarBottomPadding = if (showBottomNav && navbarVisible.value) 94.dp else Dimens.spacing16
+            val targetSnackbarPadding = if (showBottomNav && navbarVisible.value) 94.dp else Dimens.spacing16
+            val snackbarBottomPadding by animateDpAsState(
+                targetValue = targetSnackbarPadding,
+                animationSpec = if (reduceMotion) {
+                    snap()
+                } else if (targetSnackbarPadding > Dimens.spacing16) {
+                    tween(durationMillis = 220, easing = AppleDecelCurve)
+                } else {
+                    tween(durationMillis = 140, easing = HudExitEasing)
+                },
+                label = "snackbarBottomPadding"
+            )
             AppSnackbarHost(
                 hostState = snackbarHostState,
                 bottomPadding = snackbarBottomPadding

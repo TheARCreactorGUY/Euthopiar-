@@ -111,7 +111,11 @@ object StreamParser {
                 crMagnetUri
             } else null
 
-            val finalUrl = url ?: externalUrl ?: crMagnetUri ?: computedMagnet
+            val (cleanUrl, combinedHeaders) = if (!url.isNullOrBlank()) {
+                com.euthopiar.core.network.PlayerPlaybackNetworking.extractUrlAndInlineHeaders(url, proxyHeaders)
+            } else {
+                Pair(url, proxyHeaders)
+            }
 
             val parsedAudioLangs = AudioLanguageDiscovery.parseAudioLanguagesFromMetadata(combinedLabel, originalLanguage)
 
@@ -119,7 +123,7 @@ object StreamParser {
                 name = nameStr ?: titleStr ?: addonName,
                 title = titleStr,
                 description = descStr,
-                url = finalUrl,
+                url = cleanUrl,
                 infoHash = effectiveInfoHash,
                 fileIdx = effectiveFileIdx,
                 magnetUrl = computedMagnet,
@@ -131,7 +135,7 @@ object StreamParser {
                 addonName = addonName,
                 addonId = addonId,
                 streamType = obj.string("type"),
-                headers = proxyHeaders,
+                headers = combinedHeaders,
                 responseHeaders = responseHeaders,
                 isCached = crIsCached,
                 audioLanguages = parsedAudioLangs

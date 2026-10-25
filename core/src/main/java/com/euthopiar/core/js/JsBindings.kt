@@ -4,6 +4,7 @@ object JsBindings {
     val staticPolyfillCode: String = """
             globalThis.SCRAPER_ID = __get_scraper_id();
             globalThis.SCRAPER_SETTINGS = JSON.parse(__get_scraper_settings());
+            try { globalThis.__CALL_ARGS__ = JSON.parse(__get_call_args()); } catch(e) { globalThis.__CALL_ARGS__ = {}; }
             if (typeof TMDB_API_KEY === 'undefined') {
                 globalThis.TMDB_API_KEY = __get_tmdb_api_key();
             }
@@ -11,10 +12,12 @@ object JsBindings {
             if (typeof globalThis.window === 'undefined') globalThis.window = globalThis;
             if (typeof globalThis.self === 'undefined') globalThis.self = globalThis;
 
+            ${storagePolyfill()}
             ${timerPolyfill()}
             ${fetchPolyfill()}
             ${abortControllerPolyfill()}
             ${base64Polyfill()}
+            ${bufferPolyfill()}
             ${urlPolyfill()}
             ${cryptoPolyfill()}
             ${textEncoderPolyfill()}
@@ -23,6 +26,8 @@ object JsBindings {
             ${arrayPolyfill()}
             ${objectPolyfill()}
             ${stringPolyfill()}
+            ${browserPolyfill()}
+            ${extractorSdkPolyfill()}
         """.trimIndent()
 
     val staticCallCode: String = """
@@ -34,11 +39,79 @@ object JsBindings {
                         __capture_result(JSON.stringify([]));
                         return;
                     }
-                    var args = JSON.parse(__get_call_args());
+                    var args = globalThis.__CALL_ARGS__ || JSON.parse(__get_call_args());
                     var season = args.season == null ? undefined : args.season;
                     var episode = args.episode == null ? undefined : args.episode;
-                    var effectiveTmdbId = (args.tmdbId && /^\d+$/.test(args.tmdbId)) ? args.tmdbId : ((args.id && /^\d+$/.test(args.id)) ? args.id : (args.tmdbId || args.id || args.imdbId));
-                    var result = await getStreams(effectiveTmdbId, args.mediaType, season, episode);
+                    var effectiveTmdbId = (args.tmdbId && /^\d+${'$'}/.test(args.tmdbId)) ? args.tmdbId : ((args.id && /^\d+${'$'}/.test(args.id)) ? args.id : (args.tmdbId || args.id || args.imdbId));
+                    var effectiveType = args.mediaType;
+                    var result;
+                    try {
+                        result = await getStreams(effectiveTmdbId, effectiveType, season, episode);
+                    } catch (firstErr) {
+                        if (effectiveType === 'tv' || effectiveType === 'anime') {
+                            var fallbackType = (effectiveType === 'tv') ? 'anime' : 'tv';
+                            try {
+                                result = await getStreams(effectiveTmdbId, fallbackType, season, episode);
+                            } catch (_fallbackErr) {
+                                throw firstErr;
+                            }
+                        } else {
+                            throw firstErr;
+                        }
+                    }
+                    if ((!result || (Array.isArray(result) && result.length === 0)) && (effectiveType === 'tv' || effectiveType === 'anime')) {
+                        var fallbackType = (effectiveType === 'tv') ? 'anime' : 'tv';
+                        try {
+                            var altResult = await getStreams(effectiveTmdbId, fallbackType, season, episode);
+                            if (altResult && Array.isArray(altResult) && altResult.length > 0) {
+                                result = altResult;
+                            }
+                        } catch (_fallbackErr) {}
+                    }
+
+                    if (Array.isArray(result)) {
+                        var unwrapped = [];
+                        for (var i = 0; i < result.length; i++) {
+                            var item = result[i];
+                            var itemUrl = (item && (item.url || item.externalUrl || '')) + '';
+                            var cleanItemUrl = itemUrl.split(/[?#]/)[0].toLowerCase();
+                            var isDirectMedia = cleanItemUrl.endsWith('.m3u8') || cleanItemUrl.endsWith('.mpd') ||
+                                                cleanItemUrl.endsWith('.mp4') || cleanItemUrl.endsWith('.mkv') ||
+                                                cleanItemUrl.endsWith('.webm') || cleanItemUrl.indexOf('/hls/') >= 0 ||
+                                                cleanItemUrl.indexOf('master.m3u8') >= 0 ||
+                                                itemUrl.toLowerCase().startsWith('magnet:') || itemUrl.toLowerCase().startsWith('torrent:');
+
+                            if (!isDirectMedia && typeof EmbedExtractor !== 'undefined' && EmbedExtractor.canHandle(itemUrl)) {
+                                try {
+                                    var extractedList = await EmbedExtractor.resolve(itemUrl, {
+                                        name: item.name || item.title,
+                                        title: item.title || item.name,
+                                        quality: item.quality,
+                                        headers: item.headers
+                                    });
+                                    if (extractedList && extractedList.length > 0) {
+                                        for (var j = 0; j < extractedList.length; j++) {
+                                            var ex = extractedList[j];
+                                            unwrapped.push({
+                                                name: ex.name || item.name,
+                                                title: ex.title || item.title || ex.name || item.name,
+                                                url: ex.url,
+                                                quality: ex.quality || item.quality || 'Auto',
+                                                headers: ex.headers || item.headers || {},
+                                                subtitles: (item.subtitles || []).concat(ex.subtitles || [])
+                                            });
+                                        }
+                                        continue;
+                                    }
+                                } catch (unErr) {
+                                    console.error('[staticCallCode] Embed unwrap error:', unErr);
+                                }
+                            }
+                            unwrapped.push(item);
+                        }
+                        result = unwrapped;
+                    }
+
                     __capture_result(JSON.stringify(result || []));
                 } catch (e) {
                     console.error("getStreams error:", e && e.message ? e.message : e, e && e.stack ? e.stack : "");
@@ -63,6 +136,46 @@ object JsBindings {
                 }
             })();
         """.trimIndent()
+
+    private fun storagePolyfill() = """
+        (function() {
+            function createStorage() {
+                var data = Object.create(null);
+                return {
+                    getItem: function(key) {
+                        var k = String(key);
+                        return Object.prototype.hasOwnProperty.call(data, k) ? data[k] : null;
+                    },
+                    setItem: function(key, value) {
+                        data[String(key)] = String(value);
+                    },
+                    removeItem: function(key) {
+                        delete data[String(key)];
+                    },
+                    clear: function() {
+                        data = Object.create(null);
+                    },
+                    key: function(index) {
+                        var keys = Object.keys(data);
+                        return index >= 0 && index < keys.length ? keys[index] : null;
+                    },
+                    get length() {
+                        return Object.keys(data).length;
+                    }
+                };
+            }
+            if (typeof globalThis.localStorage === 'undefined') {
+                globalThis.localStorage = createStorage();
+            }
+            if (typeof globalThis.sessionStorage === 'undefined') {
+                globalThis.sessionStorage = createStorage();
+            }
+            if (typeof window !== 'undefined') {
+                if (!window.localStorage) window.localStorage = globalThis.localStorage;
+                if (!window.sessionStorage) window.sessionStorage = globalThis.sessionStorage;
+            }
+        })();
+    """.trimIndent()
 
     private fun timerPolyfill() = """
         // QuickJS has no event loop or native timers. Back timers with a
@@ -253,6 +366,16 @@ object JsBindings {
             };
             globalThis.AbortController = AbortController;
         }
+
+        if (typeof globalThis.AbortSignal !== 'undefined' && !globalThis.AbortSignal.timeout) {
+            globalThis.AbortSignal.timeout = function(ms) {
+                var controller = new globalThis.AbortController();
+                setTimeout(function() {
+                    controller.abort(new Error("TimeoutError: The operation timed out"));
+                }, ms);
+                return controller.signal;
+            };
+        }
     """.trimIndent()
 
     private fun base64Polyfill() = """
@@ -288,6 +411,165 @@ object JsBindings {
                 return output;
             };
         }
+    """.trimIndent()
+
+    private fun bufferPolyfill() = """
+        (function() {
+            if (typeof globalThis.Buffer !== 'undefined') return;
+
+            function SimpleBuffer(arg, encodingOrOffset, length) {
+                var u8;
+                if (typeof arg === 'number') {
+                    u8 = new Uint8Array(arg);
+                } else if (typeof arg === 'string') {
+                    u8 = SimpleBuffer._fromString(arg, encodingOrOffset);
+                } else if (ArrayBuffer.isView(arg)) {
+                    u8 = new Uint8Array(arg.buffer, arg.byteOffset, arg.byteLength);
+                } else if (arg instanceof ArrayBuffer) {
+                    u8 = new Uint8Array(arg, encodingOrOffset || 0, length !== undefined ? length : (arg.byteLength - (encodingOrOffset || 0)));
+                } else if (Array.isArray(arg)) {
+                    u8 = new Uint8Array(arg);
+                } else {
+                    u8 = new Uint8Array(0);
+                }
+                Object.setPrototypeOf(u8, SimpleBuffer.prototype);
+                return u8;
+            }
+            Object.setPrototypeOf(SimpleBuffer.prototype, Uint8Array.prototype);
+
+            SimpleBuffer.isBuffer = function(obj) {
+                return obj instanceof Uint8Array && (obj._isBuffer === true || Object.getPrototypeOf(obj) === SimpleBuffer.prototype);
+            };
+
+            SimpleBuffer.prototype._isBuffer = true;
+
+            SimpleBuffer._fromString = function(str, encoding) {
+                var enc = (encoding || 'utf8').toLowerCase().replace(/[^a-z0-9]/g, '');
+                if (enc === 'hex') {
+                    var clean = str.replace(/[^0-9a-fA-F]/g, '');
+                    var len = Math.floor(clean.length / 2);
+                    var arr = new Uint8Array(len);
+                    for (var i = 0; i < len; i++) {
+                        arr[i] = parseInt(clean.substr(i * 2, 2), 16);
+                    }
+                    return arr;
+                } else if (enc === 'base64' || enc === 'base64url') {
+                    var b64 = str.replace(/-/g, '+').replace(/_/g, '/');
+                    while (b64.length % 4) b64 += '=';
+                    var bin = globalThis.atob(b64);
+                    var arr = new Uint8Array(bin.length);
+                    for (var i = 0; i < bin.length; i++) {
+                        arr[i] = bin.charCodeAt(i);
+                    }
+                    return arr;
+                } else if (enc === 'latin1' || enc === 'binary') {
+                    var arr = new Uint8Array(str.length);
+                    for (var i = 0; i < str.length; i++) {
+                        arr[i] = str.charCodeAt(i) & 0xff;
+                    }
+                    return arr;
+                } else {
+                    if (typeof TextEncoder !== 'undefined') {
+                        return new TextEncoder().encode(str);
+                    }
+                    var codePoints = [];
+                    for (var i = 0; i < str.length; i++) {
+                        var c = str.charCodeAt(i);
+                        if (c < 0x80) {
+                            codePoints.push(c);
+                        } else if (c < 0x800) {
+                            codePoints.push(0xc0 | (c >> 6), 0x80 | (c & 0x3f));
+                        } else if (c < 0xd800 || c >= 0xe000) {
+                            codePoints.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 0x3f), 0x80 | (c & 0x3f));
+                        } else {
+                            i++;
+                            c = 0x10000 + (((c & 0x3ff) << 10) | (str.charCodeAt(i) & 0x3ff));
+                            codePoints.push(0xf0 | (c >> 18), 0x80 | ((c >> 12) & 0x3f), 0x80 | ((c >> 6) & 0x3f), 0x80 | (c & 0x3f));
+                        }
+                    }
+                    return new Uint8Array(codePoints);
+                }
+            };
+
+            SimpleBuffer.alloc = function(size, fill) {
+                var buf = SimpleBuffer(size);
+                if (fill !== undefined) {
+                    buf.fill(fill);
+                }
+                return buf;
+            };
+
+            SimpleBuffer.from = function(value, encodingOrOffset, length) {
+                return SimpleBuffer(value, encodingOrOffset, length);
+            };
+
+            SimpleBuffer.concat = function(list, totalLength) {
+                if (!Array.isArray(list)) throw new TypeError('"list" argument must be an Array');
+                if (list.length === 0) return SimpleBuffer.alloc(0);
+                var calcLength = 0;
+                for (var i = 0; i < list.length; i++) {
+                    calcLength += list[i].length;
+                }
+                var targetLen = totalLength !== undefined ? totalLength : calcLength;
+                var result = SimpleBuffer.alloc(targetLen);
+                var offset = 0;
+                for (var i = 0; i < list.length; i++) {
+                    var item = list[i];
+                    for (var j = 0; j < item.length && offset < targetLen; j++) {
+                        result[offset++] = item[j];
+                    }
+                }
+                return result;
+            };
+
+            SimpleBuffer.prototype.toString = function(encoding, start, end) {
+                var enc = (encoding || 'utf8').toLowerCase().replace(/[^a-z0-9]/g, '');
+                var s = start || 0;
+                var e = end !== undefined ? end : this.length;
+                var slice = this.subarray(s, e);
+                if (enc === 'hex') {
+                    var hex = '';
+                    for (var i = 0; i < slice.length; i++) {
+                        var h = slice[i].toString(16);
+                        hex += (h.length === 1 ? '0' : '') + h;
+                    }
+                    return hex;
+                } else if (enc === 'base64' || enc === 'base64url') {
+                    var bin = '';
+                    for (var i = 0; i < slice.length; i++) {
+                        bin += String.fromCharCode(slice[i]);
+                    }
+                    var b64 = globalThis.btoa(bin);
+                    if (enc === 'base64url') {
+                        return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+${'$'}/, '');
+                    }
+                    return b64;
+                } else if (enc === 'latin1' || enc === 'binary') {
+                    var res = '';
+                    for (var i = 0; i < slice.length; i++) {
+                        res += String.fromCharCode(slice[i]);
+                    }
+                    return res;
+                } else {
+                    if (typeof TextDecoder !== 'undefined') {
+                        return new TextDecoder().decode(slice);
+                    }
+                    var res = '';
+                    for (var i = 0; i < slice.length; i++) {
+                        res += String.fromCharCode(slice[i]);
+                    }
+                    return decodeURIComponent(escape(res));
+                }
+            };
+
+            SimpleBuffer.prototype.slice = function(start, end) {
+                var sub = this.subarray(start, end);
+                Object.setPrototypeOf(sub, SimpleBuffer.prototype);
+                return sub;
+            };
+
+            globalThis.Buffer = SimpleBuffer;
+        })();
     """.trimIndent()
 
     private fun urlPolyfill() = """
@@ -1063,6 +1345,140 @@ object JsBindings {
             if (moduleName === 'crypto-js') {
                 return CryptoJS;
             }
+            if (moduleName === 'embed-extractor') {
+                return EmbedExtractor;
+            }
+            if (moduleName === 'buffer' || moduleName === 'node:buffer') {
+                return { Buffer: globalThis.Buffer };
+            }
+            if (moduleName === 'crypto' || moduleName === 'node:crypto') {
+                return {
+                    createHash: function(algo) {
+                        var _data = '';
+                        return {
+                            update: function(d) {
+                                if (typeof d === 'string') _data += d;
+                                else if (d && d.toString) _data += d.toString('binary');
+                                return this;
+                            },
+                            digest: function(enc) {
+                                var wa = CryptoJS.enc.Latin1.parse(_data);
+                                var hash;
+                                var a = (algo || 'sha256').toLowerCase().replace(/[^a-z0-9]/g, '');
+                                if (a === 'md5') hash = CryptoJS.MD5(wa);
+                                else if (a === 'sha1') hash = CryptoJS.SHA1(wa);
+                                else if (a === 'sha512') hash = CryptoJS.SHA512(wa);
+                                else hash = CryptoJS.SHA256(wa);
+                                if (enc === 'hex') return hash.toString(CryptoJS.enc.Hex);
+                                if (enc === 'base64') return hash.toString(CryptoJS.enc.Base64);
+                                if (enc === 'latin1' || enc === 'binary') return hash.toString(CryptoJS.enc.Latin1);
+                                if (globalThis.Buffer) return globalThis.Buffer.from(hash.toString(CryptoJS.enc.Hex), 'hex');
+                                return hash.toString(CryptoJS.enc.Hex);
+                            }
+                        };
+                    },
+                    createHmac: function(algo, key) {
+                        var _data = '';
+                        var k = typeof key === 'string' ? key : (key && key.toString ? key.toString('utf8') : '');
+                        return {
+                            update: function(d) {
+                                if (typeof d === 'string') _data += d;
+                                else if (d && d.toString) _data += d.toString('binary');
+                                return this;
+                            },
+                            digest: function(enc) {
+                                var wa = CryptoJS.enc.Latin1.parse(_data);
+                                var hmac;
+                                var a = (algo || 'sha256').toLowerCase().replace(/[^a-z0-9]/g, '');
+                                if (a === 'sha1') hmac = CryptoJS.HmacSHA1(wa, k);
+                                else if (a === 'md5') hmac = CryptoJS.HmacMD5(wa, k);
+                                else if (a === 'sha512') hmac = CryptoJS.HmacSHA512(wa, k);
+                                else hmac = CryptoJS.HmacSHA256(wa, k);
+                                if (enc === 'hex') return hmac.toString(CryptoJS.enc.Hex);
+                                if (enc === 'base64') return hmac.toString(CryptoJS.enc.Base64);
+                                if (enc === 'latin1' || enc === 'binary') return hmac.toString(CryptoJS.enc.Latin1);
+                                if (globalThis.Buffer) return globalThis.Buffer.from(hmac.toString(CryptoJS.enc.Hex), 'hex');
+                                return hmac.toString(CryptoJS.enc.Hex);
+                            }
+                        };
+                    },
+                    randomBytes: function(size) {
+                        var arr = new Uint8Array(size);
+                        if (globalThis.crypto && globalThis.crypto.getRandomValues) {
+                            globalThis.crypto.getRandomValues(arr);
+                        } else {
+                            for (var i = 0; i < size; i++) arr[i] = Math.floor(Math.random() * 256);
+                        }
+                        return globalThis.Buffer ? globalThis.Buffer.from(arr) : arr;
+                    }
+                };
+            }
+            if (moduleName === 'axios') {
+                var createAxios = function(baseConfig) {
+                    var fn = function(configOrUrl, maybeConfig) {
+                        var config = Object.assign({}, baseConfig || {});
+                        if (typeof configOrUrl === 'string') {
+                            Object.assign(config, maybeConfig || {});
+                            config.url = configOrUrl;
+                        } else if (configOrUrl) {
+                            Object.assign(config, configOrUrl);
+                        }
+                        if (baseConfig && baseConfig.headers) {
+                            config.headers = Object.assign({}, baseConfig.headers, config.headers || {});
+                        }
+                        var url = config.url || '';
+                        if (config.baseURL && !/^https?:\/\//i.test(url)) {
+                            url = config.baseURL.replace(/\/+${'$'}/, '') + '/' + url.replace(/^\/+/, '');
+                        }
+                        var method = (config.method || 'GET').toUpperCase();
+                        var options = {
+                            method: method,
+                            headers: config.headers || {}
+                        };
+                        if (config.data !== undefined && method !== 'GET' && method !== 'HEAD') {
+                            options.body = typeof config.data === 'string' ? config.data : JSON.stringify(config.data);
+                        }
+                        return fetch(url, options).then(function(res) {
+                            return res.text().then(function(textData) {
+                                var parsedData = textData;
+                                try { parsedData = JSON.parse(textData); } catch(e) {}
+                                var resHeaders = {};
+                                if (res.headers && res.headers.forEach) {
+                                    res.headers.forEach(function(v, k) { resHeaders[k.toLowerCase()] = v; });
+                                }
+                                var axiosResponse = {
+                                    data: parsedData,
+                                    status: res.status,
+                                    statusText: res.statusText || '',
+                                    headers: resHeaders,
+                                    config: config
+                                };
+                                if (!res.ok && (config.validateStatus ? !config.validateStatus(res.status) : res.status >= 400)) {
+                                    var err = new Error('Request failed with status code ' + res.status);
+                                    err.response = axiosResponse;
+                                    err.isAxiosError = true;
+                                    throw err;
+                                }
+                                return axiosResponse;
+                            });
+                        });
+                    };
+                    fn.get = function(url, config) { var cfg = Object.assign({}, config || {}); cfg.method = 'GET'; cfg.url = url; return fn(cfg); };
+                    fn.post = function(url, data, config) { var cfg = Object.assign({}, config || {}); cfg.method = 'POST'; cfg.url = url; cfg.data = data; return fn(cfg); };
+                    fn.put = function(url, data, config) { var cfg = Object.assign({}, config || {}); cfg.method = 'PUT'; cfg.url = url; cfg.data = data; return fn(cfg); };
+                    fn.delete = function(url, config) { var cfg = Object.assign({}, config || {}); cfg.method = 'DELETE'; cfg.url = url; return fn(cfg); };
+                    fn.head = function(url, config) { var cfg = Object.assign({}, config || {}); cfg.method = 'HEAD'; cfg.url = url; return fn(cfg); };
+                    fn.patch = function(url, data, config) { var cfg = Object.assign({}, config || {}); cfg.method = 'PATCH'; cfg.url = url; cfg.data = data; return fn(cfg); };
+                    fn.create = function(cfg) { return createAxios(Object.assign({}, baseConfig || {}, cfg || {})); };
+                    fn.defaults = Object.assign({ headers: { common: {} } }, baseConfig || {});
+                    fn.default = fn;
+                    fn.isAxiosError = function(err) { return !!(err && (err.isAxiosError || err.response)); };
+                    fn.all = Promise.all.bind(Promise);
+                    fn.spread = function(callback) { return function(arr) { return callback.apply(null, arr); }; };
+                    return fn;
+                };
+                return createAxios({});
+            }
             throw new Error("Module '" + moduleName + "' is not available");
         };
     """.trimIndent()
@@ -1116,6 +1532,1302 @@ object JsBindings {
                 }
                 return this.split(search).join(replace);
             };
+        }
+    """.trimIndent()
+
+    private fun browserPolyfill() = """
+        if (typeof globalThis.Browser === 'undefined') {
+            globalThis.Browser = {
+                resolve: async function(urlOrOptions, maybeOptions) {
+                    try {
+                        var options = (typeof urlOrOptions === 'object' && urlOrOptions !== null) ? urlOrOptions : (maybeOptions || {});
+                        var targetUrl = (typeof urlOrOptions === 'string') ? urlOrOptions : options.url;
+                        var payload = JSON.stringify({
+                            url: targetUrl || '',
+                            headers: options.headers || {},
+                            userAgent: options.userAgent || null,
+                            timeoutMs: options.timeoutMs || 20000,
+                            waitForSelector: options.waitForSelector || options.waitSelector || null,
+                            waitForText: options.waitForText || null,
+                            evaluateJsAfterLoad: options.evaluateJsAfterLoad || options.evaluateJs || null,
+                            urlSniffRegex: options.urlSniffRegex || null,
+                            stopOnFirstMediaMatch: typeof options.stopOnFirstMediaMatch === 'boolean' ? options.stopOnFirstMediaMatch : false,
+                            extraDelayAfterLoadMs: options.extraDelayAfterLoadMs || 0,
+                            autoClickPlaySelectors: typeof options.autoClickPlaySelectors === 'boolean' ? options.autoClickPlaySelectors : true,
+                            autoClickServers: typeof options.autoClickServers === 'boolean' ? options.autoClickServers : false
+                        });
+                        var raw = await __host_browser_resolve(payload);
+                        if (typeof raw === 'string') {
+                            try {
+                                return JSON.parse(raw);
+                            } catch (e) {
+                                return { html: raw, finalUrl: targetUrl, cookies: {}, cookieString: '', sniffedUrls: [], sniffedMedia: [], sniffedSubtitles: [] };
+                            }
+                        }
+                        return raw;
+                    } catch (err) {
+                        console.error('[Browser.resolve] error:', err);
+                        return { error: err ? (err.message || String(err)) : 'unknown error', html: '', sniffedUrls: [], sniffedMedia: [], sniffedSubtitles: [] };
+                    }
+                },
+
+                sniffMedia: async function(url, options) {
+                    options = options || {};
+                    var sniffRegex = (options && options.urlSniffRegex) || "\\.(?:m3u8|mpd|mp4|mkv)(?:\\?|${'$'}|#)|(?:master|playlist|index)\\.(?:m3u8|txt)|/hls/";
+                    var stopEarly = options && typeof options.stopOnFirstMediaMatch === 'boolean' ? options.stopOnFirstMediaMatch : true;
+                    var extraDelay = (options && options.extraDelayAfterLoadMs) || 4000;
+                    var timeoutMs = (options && options.timeoutMs) || 15000;
+
+                    var res = await globalThis.Browser.resolve({
+                        url: url,
+                        headers: options.headers || {},
+                        userAgent: options.userAgent || null,
+                        urlSniffRegex: sniffRegex,
+                        stopOnFirstMediaMatch: stopEarly,
+                        extraDelayAfterLoadMs: extraDelay,
+                        timeoutMs: timeoutMs,
+                        autoClickPlaySelectors: options && typeof options.autoClickPlaySelectors === 'boolean' ? options.autoClickPlaySelectors : true,
+                        autoClickServers: options && typeof options.autoClickServers === 'boolean' ? options.autoClickServers : false,
+                        waitForSelector: options.waitForSelector || null,
+                        waitForText: options.waitForText || null
+                    });
+
+                    var sniffedMedia = (res && res.sniffedMedia) || [];
+                    var subs = [];
+                    var videos = [];
+
+                    for (var i = 0; i < sniffedMedia.length; i++) {
+                        var item = sniffedMedia[i];
+                        if (item.isSubtitles) {
+                            subs.push({
+                                url: item.url,
+                                language: 'Subtitles ' + (subs.length + 1),
+                                headers: item.headers || {}
+                            });
+                        } else {
+                            videos.push(item);
+                        }
+                    }
+
+                    if (res && res.sniffedSubtitles && Array.isArray(res.sniffedSubtitles)) {
+                        for (var s = 0; s < res.sniffedSubtitles.length; s++) {
+                            var subItem = res.sniffedSubtitles[s];
+                            if (subItem && subItem.url && !subs.some(function(sub) { return sub.url === subItem.url; })) {
+                                subs.push({
+                                    url: subItem.url,
+                                    language: subItem.lang || subItem.name || ('Subtitles ' + (subs.length + 1)),
+                                    headers: (options && options.headers) || {}
+                                });
+                            }
+                        }
+                    }
+
+                    if (videos.length === 0 && res && res.sniffedUrls && res.sniffedUrls.length > 0) {
+                        for (var j = 0; j < res.sniffedUrls.length; j++) {
+                            var sniffUrl = res.sniffedUrls[j];
+                            var cleanSniff = sniffUrl.split(/[?#]/)[0].toLowerCase();
+                            if (cleanSniff.endsWith('.vtt') || cleanSniff.endsWith('.srt') || cleanSniff.endsWith('.ass')) {
+                                subs.push({ url: sniffUrl, language: 'Subtitles ' + (subs.length + 1), headers: res.headers || {} });
+                            } else {
+                                videos.push({ url: sniffUrl, headers: (res.headers || {}) });
+                            }
+                        }
+                    }
+
+                    var defaultName = (options && (options.name || options.title)) || 'Sniffed Stream';
+                    var defaultQuality = (options && options.quality) || 'auto';
+
+                    return videos.map(function(v, idx) {
+                        var q = defaultQuality;
+                        var vLower = v.url.toLowerCase();
+                        if (vLower.indexOf('1080') >= 0) q = '1080p';
+                        else if (vLower.indexOf('720') >= 0) q = '720p';
+                        else if (vLower.indexOf('2160') >= 0 || vLower.indexOf('4k') >= 0) q = '4K';
+
+                        return {
+                            name: videos.length > 1 ? (defaultName + ' #' + (idx + 1)) : defaultName,
+                            title: (options && options.title) || defaultName,
+                            url: v.url,
+                            quality: q,
+                            headers: v.headers || {},
+                            subtitles: subs
+                        };
+                    });
+                }
+            };
+        }
+
+        if (typeof globalThis.Cloudflare === 'undefined') {
+            globalThis.Cloudflare = {
+                bypass: function(urlOrOptions, options) {
+                    var targetUrl = typeof urlOrOptions === 'string' ? urlOrOptions : (urlOrOptions && urlOrOptions.url ? urlOrOptions.url : '');
+                    var opts = (typeof urlOrOptions === 'object' && urlOrOptions !== null) ? urlOrOptions : (options || {});
+                    return globalThis.Browser.resolve(targetUrl, {
+                        headers: opts.headers || {},
+                        timeoutMs: opts.timeout || opts.timeoutMs || 20000,
+                        waitForSelector: opts.waitForSelector || opts.waitSelector || null,
+                        waitForText: opts.waitForText || null,
+                        evaluateJsAfterLoad: opts.evaluateJsAfterLoad || opts.evaluateJs || null
+                    }).then(function(res) {
+                        if (!res) return { ok: false, status: 503, text: function() { return Promise.resolve(''); }, json: function() { return Promise.resolve({}); }, body: '', headers: {}, cookies: '' };
+                        var isOk = typeof res.ok !== 'undefined' ? !!res.ok : (!res.error && (res.html ? res.html.length > 0 : true));
+                        var statusCode = res.status || (isOk ? 200 : 503);
+                        var bodyText = res.html || '';
+                        var headers = res.headers || {};
+                        var cookieStr = (headers && (headers['Cookie'] || headers['cookie'])) || res.cookieString || '';
+                        return {
+                            ok: isOk,
+                            status: statusCode,
+                            url: res.finalUrl || targetUrl,
+                            headers: headers,
+                            cookies: cookieStr,
+                            body: bodyText,
+                            text: function() { return Promise.resolve(bodyText); },
+                            json: function() {
+                                try { return Promise.resolve(JSON.parse(bodyText || '{}')); }
+                                catch (e) { return Promise.reject(e); }
+                            }
+                        };
+                    });
+                }
+            };
+        }
+    """.trimIndent()
+
+    private fun extractorSdkPolyfill() = """
+        if (typeof globalThis.Unpacker === 'undefined') {
+            globalThis.Unpacker = {
+                isPacked: function(htmlOrScript) {
+                    if (!htmlOrScript || typeof htmlOrScript !== 'string') return false;
+                    return /eval\(function\(p,a,c,k,e,[rd]/i.test(htmlOrScript);
+                },
+                unpack: function(htmlOrScript) {
+                    if (!htmlOrScript || typeof htmlOrScript !== 'string') return '';
+                    var packedRegex = /eval\(function\(p,a,c,k,e,[rd]\)\s*\{.*?\}\s*\(\s*['"]((?:[^'\\]|\\.)*)['"]\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*['"]((?:[^'\\]|\\.)*)['"]\s*\.split\(\s*['"]\|['"]\s*\)/g;
+                    var unpackedTotal = '';
+                    var match;
+                    var hasMatch = false;
+
+                    function parseRadix(word, radix) {
+                        if (radix >= 2 && radix <= 36) {
+                            var n = parseInt(word, radix);
+                            return isNaN(n) ? null : n;
+                        }
+                        if (radix > 36 && radix <= 62) {
+                            var res = 0;
+                            for (var ci = 0; ci < word.length; ci++) {
+                                var ch = word.charCodeAt(ci);
+                                var digit = null;
+                                if (ch >= 48 && ch <= 57) digit = ch - 48;
+                                else if (ch >= 97 && ch <= 122) digit = ch - 97 + 10;
+                                else if (ch >= 65 && ch <= 90) digit = ch - 65 + 36;
+                                if (digit === null || digit >= radix) return null;
+                                res = res * radix + digit;
+                            }
+                            return res;
+                        }
+                        return null;
+                    }
+
+                    while ((match = packedRegex.exec(htmlOrScript)) !== null) {
+                        hasMatch = true;
+                        try {
+                            var payload = match[1].replace(/\\'/g, "'").replace(/\\\\/g, "\\");
+                            var radix = parseInt(match[2], 10);
+                            var count = parseInt(match[3], 10);
+                            var symtab = match[4].split('|');
+
+                            var unpacked = payload.replace(/\b\w+\b/g, function(token) {
+                                var idx = parseRadix(token, radix);
+                                if (idx !== null && idx >= 0 && idx < symtab.length && symtab[idx] !== '') {
+                                    return symtab[idx];
+                                }
+                                return token;
+                            });
+                            unpackedTotal += (unpackedTotal ? '\n' : '') + unpacked;
+                        } catch (err) {
+                            console.error('[Unpacker.unpack] block error:', err);
+                        }
+                    }
+
+                    return hasMatch ? unpackedTotal : (Unpacker.isPacked(htmlOrScript) ? htmlOrScript : '');
+                },
+                extractMediaUrls: function(text, baseUrl) {
+                    if (!text || typeof text !== 'string') return { sources: [], subtitles: [] };
+                    var sources = [];
+                    var subtitles = [];
+                    var seenUrls = {};
+
+                    function addSource(u, label) {
+                        if (!u || typeof u !== 'string') return;
+                        var fullUrl = u.trim();
+                        if (fullUrl.startsWith('//')) fullUrl = 'https:' + fullUrl;
+                        else if (fullUrl.startsWith('/') && baseUrl) {
+                            var m = baseUrl.match(/^(https?:\/\/[^\/]+)/);
+                            if (m) fullUrl = m[1] + fullUrl;
+                        }
+                        if (!seenUrls[fullUrl] && /^https?:\/\//i.test(fullUrl)) {
+                            seenUrls[fullUrl] = true;
+                            sources.push({ url: fullUrl, label: label || 'Auto' });
+                        }
+                    }
+
+                    function addSub(u, lang) {
+                        if (!u || typeof u !== 'string') return;
+                        var fullUrl = u.trim();
+                        if (fullUrl.startsWith('//')) fullUrl = 'https:' + fullUrl;
+                        else if (fullUrl.startsWith('/') && baseUrl) {
+                            var m = baseUrl.match(/^(https?:\/\/[^\/]+)/);
+                            if (m) fullUrl = m[1] + fullUrl;
+                        }
+                        if (!seenUrls[fullUrl] && /^https?:\/\//i.test(fullUrl)) {
+                            seenUrls[fullUrl] = true;
+                            subtitles.push({ url: fullUrl, language: lang || 'Subtitles' });
+                        }
+                    }
+
+                    // 1. JWPlayer / VideoJS sources: [{ file: "..." }]
+                    var jwRegex = /sources\s*:\s*\[([^\]]+)\]/gi;
+                    var jwMatch;
+                    while ((jwMatch = jwRegex.exec(text)) !== null) {
+                        var inner = jwMatch[1];
+                        var singleSrcRegex = /\{([^}]+)\}/g;
+                        var sm;
+                        while ((sm = singleSrcRegex.exec(inner)) !== null) {
+                            var sObj = sm[1];
+                            var sfMatch = sObj.match(/(?:file|src)\s*:\s*["']([^"']+)["']/i);
+                            var slMatch = sObj.match(/label\s*:\s*["']([^"']+)["']/i);
+                            if (sfMatch) {
+                                addSource(sfMatch[1], slMatch ? slMatch[1] : 'Auto');
+                            }
+                        }
+                    }
+
+                    // 2. tracks: [{ file: "...", label: "..." }]
+                    var trkRegex = /tracks\s*:\s*\[([^\]]+)\]/gi;
+                    var trkMatch;
+                    while ((trkMatch = trkRegex.exec(text)) !== null) {
+                        var tInner = trkMatch[1];
+                        var singleTrkRegex = /\{([^}]+)\}/g;
+                        var tm;
+                        while ((tm = singleTrkRegex.exec(tInner)) !== null) {
+                            var objStr = tm[1];
+                            var fMatch = objStr.match(/(?:file|src)\s*:\s*["']([^"']+)["']/i);
+                            var lMatch = objStr.match(/label\s*:\s*["']([^"']+)["']/i);
+                            if (fMatch) {
+                                addSub(fMatch[1], lMatch ? lMatch[1] : 'Subtitles');
+                            }
+                        }
+                    }
+
+                    // 3. hls.loadSource("...")
+                    var hlsRegex = /loadSource\s*\(\s*["']([^"']+)["']\s*\)/gi;
+                    var hMatch;
+                    while ((hMatch = hlsRegex.exec(text)) !== null) {
+                        addSource(hMatch[1], 'HLS');
+                    }
+
+                    // 4. file: "https://...m3u8"
+                    var fileRegex = /(?:file|src|url)\s*:\s*["'](https?:\/\/[^"']+\.(?:m3u8|mpd|mp4|mkv|webm)[^"']*)["']/gi;
+                    var fileMatch;
+                    while ((fileMatch = fileRegex.exec(text)) !== null) {
+                        addSource(fileMatch[1], 'Direct');
+                    }
+
+                    // 5. Raw media URLs
+                    var rawMediaRegex = /(https?:\/\/[^\s"'<>]+\.(?:m3u8|mpd|mp4|mkv|webm)(?:\?[^\s"'<>]*)?)/gi;
+                    var rmMatch;
+                    while ((rmMatch = rawMediaRegex.exec(text)) !== null) {
+                        addSource(rmMatch[1], 'Direct');
+                    }
+
+                    // 6. Raw subtitles
+                    var rawSubRegex = /(https?:\/\/[^\s"'<>]+\.(?:vtt|srt|ass)(?:\?[^\s"'<>]*)?)/gi;
+                    var rsMatch;
+                    while ((rsMatch = rawSubRegex.exec(text)) !== null) {
+                        addSub(rsMatch[1], 'Subtitles');
+                    }
+
+                    return { sources: sources, subtitles: subtitles };
+                }
+            };
+        }
+
+        if (typeof globalThis.EmbedExtractor === 'undefined') {
+            var EmbedExtractor = {
+                canHandle: function(url) {
+                    if (!url || typeof url !== 'string') return false;
+                    var u = url.trim().toLowerCase();
+                    var clean = u.split(/[?#]/)[0];
+                    if (clean.endsWith('.m3u8') || clean.endsWith('.mpd') || clean.endsWith('.mp4') || clean.endsWith('.mkv') || clean.endsWith('.webm') || u.startsWith('magnet:') || u.startsWith('torrent:')) return true;
+                    return u.indexOf('pixeldrain.com/u/') >= 0 || u.indexOf('pixeldrain.com/l/') >= 0 ||
+                           /hubcloud\.|vcloud\.|fastcloud\.|gamerxyt\.|cryptoinsights\./i.test(u) ||
+                           /gdflix\.|driveeed\.|filepress\./i.test(u) ||
+                           u.indexOf('gofile.io/d/') >= 0 ||
+                           /filemoon\.|streamwish\.|sfastwish\.|strwish\.|awish\.|dwish\.|hlswish\.|luluvdo\.|vidhide\.|filelions\.|vidhidepro\.|mycloud\.|lulustream\./i.test(u) ||
+                           /voe\.sx|voe-network\.|repack\./i.test(u) ||
+                           /dood(?:stream)?\.|d000d\.|dooood\.|ds2play\.|dood\.(?:watch|pm|to|so|cx|la|ws|sh|re|yt|stream)/i.test(u) ||
+                           /streamtape\.|strtape\./i.test(u) ||
+                           /mp4upload\./i.test(u) ||
+                           /vidoza\./i.test(u) ||
+                           /streamsb\.|sbembed\.|sbplay\.|sbfull\.|watchsb\.|lvturbo\./i.test(u) ||
+                           /uqload\.|upstream\./i.test(u) ||
+                           /streamlare\.|streamhub\.|supervideo\.|dropload\.|vtbe\.|vtube\./i.test(u) ||
+                           /vidguard\.|listeamed\.|bembed\.|vgfplay\./i.test(u) ||
+                           /mediafire\.com/i.test(u) ||
+                           /krakenfiles\.com/i.test(u) ||
+                           /kwik\./i.test(u) ||
+                           /gogoplay\d*\.|gogohd\d*\.|goload\d*\.|vidstreaming\.|anitaku\.|playgo\d*\./i.test(u) ||
+                           /mixdrop\.|mdfx9dc8n\./i.test(u) ||
+                           /vidmoly\./i.test(u) ||
+                           /vidsrc\.|vidlink\.|megacloud\.|upcloud\./i.test(u);
+                },
+
+                resolve: async function(url, options) {
+                    options = options || {};
+                    var cleanUrl = (url || '').trim();
+                    if (!cleanUrl) return [];
+
+                    var origin = '';
+                    var originMatch = cleanUrl.match(/^(https?:\/\/[^\/]+)/i);
+                    if (originMatch) {
+                        origin = originMatch[1];
+                    } else {
+                        try {
+                            var uObj = new URL(cleanUrl);
+                            if (uObj.protocol && uObj.host) origin = uObj.protocol + '//' + uObj.host;
+                        } catch(e) {}
+                    }
+
+                    var cleanPath = cleanUrl.split(/[?#]/)[0].toLowerCase();
+
+                    function detectQuality(urlStr, fallback) {
+                        if (fallback && fallback !== 'Auto' && fallback !== 'Direct' && fallback !== 'Stream') return fallback;
+                        if (!urlStr || typeof urlStr !== 'string') return fallback || 'Auto';
+                        if (/master\.m3u8/i.test(urlStr)) return 'Auto';
+                        if (/(?:^|[^a-z0-9])(?:2160p?|4k)(?:[^a-z0-9]|$)/i.test(urlStr)) return '4K';
+                        if (/(?:^|[^0-9])1080(?:[^0-9]|$)/.test(urlStr)) return '1080p';
+                        if (/(?:^|[^0-9])720(?:[^0-9]|$)/.test(urlStr)) return '720p';
+                        if (/(?:^|[^0-9])480(?:[^0-9]|$)/.test(urlStr)) return '480p';
+                        if (/(?:^|[^0-9])360(?:[^0-9]|$)/.test(urlStr)) return '360p';
+                        return fallback || 'Auto';
+                    }
+
+                    function sanitizeStreams(streams) {
+                        if (!Array.isArray(streams)) return [];
+                        var seen = Object.create(null);
+                        var out = [];
+                        var junkExts = ['.js', '.css', '.png', '.jpg', '.jpeg', '.svg', '.gif', '.woff', '.woff2', '.ico', '.bmp', '.webp'];
+                        for (var i = 0; i < streams.length; i++) {
+                            var s = streams[i];
+                            if (!s || typeof s !== 'object') continue;
+                            var sUrl = (s.url || '').trim();
+                            if (!sUrl) continue;
+                            var isHttp = /^https?:\/\//i.test(sUrl);
+                            var isTorrentOrMagnet = sUrl.startsWith('magnet:') || sUrl.startsWith('torrent:');
+                            if (!isHttp && !isTorrentOrMagnet) continue;
+
+                            var cleanSUrl = sUrl.split(/[?#]/)[0].toLowerCase();
+                            var isJunk = false;
+                            for (var k = 0; k < junkExts.length; k++) {
+                                if (cleanSUrl.endsWith(junkExts[k])) {
+                                    isJunk = true;
+                                    break;
+                                }
+                            }
+                            if (isJunk) continue;
+                            if (seen[sUrl]) continue;
+                            seen[sUrl] = true;
+
+                            if (!s.headers || typeof s.headers !== 'object') {
+                                s.headers = {};
+                            }
+                            var subRefererDefault = s.headers['Referer'] || (origin ? (origin + '/') : '');
+
+                            var cleanSubs = [];
+                            if (Array.isArray(s.subtitles)) {
+                                var seenSub = Object.create(null);
+                                for (var j = 0; j < s.subtitles.length; j++) {
+                                    var sub = s.subtitles[j];
+                                    if (!sub || typeof sub !== 'object') continue;
+                                    var subUrl = (sub.url || '').trim();
+                                    if (!subUrl || !/^https?:\/\//i.test(subUrl)) continue;
+                                    if (seenSub[subUrl]) continue;
+                                    seenSub[subUrl] = true;
+                                    if (!sub.headers || typeof sub.headers !== 'object') {
+                                        sub.headers = {};
+                                    }
+                                    if (!sub.headers['Referer'] && subRefererDefault) {
+                                        sub.headers['Referer'] = subRefererDefault;
+                                    }
+                                    cleanSubs.push({
+                                        url: subUrl,
+                                        language: sub.language || 'Subtitles',
+                                        headers: sub.headers
+                                    });
+                                }
+                            }
+                            s.subtitles = cleanSubs;
+                            out.push(s);
+                        }
+                        return out;
+                    }
+
+                    try {
+                        var rawResult = await (async function() {
+                            // 1. Direct Pass-Through
+                    if (cleanPath.endsWith('.m3u8') || cleanPath.endsWith('.mpd') || cleanPath.endsWith('.mp4') ||
+                        cleanPath.endsWith('.mkv') || cleanPath.endsWith('.webm') || cleanPath.indexOf('/hls/') >= 0 ||
+                        cleanPath.indexOf('master.m3u8') >= 0 || cleanUrl.startsWith('magnet:') || cleanUrl.startsWith('torrent:')) {
+                        return [{
+                            name: options.name || 'Direct Stream',
+                            title: options.title || options.name || 'Direct',
+                            url: cleanUrl,
+                            quality: options.quality || 'Auto',
+                            headers: Object.assign({}, options.headers || {}),
+                            subtitles: []
+                        }];
+                    }
+
+                    // 2. PixelDrain (pixeldrain.com/u/{id} or /l/{id})
+                    if (/pixeldrain\.com\/[ul]\/([a-zA-Z0-9_-]+)/i.test(cleanUrl)) {
+                        var idMatch = cleanUrl.match(/pixeldrain\.com\/[ul]\/([a-zA-Z0-9_-]+)/i);
+                        var fileId = idMatch[1];
+                        var directUrl = 'https://pixeldrain.com/api/file/' + fileId;
+                        return [{
+                            name: options.name || 'PixelDrain',
+                            title: options.title || options.name || 'PixelDrain',
+                            url: directUrl,
+                            quality: options.quality || '1080p',
+                            headers: Object.assign({ 'Referer': 'https://pixeldrain.com/' }, options.headers || {}),
+                            subtitles: []
+                        }];
+                    }
+
+                    // 3. GoFile (gofile.io/d/{id})
+                    if (/gofile\.io\/d\/([a-zA-Z0-9_-]+)/i.test(cleanUrl)) {
+                        var gfMatch = cleanUrl.match(/gofile\.io\/d\/([a-zA-Z0-9_-]+)/i);
+                        var folderId = gfMatch[1];
+                        var token = globalThis.__GOFILE_TOKEN__;
+                        if (!token) {
+                            try {
+                                var acctResp = await fetch('https://api.gofile.io/accounts', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: '{}'
+                                });
+                                var acctJson = await acctResp.json();
+                                if (acctJson && acctJson.data && acctJson.data.token) {
+                                    token = acctJson.data.token;
+                                    globalThis.__GOFILE_TOKEN__ = token;
+                                }
+                            } catch(gfe) {
+                                console.error('[GoFile] token error:', gfe);
+                            }
+                        }
+                        var gfHeaders = {
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+                        };
+                        if (token) {
+                            gfHeaders['Authorization'] = 'Bearer ' + token;
+                            gfHeaders['Cookie'] = 'accountToken=' + token;
+                        }
+                        try {
+                            var metaResp = await fetch('https://api.gofile.io/contents/' + folderId + '?wt=4fd6sg89d7s6', {
+                                headers: gfHeaders
+                            });
+                            var metaJson = await metaResp.json();
+                            if (metaJson && metaJson.data && metaJson.data.children) {
+                                var outStreams = [];
+                                var children = metaJson.data.children;
+                                var keys = Object.keys(children);
+                                for (var ki = 0; ki < keys.length; ki++) {
+                                    var cItem = children[keys[ki]];
+                                    if (cItem && cItem.link) {
+                                        outStreams.push({
+                                            name: options.name || cItem.name || 'GoFile',
+                                            title: cItem.name || options.title || 'GoFile',
+                                            url: cItem.link,
+                                            quality: options.quality || 'Direct',
+                                            headers: Object.assign({}, gfHeaders, options.headers || {}),
+                                            subtitles: []
+                                        });
+                                    }
+                                }
+                                if (outStreams.length > 0) return outStreams;
+                            }
+                        } catch(metaErr) {
+                            console.error('[GoFile] content error:', metaErr);
+                        }
+                    }
+
+                    // 4. HubCloud & Clones (hubcloud.*, vcloud.*, fastcloud.*, gamerxyt.*, cryptoinsights.*)
+                    if (/hubcloud\.|vcloud\.|fastcloud\.|gamerxyt\.|cryptoinsights\./i.test(cleanUrl)) {
+                        try {
+                            var reqHdrs = Object.assign({
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                                'Referer': options.referer || cleanUrl
+                            }, options.headers || {});
+                            var hResp = await fetch(cleanUrl, { headers: reqHdrs });
+                            var hHtml = await hResp.text();
+
+                            var redirMatch = hHtml.match(/var\s+url\s*=\s*['"]([^'"]+)['"]/i) ||
+                                             hHtml.match(/window\.location(?:\.href)?\s*=\s*['"]([^'"]+)['"]/i) ||
+                                             hHtml.match(/<a[^>]+href=["']([^"']*(?:hubcloud\.php|gamerxyt|r2\.dev)[^"']*)["']/i);
+                            if (redirMatch && !redirMatch[1].startsWith('#')) {
+                                var redirUrl = redirMatch[1].trim();
+                                if (redirUrl.startsWith('/')) redirUrl = origin + redirUrl;
+                                if (/^https?:\/\//i.test(redirUrl) && redirUrl !== cleanUrl) {
+                                    return await EmbedExtractor.resolve(redirUrl, options);
+                                }
+                            }
+
+                            var chDoc = cheerio.load(hHtml);
+                            var hubStreams = [];
+                            chDoc('a[href]').each(function(i, el) {
+                                var href = chDoc(el).attr('href') || '';
+                                var text = chDoc(el).text() || '';
+                                if (href.startsWith('/')) href = origin + href;
+                                if (!/^https?:\/\//i.test(href)) return;
+
+                                var isServerBtn = /fsl|10gbps|pixeldrain|r2|cloudflare|direct|fastcdn|worker/i.test(text) ||
+                                                  /pixeldrain\.com\/u\/|r2\.dev|workers\.dev|\.(?:mkv|mp4)/i.test(href);
+                                if (isServerBtn) {
+                                    var label = text.trim() || 'Direct Server';
+                                    var qual = '1080p';
+                                    if (/2160|4k/i.test(label) || /2160|4k/i.test(href)) qual = '4K';
+                                    else if (/720/i.test(label) || /720/i.test(href)) qual = '720p';
+                                    else if (/480/i.test(label) || /480/i.test(href)) qual = '480p';
+
+                                    hubStreams.push({
+                                        name: options.name ? (options.name + ' [' + label + ']') : label,
+                                        title: label,
+                                        url: href,
+                                        quality: qual,
+                                        headers: { 'Referer': cleanUrl }
+                                    });
+                                }
+                            });
+
+                            if (hubStreams.length > 0) {
+                                var resolvedHub = [];
+                                for (var hi = 0; hi < hubStreams.length; hi++) {
+                                    var hStream = hubStreams[hi];
+                                    if (EmbedExtractor.canHandle(hStream.url) && !/\.(?:mkv|mp4)/i.test(hStream.url)) {
+                                        var subRes = await EmbedExtractor.resolve(hStream.url, { name: hStream.name, quality: hStream.quality });
+                                        resolvedHub = resolvedHub.concat(subRes);
+                                    } else {
+                                        resolvedHub.push(hStream);
+                                    }
+                                }
+                                if (resolvedHub.length > 0) return resolvedHub;
+                            }
+                        } catch(hErr) {
+                            console.error('[HubCloud] error:', hErr);
+                        }
+                    }
+
+                    // 5. GDFlix / Driveeed / FilePress (gdflix.*, driveeed.*, filepress.*)
+                    if (/gdflix\.|driveeed\.|filepress\./i.test(cleanUrl)) {
+                        try {
+                            var gdfHdrs = Object.assign({
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                                'Referer': options.referer || cleanUrl
+                            }, options.headers || {});
+                            var gdfResp = await fetch(cleanUrl, { headers: gdfHdrs });
+                            var gdfHtml = await gdfResp.text();
+                            var gdfDoc = cheerio.load(gdfHtml);
+                            var gdfStreams = [];
+
+                            gdfDoc('a[href]').each(function(i, el) {
+                                var href = gdfDoc(el).attr('href') || '';
+                                var text = gdfDoc(el).text() || '';
+                                if (href.startsWith('/')) href = origin + href;
+                                if (!/^https?:\/\//i.test(href)) return;
+
+                                if (/fastcdn|r2\.dev|workers\.dev|pixeldrain|\.(?:mkv|mp4)/i.test(href) || /instant|fast cloud|download|worker/i.test(text)) {
+                                    var label = text.trim() || 'Cloud Stream';
+                                    gdfStreams.push({
+                                        name: options.name ? (options.name + ' [' + label + ']') : label,
+                                        title: label,
+                                        url: href,
+                                        quality: options.quality || '1080p',
+                                        headers: { 'Referer': cleanUrl }
+                                    });
+                                }
+                            });
+
+                            if (gdfStreams.length > 0) {
+                                var resolvedGdf = [];
+                                for (var gi = 0; gi < gdfStreams.length; gi++) {
+                                    var gItem = gdfStreams[gi];
+                                    if (EmbedExtractor.canHandle(gItem.url) && !/\.(?:mkv|mp4)/i.test(gItem.url)) {
+                                        var subG = await EmbedExtractor.resolve(gItem.url, { name: gItem.name, quality: gItem.quality });
+                                        resolvedGdf = resolvedGdf.concat(subG);
+                                    } else {
+                                        resolvedGdf.push(gItem);
+                                    }
+                                }
+                                if (resolvedGdf.length > 0) return resolvedGdf;
+                            }
+                        } catch(gdfErr) {
+                            console.error('[GDFlix] error:', gdfErr);
+                        }
+                    }
+
+                    // 6. Filemoon / StreamWish / Luluvdo / VidHide / Wishembed
+                    if (/filemoon\.|streamwish\.|sfastwish\.|strwish\.|awish\.|dwish\.|hlswish\.|luluvdo\.|vidhide\.|filelions\.|vidhidepro\.|mycloud\.|lulustream\./i.test(cleanUrl)) {
+                        try {
+                            var fmHdrs = Object.assign({
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                                'Referer': options.referer || cleanUrl
+                            }, options.headers || {});
+                            var fmResp = await fetch(cleanUrl, { headers: fmHdrs });
+                            var fmHtml = await fmResp.text();
+
+                            var iframeMatch = fmHtml.match(/<iframe[^>]+src=["']([^"']*(?:filemoon|streamwish|vidhide|filelions|lulustream|mycloud)[^"']*)["']/i);
+                            if (iframeMatch) {
+                                var ifrUrl = iframeMatch[1];
+                                if (ifrUrl.startsWith('//')) ifrUrl = 'https:' + ifrUrl;
+                                else if (ifrUrl.startsWith('/')) ifrUrl = origin + ifrUrl;
+                                var ifrResp = await fetch(ifrUrl, { headers: Object.assign({}, fmHdrs, { 'Referer': cleanUrl }) });
+                                fmHtml = await ifrResp.text();
+                            }
+
+                            var unpacked = Unpacker.unpack(fmHtml);
+                            var combined = fmHtml + '\n' + unpacked;
+                            var extracted = Unpacker.extractMediaUrls(combined, cleanUrl);
+
+                            if (extracted.sources && extracted.sources.length > 0) {
+                                return extracted.sources.map(function(s) {
+                                    return {
+                                        name: options.name || 'Stream',
+                                        title: options.title || options.name || 'Stream',
+                                        url: s.url,
+                                        quality: options.quality || (/1080/i.test(s.url) ? '1080p' : (/720/i.test(s.url) ? '720p' : 'Auto')),
+                                        headers: {
+                                            'Referer': origin + '/',
+                                            'Origin': origin,
+                                            'User-Agent': fmHdrs['User-Agent']
+                                        },
+                                        subtitles: (extracted.subtitles || []).map(function(sub) {
+                                            return { url: sub.url, language: sub.language || 'Subtitles', headers: { 'Referer': origin + '/' } };
+                                        })
+                                    };
+                                });
+                            }
+                        } catch(fmErr) {
+                            console.error('[Filemoon/Wish] HTTP extraction error:', fmErr);
+                        }
+                        return await Browser.sniffMedia(cleanUrl, options);
+                    }
+
+                    // 7. Voe (voe.sx and redirect domains)
+                    if (/voe\.sx|voe-network\.|repack\./i.test(cleanUrl)) {
+                        try {
+                            var voeHdrs = Object.assign({
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                                'Referer': options.referer || cleanUrl
+                            }, options.headers || {});
+                            var voeResp = await fetch(cleanUrl, { headers: voeHdrs });
+                            var voeHtml = await voeResp.text();
+
+                            var vRedir = voeHtml.match(/window\.location\.href\s*=\s*['"]([^'"]+)['"]/i);
+                            if (vRedir) {
+                                var target = vRedir[1];
+                                if (target.startsWith('/')) target = origin + target;
+                                voeResp = await fetch(target, { headers: voeHdrs });
+                                voeHtml = await voeResp.text();
+                            }
+
+                            var hlsMatch = voeHtml.match(/['"]hls['"]\s*:\s*['"]([^'"]+)['"]/i) ||
+                                           voeHtml.match(/var\s+sources\s*=\s*\{['"]hls['"]\s*:\s*['"]([^'"]+)['"]/i) ||
+                                           voeHtml.match(/(https?:\/\/[^"'\s<>]+\.m3u8[^"'\s<>]*)/i);
+
+                            var streamUrl = null;
+                            if (hlsMatch) {
+                                var rawHls = hlsMatch[1];
+                                if (/^https?:\/\//i.test(rawHls)) {
+                                    streamUrl = rawHls;
+                                } else {
+                                    try {
+                                        var decoded = atob(rawHls);
+                                        if (/^https?:\/\//i.test(decoded)) streamUrl = decoded;
+                                    } catch(e) {}
+                                }
+                            }
+
+                            if (streamUrl) {
+                                return [{
+                                    name: options.name || 'Voe',
+                                    title: options.title || options.name || 'Voe',
+                                    url: streamUrl,
+                                    quality: options.quality || 'Auto',
+                                    headers: {
+                                        'Referer': origin ? (origin + '/') : 'https://voe.sx/',
+                                        'Origin': origin || 'https://voe.sx'
+                                    },
+                                    subtitles: []
+                                }];
+                            }
+                        } catch(voeErr) {
+                            console.error('[Voe] HTTP error:', voeErr);
+                        }
+                        return await Browser.sniffMedia(cleanUrl, options);
+                    }
+
+                    // 8. DoodStream / D000d / Dooood (dood.*, d000d.*, dooood.*, ds2play.*)
+                    if (/dood(?:stream)?\.|d000d\.|dooood\.|ds2play\.|dood\.(?:watch|pm|to|so|cx|la|ws|sh|re|yt|stream)/i.test(cleanUrl)) {
+                        try {
+                            var doodUrl = cleanUrl.replace(/\/d\/|\/f\//i, '/e/');
+                            var doodHdrs = Object.assign({
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                                'Referer': options.referer || doodUrl
+                            }, options.headers || {});
+                            var dResp = await fetch(doodUrl, { headers: doodHdrs });
+                            var dHtml = await dResp.text();
+
+                            var passMatch = dHtml.match(/\/pass_md5\/[a-zA-Z0-9_\/-]+/i);
+                            var tokenMatch = dHtml.match(/token=([a-zA-Z0-9_-]+)/i);
+                            if (passMatch) {
+                                var passUrl = origin + passMatch[0];
+                                var passResp = await fetch(passUrl, { headers: Object.assign({}, doodHdrs, { 'Referer': doodUrl }) });
+                                var passBody = await passResp.text();
+                                if (passBody && passBody.trim().startsWith('http')) {
+                                    var randToken = '';
+                                    var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+                                    for (var r = 0; r < 10; r++) randToken += chars.charAt(Math.floor(Math.random() * chars.length));
+                                    var finalDoodUrl = passBody.trim() + randToken + (tokenMatch ? ('?token=' + tokenMatch[1] + '&expiry=' + Date.now()) : '');
+                                    return [{
+                                        name: options.name || 'DoodStream',
+                                        title: options.title || options.name || 'DoodStream',
+                                        url: finalDoodUrl,
+                                        quality: options.quality || '1080p',
+                                        headers: { 'Referer': origin + '/' },
+                                        subtitles: []
+                                    }];
+                                }
+                            }
+                        } catch(dErr) {
+                            console.error('[DoodStream] HTTP error:', dErr);
+                        }
+                        return await Browser.sniffMedia(cleanUrl, options);
+                    }
+
+                    // 9. Streamtape (streamtape.com, streamtape.to, strtape.*)
+                    if (/streamtape\.|strtape\./i.test(cleanUrl)) {
+                        try {
+                            var stHdrs = Object.assign({
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                                'Referer': options.referer || cleanUrl
+                            }, options.headers || {});
+                            var stResp = await fetch(cleanUrl, { headers: stHdrs });
+                            var stHtml = await stResp.text();
+
+                            var robotMatch = stHtml.match(/document\.getElementById\(['"](?:no)?robotlink['"]\)\.innerHTML\s*=\s*['"]([^'"]+)['"]\s*\+\s*['"]([^'"]+)['"]/i) ||
+                                             stHtml.match(/id=['"](?:no)?robotlink['"][^>]*>([^<]+)<\/div>/i) ||
+                                             stHtml.match(/['"](\/\/streamtape\.com\/get_video\?[^'"]+)['"]/i);
+
+                            var stStreamUrl = null;
+                            if (robotMatch) {
+                                if (robotMatch[2]) {
+                                    stStreamUrl = 'https:' + robotMatch[1] + robotMatch[2];
+                                } else if (robotMatch[1].startsWith('//')) {
+                                    stStreamUrl = 'https:' + robotMatch[1];
+                                } else if (robotMatch[1].startsWith('http')) {
+                                    stStreamUrl = robotMatch[1];
+                                }
+                            }
+
+                            if (stStreamUrl) {
+                                return [{
+                                    name: options.name || 'Streamtape',
+                                    title: options.title || options.name || 'Streamtape',
+                                    url: stStreamUrl,
+                                    quality: options.quality || '1080p',
+                                    headers: { 'Referer': 'https://streamtape.com/' },
+                                    subtitles: []
+                                }];
+                            }
+                        } catch(stErr) {
+                            console.error('[Streamtape] HTTP error:', stErr);
+                        }
+                        return await Browser.sniffMedia(cleanUrl, options);
+                    }
+
+                    // 9.1. Mp4Upload (mp4upload.com)
+                    if (/mp4upload\./i.test(cleanUrl)) {
+                        try {
+                            var mp4EmbedUrl = cleanUrl;
+                            var idMatch = cleanUrl.match(/mp4upload\.com\/(?:embed-)?([a-zA-Z0-9]+)(?:\.html)?/i);
+                            if (idMatch && idMatch[1] && cleanUrl.indexOf('embed-') < 0) {
+                                mp4EmbedUrl = 'https://www.mp4upload.com/embed-' + idMatch[1] + '.html';
+                            }
+                            var mp4Hdrs = Object.assign({
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                                'Referer': 'https://www.mp4upload.com/'
+                            }, options.headers || {});
+                            var mp4Resp = await fetch(mp4EmbedUrl, { headers: mp4Hdrs });
+                            var mp4Html = await mp4Resp.text();
+                            var mp4Unpacked = Unpacker.unpack(mp4Html);
+                            var mp4Combined = mp4Html + '\n' + mp4Unpacked;
+
+                            var srcMatch = mp4Combined.match(/player\.src\s*\(\s*["']([^"']+)["']/i) ||
+                                           mp4Combined.match(/player\.src\s*\(\s*\{\s*src\s*:\s*["']([^"']+)["']/i) ||
+                                           mp4Combined.match(/src\s*:\s*["'](https?:\/\/[^"']+\.mp4[^"']*)["']/i);
+                            var directMp4 = srcMatch ? srcMatch[1] : null;
+                            if (!directMp4) {
+                                var extractedMp4 = Unpacker.extractMediaUrls(mp4Combined, 'https://www.mp4upload.com/');
+                                if (extractedMp4.sources && extractedMp4.sources.length > 0) {
+                                    directMp4 = extractedMp4.sources[0].url;
+                                }
+                            }
+                            if (directMp4) {
+                                return [{
+                                    name: options.name || 'Mp4Upload',
+                                    title: options.title || options.name || 'Mp4Upload',
+                                    url: directMp4,
+                                    quality: detectQuality(directMp4, options.quality || '1080p'),
+                                    headers: {
+                                        'Referer': 'https://www.mp4upload.com/',
+                                        'Origin': 'https://www.mp4upload.com',
+                                        'User-Agent': mp4Hdrs['User-Agent']
+                                    },
+                                    subtitles: []
+                                }];
+                            }
+                        } catch(mp4Err) {
+                            console.error('[Mp4Upload] HTTP error:', mp4Err);
+                        }
+                        return await Browser.sniffMedia(cleanUrl, options);
+                    }
+
+                    // 9.2. Vidoza (vidoza.net, vidoza.org)
+                    if (/vidoza\.(?:net|org)/i.test(cleanUrl)) {
+                        try {
+                            var vHdrs = Object.assign({
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                                'Referer': origin ? (origin + '/') : cleanUrl
+                            }, options.headers || {});
+                            var vResp = await fetch(cleanUrl, { headers: vHdrs });
+                            var vHtml = await vResp.text();
+                            var vUnpacked = Unpacker.unpack(vHtml);
+                            var vCombined = vHtml + '\n' + vUnpacked;
+
+                            var vStreams = [];
+                            var scMatch = vCombined.match(/sourcesCode\s*=\s*\[([^\]]+)\]/i);
+                            if (scMatch) {
+                                var itemRegex = /\{([^}]+)\}/g;
+                                var im;
+                                while ((im = itemRegex.exec(scMatch[1])) !== null) {
+                                    var objStr = im[1];
+                                    var sMatch = objStr.match(/src\s*:\s*["']([^"']+)["']/i);
+                                    var rMatch = objStr.match(/(?:res|label)\s*:\s*["']?(\d+p?)["']?/i);
+                                    if (sMatch) {
+                                        var sUrl = sMatch[1];
+                                        if (sUrl.startsWith('//')) sUrl = 'https:' + sUrl;
+                                        vStreams.push({
+                                            url: sUrl,
+                                            quality: rMatch ? (rMatch[1].endsWith('p') ? rMatch[1] : (rMatch[1] + 'p')) : 'Auto'
+                                        });
+                                    }
+                                }
+                            }
+
+                            if (vStreams.length === 0) {
+                                var srcTagRegex = /<source[^>]+src=["']([^"']+)["'][^>]*type=["']video\/mp4["']/gi;
+                                var stMatch;
+                                while ((stMatch = srcTagRegex.exec(vCombined)) !== null) {
+                                    var tagUrl = stMatch[1];
+                                    if (tagUrl.startsWith('//')) tagUrl = 'https:' + tagUrl;
+                                    vStreams.push({ url: tagUrl, quality: detectQuality(tagUrl, 'Auto') });
+                                }
+                            }
+
+                            if (vStreams.length === 0) {
+                                var vExt = Unpacker.extractMediaUrls(vCombined, origin ? (origin + '/') : cleanUrl);
+                                if (vExt.sources && vExt.sources.length > 0) {
+                                    for (var vi = 0; vi < vExt.sources.length; vi++) {
+                                        vStreams.push({ url: vExt.sources[vi].url, quality: detectQuality(vExt.sources[vi].url, vExt.sources[vi].label || 'Auto') });
+                                    }
+                                }
+                            }
+
+                            var vSubs = [];
+                            var trackRegex = /<track[^>]+src=["']([^"']+)["'][^>]*label=["']([^"']+)["']/gi;
+                            var trkMatch;
+                            while ((trkMatch = trackRegex.exec(vCombined)) !== null) {
+                                var trkUrl = trkMatch[1];
+                                if (trkUrl.startsWith('//')) trkUrl = 'https:' + trkUrl;
+                                else if (trkUrl.startsWith('/') && origin) trkUrl = origin + trkUrl;
+                                vSubs.push({
+                                    url: trkUrl,
+                                    language: trkMatch[2] || 'Subtitles',
+                                    headers: { 'Referer': origin ? (origin + '/') : 'https://vidoza.net/' }
+                                });
+                            }
+
+                            if (vStreams.length > 0) {
+                                return vStreams.map(function(vs) {
+                                    return {
+                                        name: options.name || 'Vidoza',
+                                        title: options.title || options.name || 'Vidoza',
+                                        url: vs.url,
+                                        quality: options.quality || vs.quality || 'Auto',
+                                        headers: {
+                                            'Referer': origin ? (origin + '/') : 'https://vidoza.net/',
+                                            'Origin': origin || 'https://vidoza.net',
+                                            'User-Agent': vHdrs['User-Agent']
+                                        },
+                                        subtitles: vSubs
+                                    };
+                                });
+                            }
+                        } catch(vErr) {
+                            console.error('[Vidoza] HTTP error:', vErr);
+                        }
+                        return await Browser.sniffMedia(cleanUrl, options);
+                    }
+
+                    // 9.3. StreamSB Family (streamsb, sbembed, sbplay, sbfull, watchsb, lvturbo)
+                    if (/streamsb\.|sbembed\.|sbplay\.|sbfull\.|watchsb\.|lvturbo\./i.test(cleanUrl)) {
+                        try {
+                            var sbHdrs = Object.assign({
+                                'Referer': origin ? (origin + '/') : cleanUrl
+                            }, options.headers || {});
+                            var sbOpts = Object.assign({}, options, { headers: sbHdrs });
+                            return await Browser.sniffMedia(cleanUrl, sbOpts);
+                        } catch(sbErr) {
+                            console.error('[StreamSB] sniff error:', sbErr);
+                            return [];
+                        }
+                    }
+
+                    // 9.4. Upstream / Uqload (uqload, upstream.to)
+                    if (/uqload\.|upstream\./i.test(cleanUrl)) {
+                        try {
+                            var upHdrs = Object.assign({
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                                'Referer': origin ? (origin + '/') : cleanUrl
+                            }, options.headers || {});
+                            var upResp = await fetch(cleanUrl, { headers: upHdrs });
+                            var upHtml = await upResp.text();
+                            var upUnpacked = Unpacker.unpack(upHtml);
+                            var upCombined = upHtml + '\n' + upUnpacked;
+
+                            var upSources = [];
+                            var srcArrMatch = upCombined.match(/sources\s*:\s*\[\s*["']([^"']+)["']\s*\]/i);
+                            if (srcArrMatch) {
+                                upSources.push(srcArrMatch[1]);
+                            }
+                            if (upSources.length === 0) {
+                                var upExt = Unpacker.extractMediaUrls(upCombined, origin ? (origin + '/') : cleanUrl);
+                                if (upExt.sources && upExt.sources.length > 0) {
+                                    for (var upi = 0; upi < upExt.sources.length; upi++) {
+                                        upSources.push(upExt.sources[upi].url);
+                                    }
+                                }
+                            }
+
+                            if (upSources.length > 0) {
+                                return upSources.map(function(uUrl) {
+                                    return {
+                                        name: options.name || 'Upstream',
+                                        title: options.title || options.name || 'Upstream',
+                                        url: uUrl,
+                                        quality: detectQuality(uUrl, options.quality || 'Auto'),
+                                        headers: {
+                                            'Referer': origin ? (origin + '/') : cleanUrl,
+                                            'Origin': origin,
+                                            'User-Agent': upHdrs['User-Agent']
+                                        },
+                                        subtitles: []
+                                    };
+                                });
+                            }
+                        } catch(upErr) {
+                            console.error('[Upstream/Uqload] HTTP error:', upErr);
+                        }
+                        return await Browser.sniffMedia(cleanUrl, options);
+                    }
+
+                    // 9.5. Streamhub / Streamlare / Supervideo / DropLoad / Vtube
+                    if (/streamlare\.|streamhub\.|supervideo\.|dropload\.|vtbe\.|vtube\./i.test(cleanUrl)) {
+                        try {
+                            var shHdrs = Object.assign({
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                                'Referer': options.referer || cleanUrl
+                            }, options.headers || {});
+                            var shResp = await fetch(cleanUrl, { headers: shHdrs });
+                            var shHtml = await shResp.text();
+                            var shUnpacked = Unpacker.unpack(shHtml);
+                            var shCombined = shHtml + '\n' + shUnpacked;
+                            var shExt = Unpacker.extractMediaUrls(shCombined, cleanUrl);
+
+                            if (shExt.sources && shExt.sources.length > 0) {
+                                return shExt.sources.map(function(s) {
+                                    return {
+                                        name: options.name || 'Stream',
+                                        title: options.title || options.name || 'Stream',
+                                        url: s.url,
+                                        quality: detectQuality(s.url, options.quality || s.label || 'Auto'),
+                                        headers: {
+                                            'Referer': origin ? (origin + '/') : cleanUrl,
+                                            'Origin': origin,
+                                            'User-Agent': shHdrs['User-Agent']
+                                        },
+                                        subtitles: (shExt.subtitles || []).map(function(sub) {
+                                            return { url: sub.url, language: sub.language || 'Subtitles', headers: { 'Referer': origin ? (origin + '/') : cleanUrl } };
+                                        })
+                                    };
+                                });
+                            }
+                        } catch(shErr) {
+                            console.error('[Streamhub/Streamlare] HTTP error:', shErr);
+                        }
+                        return await Browser.sniffMedia(cleanUrl, options);
+                    }
+
+                    // 9.6. Vidguard / Listeamed / Bembed (vidguard, listeamed, bembed, vgfplay)
+                    if (/vidguard\.|listeamed\.|bembed\.|vgfplay\./i.test(cleanUrl)) {
+                        try {
+                            var vgHdrs = Object.assign({
+                                'Referer': origin ? (origin + '/') : cleanUrl
+                            }, options.headers || {});
+                            var vgOpts = Object.assign({}, options, { headers: vgHdrs });
+                            return await Browser.sniffMedia(cleanUrl, vgOpts);
+                        } catch(vgErr) {
+                            console.error('[Vidguard] sniff error:', vgErr);
+                            return [];
+                        }
+                    }
+
+                    // 9.7. MediaFire (mediafire.com)
+                    if (/mediafire\.com/i.test(cleanUrl)) {
+                        try {
+                            var mfHdrs = Object.assign({
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                                'Referer': cleanUrl
+                            }, options.headers || {});
+                            var mfResp = await fetch(cleanUrl, { headers: mfHdrs });
+                            var mfHtml = await mfResp.text();
+
+                            var mfDlUrl = null;
+                            var scrambledMatch = mfHtml.match(/data-scrambled-url=["']([^"']+)["']/i);
+                            if (scrambledMatch) {
+                                try {
+                                    var dec = atob(scrambledMatch[1]);
+                                    if (/^https?:\/\//i.test(dec)) mfDlUrl = dec;
+                                } catch(e) {}
+                            }
+                            if (!mfDlUrl) {
+                                var btnMatch = mfHtml.match(/<a[^>]+id=["']downloadButton["'][^>]+href=["']([^"']+)["']/i) ||
+                                               mfHtml.match(/<a[^>]+href=["']([^"']+)["'][^>]+id=["']downloadButton["']/i) ||
+                                               mfHtml.match(/aria-label=["']Download file["'][^>]+href=["']([^"']+)["']/i) ||
+                                               mfHtml.match(/href=["'](https?:\/\/(?:download\d*|download\.[a-z0-9-]+)\.mediafire\.com\/[^"']+)["']/i);
+                                if (btnMatch) mfDlUrl = btnMatch[1];
+                            }
+                            if (!mfDlUrl) {
+                                var mfDoc = cheerio.load(mfHtml);
+                                var aBtn = mfDoc('#downloadButton, a[aria-label="Download file"], a.popsok');
+                                if (aBtn.length > 0) {
+                                    var h = aBtn.attr('href');
+                                    if (h && /^https?:\/\//i.test(h)) mfDlUrl = h;
+                                }
+                            }
+                            if (mfDlUrl) {
+                                return [{
+                                    name: options.name || 'MediaFire',
+                                    title: options.title || options.name || 'MediaFire',
+                                    url: mfDlUrl,
+                                    quality: detectQuality(mfDlUrl, options.quality || 'Direct'),
+                                    headers: {
+                                        'Referer': 'https://www.mediafire.com/',
+                                        'User-Agent': mfHdrs['User-Agent']
+                                    },
+                                    subtitles: []
+                                }];
+                            }
+                        } catch(mfErr) {
+                            console.error('[MediaFire] HTTP error:', mfErr);
+                        }
+                        return await Browser.sniffMedia(cleanUrl, options);
+                    }
+
+                    // 9.8. KrakenFiles (krakenfiles.com)
+                    if (/krakenfiles\.com/i.test(cleanUrl)) {
+                        try {
+                            var kfHdrs = Object.assign({
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                                'Referer': cleanUrl
+                            }, options.headers || {});
+                            var kfResp = await fetch(cleanUrl, { headers: kfHdrs });
+                            var kfHtml = await kfResp.text();
+
+                            var kfStreamUrl = null;
+                            var kfVidMatch = kfHtml.match(/<video[^>]+src=["']([^"']+)["']/i) ||
+                                             kfHtml.match(/<source[^>]+src=["']([^"']+)["']/i) ||
+                                             kfHtml.match(/data-file-url=["']([^"']+)["']/i) ||
+                                             kfHtml.match(/var\s+videoSrc\s*=\s*["']([^"']+)["']/i);
+                            if (kfVidMatch) {
+                                kfStreamUrl = kfVidMatch[1];
+                                if (kfStreamUrl.startsWith('//')) kfStreamUrl = 'https:' + kfStreamUrl;
+                                else if (kfStreamUrl.startsWith('/') && origin) kfStreamUrl = origin + kfStreamUrl;
+                            }
+                            if (!kfStreamUrl) {
+                                var kfDoc = cheerio.load(kfHtml);
+                                var fAction = kfDoc('form.download-form, form#download-form, form[action*="download"]').attr('action');
+                                if (fAction) {
+                                    if (fAction.startsWith('/')) fAction = origin + fAction;
+                                    if (/^https?:\/\//i.test(fAction)) kfStreamUrl = fAction;
+                                }
+                            }
+                            if (!kfStreamUrl) {
+                                var kfExt = Unpacker.extractMediaUrls(kfHtml, cleanUrl);
+                                if (kfExt.sources && kfExt.sources.length > 0) {
+                                    kfStreamUrl = kfExt.sources[0].url;
+                                }
+                            }
+                            if (kfStreamUrl) {
+                                return [{
+                                    name: options.name || 'KrakenFiles',
+                                    title: options.title || options.name || 'KrakenFiles',
+                                    url: kfStreamUrl,
+                                    quality: detectQuality(kfStreamUrl, options.quality || 'Direct'),
+                                    headers: {
+                                        'Referer': 'https://krakenfiles.com/',
+                                        'User-Agent': kfHdrs['User-Agent']
+                                    },
+                                    subtitles: []
+                                }];
+                            }
+                        } catch(kfErr) {
+                            console.error('[KrakenFiles] HTTP error:', kfErr);
+                        }
+                        return await Browser.sniffMedia(cleanUrl, options);
+                    }
+
+                    // 9.9. Kwik (AnimePahe)
+                    if (/kwik\./i.test(cleanUrl)) {
+                        try {
+                            var kwHdrs = Object.assign({
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                                'Referer': options.referer || cleanUrl
+                            }, options.headers || {});
+                            var kwResp = await fetch(cleanUrl, { headers: kwHdrs });
+                            var kwHtml = await kwResp.text();
+                            var kwUnpacked = Unpacker.unpack(kwHtml);
+                            var kwCombined = kwHtml + '\n' + kwUnpacked;
+
+                            var kwUrl = null;
+                            var kwMatch = kwCombined.match(/(https?:\/\/[^"'\s<>]+\.m3u8[^"'\s<>]*)/i) ||
+                                          kwCombined.match(/source\s*=\s*['"]([^'"]+)['"]/i);
+                            if (kwMatch) kwUrl = kwMatch[1];
+                            if (!kwUrl) {
+                                var kwExt = Unpacker.extractMediaUrls(kwCombined, cleanUrl);
+                                if (kwExt.sources && kwExt.sources.length > 0) kwUrl = kwExt.sources[0].url;
+                            }
+
+                            if (kwUrl) {
+                                return [{
+                                    name: options.name || 'Kwik',
+                                    title: options.title || options.name || 'Kwik',
+                                    url: kwUrl,
+                                    quality: detectQuality(kwUrl, options.quality || 'Auto'),
+                                    headers: {
+                                        'Referer': cleanUrl,
+                                        'Origin': origin || 'https://kwik.cx',
+                                        'User-Agent': kwHdrs['User-Agent']
+                                    },
+                                    subtitles: []
+                                }];
+                            }
+                        } catch(kwErr) {
+                            console.error('[Kwik] HTTP error:', kwErr);
+                        }
+                        return await Browser.sniffMedia(cleanUrl, options);
+                    }
+
+                    // 9.10. Gogoanime / Vidstreaming / Anitaku Embeds
+                    if (/gogoplay\d*\.|gogohd\d*\.|goload\d*\.|vidstreaming\.|anitaku\.|playgo\d*\./i.test(cleanUrl)) {
+                        try {
+                            var gogoHdrs = Object.assign({
+                                'Referer': origin ? (origin + '/') : cleanUrl
+                            }, options.headers || {});
+                            var gogoOpts = Object.assign({}, options, { headers: gogoHdrs });
+                            return await Browser.sniffMedia(cleanUrl, gogoOpts);
+                        } catch(gErr) {
+                            console.error('[Gogoanime/Vidstreaming] sniff error:', gErr);
+                            return [];
+                        }
+                    }
+
+                    // 10. MixDrop, Vidmoly, SuperStream, UpCloud, MegaCloud, VidSrc, VidLink (Fast HTTP + Unpack -> Sniff Fallback)
+                    try {
+                        var genHdrs = Object.assign({
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                            'Referer': options.referer || cleanUrl
+                        }, options.headers || {});
+                        var genResp = await fetch(cleanUrl, { headers: genHdrs });
+                        var genHtml = await genResp.text();
+                        var genUnpacked = Unpacker.unpack(genHtml);
+                        var genExtracted = Unpacker.extractMediaUrls(genHtml + '\n' + genUnpacked, cleanUrl);
+
+                        if (genExtracted.sources && genExtracted.sources.length > 0) {
+                            return genExtracted.sources.map(function(s) {
+                                return {
+                                    name: options.name || 'Stream',
+                                    title: options.title || options.name || 'Stream',
+                                    url: s.url,
+                                    quality: options.quality || detectQuality(s.url, s.label || 'Auto'),
+                                    headers: {
+                                        'Referer': origin ? (origin + '/') : cleanUrl,
+                                        'Origin': origin,
+                                        'User-Agent': genHdrs['User-Agent']
+                                    },
+                                    subtitles: (genExtracted.subtitles || []).map(function(sub) {
+                                        return { url: sub.url, language: sub.language || 'Subtitles', headers: { 'Referer': origin ? (origin + '/') : cleanUrl } };
+                                    })
+                                };
+                            });
+                        }
+                    } catch(genErr) {
+                        console.error('[EmbedExtractor.generic] HTTP error:', genErr);
+                    }
+
+                    return await Browser.sniffMedia(cleanUrl, options);
+                })();
+                return sanitizeStreams(rawResult);
+            } catch(topErr) {
+                console.error('[EmbedExtractor.resolve] top-level error:', topErr);
+                return [];
+            }
+        },
+
+                resolveAll: async function(urlsOrItems, options) {
+                    if (!Array.isArray(urlsOrItems) || urlsOrItems.length === 0) return [];
+                    var concurrency = 4;
+                    var results = [];
+                    for (var i = 0; i < urlsOrItems.length; i += concurrency) {
+                        var chunk = urlsOrItems.slice(i, i + concurrency);
+                        var chunkPromises = chunk.map(function(item) {
+                            var targetUrl = (typeof item === 'string') ? item : (item && (item.url || item.externalUrl));
+                            var itemOpts = (typeof item === 'object' && item !== null) ? Object.assign({}, options, item) : (options || {});
+                            return EmbedExtractor.resolve(targetUrl, itemOpts).catch(function(e) {
+                                console.error('[EmbedExtractor.resolveAll] item error:', e);
+                                return [];
+                            });
+                        });
+                        var chunkResults = await Promise.all(chunkPromises);
+                        for (var c = 0; c < chunkResults.length; c++) {
+                            results = results.concat(chunkResults[c]);
+                        }
+                    }
+                    return results;
+                }
+            };
+
+            globalThis.EmbedExtractor = EmbedExtractor;
         }
     """.trimIndent()
 }

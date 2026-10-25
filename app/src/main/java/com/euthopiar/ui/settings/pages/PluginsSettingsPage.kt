@@ -47,7 +47,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.lerp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import android.content.Intent
+import android.net.Uri
 import com.euthopiar.core.addons.ManagedAddon
+import com.euthopiar.core.addons.addonTransportBaseUrl
 import com.euthopiar.core.model.PluginManifest
 import com.euthopiar.ui.settings.PluginManagerViewModel
 import com.euthopiar.ui.settings.plugins.*
@@ -102,6 +105,7 @@ fun PluginsSettingsPage(
     var scraperSearchQuery by rememberSaveable { mutableStateOf("") }
 
     var statusDialogState by remember { mutableStateOf<StatusDialogState?>(null) }
+    var alreadyInstalledAlert by remember { mutableStateOf<Pair<String, String>?>(null) }
     var repoToDelete by remember { mutableStateOf<String?>(null) }
     var pluginToDelete by remember { mutableStateOf<PluginManifest?>(null) }
     var addonToDelete by remember { mutableStateOf<ManagedAddon?>(null) }
@@ -156,15 +160,16 @@ fun PluginsSettingsPage(
 
     // Live filtering for scrapers tab (matching name, description, types, and language)
     val filteredScrapers = remember(installedPlugins, scraperSearchQuery) {
+        val base = installedPlugins.distinctBy { it.id }
         if (scraperSearchQuery.isBlank()) {
-            installedPlugins
+            base
         } else {
             val q = scraperSearchQuery.trim().lowercase()
-            installedPlugins.filter { p ->
+            base.filter { p ->
                 p.name.lowercase().contains(q) ||
                 p.description.lowercase().contains(q) ||
                 p.supportedTypes.any { it.lowercase().contains(q) } ||
-                "english".contains(q)
+                p.id.lowercase().contains(q)
             }
         }
     }
@@ -459,27 +464,31 @@ fun PluginsSettingsPage(
                                         onClick = {
                                             val url = repoUrlInput.trim()
                                             if (url.isNotBlank()) {
-                                                try { haptic.performHapticFeedback(HapticFeedbackType.LongPress) } catch (_: Exception) {}
-                                                statusDialogState = StatusDialogState.Installing
-                                                viewModel.addRepository(url) { success, msg ->
-                                                    statusDialogState = if (success) {
-                                                        repoUrlInput = ""
-                                                        StatusDialogState.Success(msg ?: url)
-                                                    } else {
-                                                        StatusDialogState.Error(
-                                                            message = msg ?: "Failed to add repository",
-                                                            onRetry = {
-                                                                statusDialogState = StatusDialogState.Installing
-                                                                viewModel.addRepository(url) { s, m ->
-                                                                    statusDialogState = if (s) {
-                                                                        repoUrlInput = ""
-                                                                        StatusDialogState.Success(m ?: url)
-                                                                    } else {
-                                                                        StatusDialogState.Error(m ?: "Failed to add repository")
+                                                if (repositoryUrls.contains(url)) {
+                                                    alreadyInstalledAlert = "Repository Already Installed" to "The repository \"$url\" is already installed on your device."
+                                                } else {
+                                                    try { haptic.performHapticFeedback(HapticFeedbackType.LongPress) } catch (_: Exception) {}
+                                                    statusDialogState = StatusDialogState.Installing
+                                                    viewModel.addRepository(url) { success, msg ->
+                                                        statusDialogState = if (success) {
+                                                            repoUrlInput = ""
+                                                            StatusDialogState.Success(msg ?: url)
+                                                        } else {
+                                                            StatusDialogState.Error(
+                                                                message = msg ?: "Failed to add repository",
+                                                                onRetry = {
+                                                                    statusDialogState = StatusDialogState.Installing
+                                                                    viewModel.addRepository(url) { s, m ->
+                                                                        statusDialogState = if (s) {
+                                                                            repoUrlInput = ""
+                                                                            StatusDialogState.Success(m ?: url)
+                                                                        } else {
+                                                                            StatusDialogState.Error(m ?: "Failed to add repository")
+                                                                        }
                                                                     }
                                                                 }
-                                                            }
-                                                        )
+                                                            )
+                                                        }
                                                     }
                                                 }
                                             }
@@ -651,7 +660,7 @@ fun PluginsSettingsPage(
                                 }
                             } else {
                                 val repoList = repositoryUrls.toList()
-                                items(repoList, key = { it }) { url ->
+                                items(repoList.distinct(), key = { it }) { url ->
                                     val repoInfo = providerRepos.find { it.url == url }
                                     val repoName = repoInfo?.name ?: url.substringAfterLast("/").substringBefore(".json").ifBlank { url }
                                     val host = remember(url) {
@@ -817,27 +826,31 @@ fun PluginsSettingsPage(
                                         onClick = {
                                             val url = addonUrlInput.trim()
                                             if (url.isNotBlank()) {
-                                                try { haptic.performHapticFeedback(HapticFeedbackType.LongPress) } catch (_: Exception) {}
-                                                statusDialogState = StatusDialogState.Installing
-                                                viewModel.installAddon(url) { success, msg ->
-                                                    statusDialogState = if (success) {
-                                                        addonUrlInput = ""
-                                                        StatusDialogState.Success(msg ?: url)
-                                                    } else {
-                                                        StatusDialogState.Error(
-                                                            message = msg ?: "Failed to install addon",
-                                                            onRetry = {
-                                                                statusDialogState = StatusDialogState.Installing
-                                                                viewModel.installAddon(url) { s, m ->
-                                                                    statusDialogState = if (s) {
-                                                                        addonUrlInput = ""
-                                                                        StatusDialogState.Success(m ?: url)
-                                                                    } else {
-                                                                        StatusDialogState.Error(m ?: "Failed to install addon")
+                                                if (addonsUiState.addons.any { it.manifestUrl.trim().equals(url, ignoreCase = true) }) {
+                                                    alreadyInstalledAlert = "Addon Already Installed" to "The addon from \"$url\" is already installed on your device."
+                                                } else {
+                                                    try { haptic.performHapticFeedback(HapticFeedbackType.LongPress) } catch (_: Exception) {}
+                                                    statusDialogState = StatusDialogState.Installing
+                                                    viewModel.installAddon(url) { success, msg ->
+                                                        statusDialogState = if (success) {
+                                                            addonUrlInput = ""
+                                                            StatusDialogState.Success(msg ?: url)
+                                                        } else {
+                                                            StatusDialogState.Error(
+                                                                message = msg ?: "Failed to install addon",
+                                                                onRetry = {
+                                                                    statusDialogState = StatusDialogState.Installing
+                                                                    viewModel.installAddon(url) { s, m ->
+                                                                        statusDialogState = if (s) {
+                                                                            addonUrlInput = ""
+                                                                            StatusDialogState.Success(m ?: url)
+                                                                        } else {
+                                                                            StatusDialogState.Error(m ?: "Failed to install addon")
+                                                                        }
                                                                     }
                                                                 }
-                                                            }
-                                                        )
+                                                            )
+                                                        }
                                                     }
                                                 }
                                             }
@@ -948,7 +961,7 @@ fun PluginsSettingsPage(
                                     }
                                 }
                             } else {
-                                items(addonsUiState.addons, key = { it.manifestUrl }) { addon ->
+                                items(addonsUiState.addons.distinctBy { it.manifestUrl }, key = { it.manifestUrl }) { addon ->
                                     val isEnabled = addon.enabled
                                     val rowAlpha = if (isEnabled) 1f else 0.55f
 
@@ -1025,6 +1038,37 @@ fun PluginsSettingsPage(
                                             onCheckedChange = { viewModel.toggleAddon(addon.manifestUrl, it) },
                                             modifier = Modifier.alpha(1f / rowAlpha)
                                         )
+
+                                        // Configuration action if configurable
+                                        if (addon.manifest?.behaviorHints?.configurable == true) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(36.dp)
+                                                    .clip(CircleShape)
+                                                    .pluginsPressable(scaleDown = 0.98f) {
+                                                        try { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) } catch (_: Exception) {}
+                                                        val baseUrl = addonTransportBaseUrl(addon.manifestUrl)
+                                                        val query = addon.manifestUrl.substringAfter("?", "")
+                                                        val configUrl = if (query.isNotBlank()) "$baseUrl/configure?$query" else "$baseUrl/configure"
+                                                        try {
+                                                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(configUrl)).apply {
+                                                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                            }
+                                                            context.startActivity(intent)
+                                                        } catch (e: Exception) {
+                                                            toastMessage = "Could not open configuration: ${e.message}"
+                                                        }
+                                                    },
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Outlined.Settings,
+                                                    contentDescription = "Configure Addon",
+                                                    tint = Color.White.copy(alpha = 0.70f),
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                        }
 
                                         // Outline update / sync
                                         Box(
@@ -1236,7 +1280,7 @@ fun PluginsSettingsPage(
                                     }
                                 }
                             } else {
-                                items(filteredScrapers, key = { it.id }) { manifest ->
+                                items(filteredScrapers.distinctBy { it.id }, key = { it.id }) { manifest ->
                                     val isTesting = testingIds.contains(manifest.id)
                                     val health = healthMap[manifest.id]
                                     val isEnabled = manifest.isEnabled
@@ -1476,6 +1520,19 @@ fun PluginsSettingsPage(
         PluginsInstallStatusDialog(
             state = state,
             onDismiss = { statusDialogState = null }
+        )
+    }
+
+    // Modal: Already Installed Alert Dialog
+    alreadyInstalledAlert?.let { (title, msg) ->
+        com.euthopiar.ui.components.EuthopiarGlassDialog(
+            title = title,
+            message = msg,
+            confirmText = "Got it",
+            dismissText = null,
+            icon = Icons.Outlined.CheckCircle,
+            onConfirm = { alreadyInstalledAlert = null },
+            onDismiss = { alreadyInstalledAlert = null }
         )
     }
 

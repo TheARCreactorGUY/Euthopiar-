@@ -1,6 +1,8 @@
 package com.euthopiar.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -75,6 +77,7 @@ fun BackdropCard(
                 .aspectRatio(Dimens.backdropAspectRatio)
                 .clip(ShapeM)
                 .background(SurfaceLow)
+                .border(0.5.dp, Color.White.copy(alpha = 0.08f), ShapeM)
         ) {
             AppAsyncImage(
                 model = backdropUrl,

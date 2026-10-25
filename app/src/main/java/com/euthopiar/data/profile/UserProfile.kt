@@ -325,6 +325,20 @@ class ProfileManager private constructor(context: Context) {
         return mainProfile
     }
 
+    /**
+     * Atomically restores user profiles from a validated configuration backup.
+     */
+    fun restoreProfiles(list: List<UserProfile>, activeId: String? = null) {
+        if (list.isEmpty()) return
+        saveProfiles(list)
+        val targetActive = if (activeId != null && list.any { it.id == activeId }) {
+            activeId
+        } else {
+            list.first().id
+        }
+        switchProfile(targetActive)
+    }
+
     fun deleteProfile(profileId: String): Boolean {
         if (_profiles.value.size <= 1) return false
         val updated = _profiles.value.filter { it.id != profileId }

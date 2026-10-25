@@ -2,15 +2,30 @@ package com.euthopiar.ui.components
 
 import android.content.res.Configuration
 import android.os.Build
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Size
+import com.euthopiar.ui.theme.Accent
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
@@ -365,6 +380,7 @@ fun HeroCarousel(
                         isInteractive = isInteractive,
                         isCurrentItem = isCurrentItem,
                         playbackHistory = playbackMap[item.id],
+                        isBookmarked = bookmarkedIds.contains(item.id),
                         itemsCount = items.size,
                         heroHazeState = heroHazeState,
                         heroWidthPx = heroWidthPx,
@@ -373,7 +389,8 @@ fun HeroCarousel(
                         playFocusRequester = playFocusRequester,
                         reduceMotion = reduceMotion,
                         onPlayClick = onPlayClick,
-                        onDetailsClick = onDetailsClick
+                        onDetailsClick = onDetailsClick,
+                        onBookmarkClick = onBookmarkClick
                     )
                 }
             }
@@ -407,6 +424,7 @@ private fun BoxScope.HeroHudContent(
     isInteractive: Boolean,
     isCurrentItem: Boolean,
     playbackHistory: PlaybackHistoryEntity?,
+    isBookmarked: Boolean,
     itemsCount: Int,
     heroHazeState: HazeState,
     heroWidthPx: Float,
@@ -415,7 +433,8 @@ private fun BoxScope.HeroHudContent(
     playFocusRequester: androidx.compose.ui.focus.FocusRequester?,
     reduceMotion: Boolean,
     onPlayClick: (MediaItem, PlaybackHistoryEntity?) -> Unit,
-    onDetailsClick: (MediaItem) -> Unit
+    onDetailsClick: (MediaItem) -> Unit,
+    onBookmarkClick: (MediaItem) -> Unit
 ) {
     val configuration = LocalConfiguration.current
     val density = LocalDensity.current
@@ -460,7 +479,6 @@ private fun BoxScope.HeroHudContent(
                 val scrollExitAlpha = (1f - (scrollOffsetPx() / 320.dp.toPx())).coerceIn(0f, 1f)
                 alpha = scrollExitAlpha
                 translationX = -layer.offset * heroWidthPx * HERO_CONTENT_PARALLAX
-                translationY = abs(layer.offset) * 12.dp.toPx()
             },
         horizontalAlignment = Alignment.Start
     ) {
@@ -638,7 +656,7 @@ private fun BoxScope.HeroHudContent(
                         )
                     }
                     .pressable(
-                        scaleDown = 0.98f,
+                        scaleDown = 0.96f,
                         onClickLabel = "Details for ${item.title}",
                         enabled = isInteractive,
                         onClick = { if (isInteractive) onDetailsClick(item) }
@@ -667,6 +685,51 @@ private fun BoxScope.HeroHudContent(
                         maxLines = 1,
                         softWrap = false,
                         overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            // Watchlist Button: Frosted Glass Button matching Details
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(ShapeFull)
+                    .then(detailsBackgroundModifier)
+                    .border(
+                        width = 1.dp,
+                        brush = detailsBorderBrush,
+                        shape = ShapeFull
+                    )
+                    .drawBehind {
+                        drawLine(
+                            color = Color.White.copy(alpha = 0.10f),
+                            start = Offset(10.dp.toPx(), 1.dp.toPx()),
+                            end = Offset(size.width - 10.dp.toPx(), 1.dp.toPx()),
+                            strokeWidth = 1.dp.toPx()
+                        )
+                    }
+                    .pressable(
+                        scaleDown = 0.96f,
+                        onClickLabel = if (isBookmarked) "Watchlist options for ${item.title}" else "Add ${item.title} to watchlist",
+                        enabled = isInteractive,
+                        onClick = { if (isInteractive) onBookmarkClick(item) }
+                    )
+                    .tvFocusable(shape = ShapeFull),
+                contentAlignment = Alignment.Center
+            ) {
+                AnimatedContent(
+                    targetState = isBookmarked,
+                    transitionSpec = {
+                        (scaleIn(tween(200)) + fadeIn(tween(150)))
+                            .togetherWith(scaleOut(tween(150)) + fadeOut(tween(120)))
+                    },
+                    label = "heroWatchlistTransition"
+                ) { bookmarked ->
+                    Icon(
+                        imageVector = if (bookmarked) Icons.Outlined.Check else Icons.Outlined.Add,
+                        contentDescription = if (bookmarked) "In watchlist" else "Add to watchlist",
+                        tint = if (bookmarked) Accent else Color.White,
+                        modifier = Modifier.size(20.dp)
                     )
                 }
             }
@@ -736,11 +799,12 @@ private fun BoxScope.HeroHudContent(
  * Centered carousel pagination segments matching Part 3 & Part 7 specifications:
  * - 2px tall, fully rounded.
  * - Active segment is 28px and 90% white (fills left-to-right over auto-advance).
- * - Inactive segments are 16px and 22% white.
+ * - Inactive segments are 16px and 35% white.
  * - 5px gap.
  * - Smooth 250ms ease-out width and alpha transitions.
  * - Compact sliding window for >8 slides.
  * - Accurate 1-based accessibility descriptions ("Slide X of Y").
+ * - Zero layout re-measure passes: widths and fills are rendered on GPU Canvas via drawRoundRect.
  */
 @Composable
 private fun HeroPagination(
@@ -756,98 +820,135 @@ private fun HeroPagination(
         ((currentVirtualPage % itemsCount) + itemsCount) % itemsCount
     } else 0
 
-    Row(
-        modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        if (itemsCount <= 8) {
-            // Standard full pagination for up to 8 slides
-            repeat(itemsCount) { index ->
-                if (index > 0) Spacer(modifier = Modifier.width(5.dp))
+    val density = LocalDensity.current
+    val gapPx = with(density) { 5.dp.toPx() }
+    val heightPx = with(density) { 2.dp.toPx() }
+    val cornerRadius = CornerRadius(heightPx / 2f, heightPx / 2f)
+
+    if (itemsCount <= 8) {
+        val segmentWidths = (0 until itemsCount).map { index ->
+            val targetWidth = if (index == activeIndex) 28.dp else 16.dp
+            val targetAlpha = if (index == activeIndex) 0.90f else 0.35f
+            val animWidth by animateDpAsState(
+                targetValue = targetWidth,
+                animationSpec = tween(durationMillis = 250, easing = LinearOutSlowInEasing),
+                label = "paginationWidth_$index"
+            )
+            val animAlpha by animateFloatAsState(
+                targetValue = targetAlpha,
+                animationSpec = tween(durationMillis = 250, easing = LinearOutSlowInEasing),
+                label = "paginationAlpha_$index"
+            )
+            Pair(animWidth, animAlpha)
+        }
+
+        Canvas(
+            modifier = modifier
+                .fillMaxWidth()
+                .height(2.dp)
+                .semantics {
+                    contentDescription = "Slide ${activeIndex + 1} of $itemsCount"
+                }
+        ) {
+            val widthsPx = segmentWidths.map { with(density) { it.first.toPx() } }
+            val totalWidthPx = widthsPx.sum() + (itemsCount - 1) * gapPx
+            var startX = (size.width - totalWidthPx) / 2f
+
+            for (index in 0 until itemsCount) {
+                val segWidthPx = widthsPx[index]
+                val (_, alpha) = segmentWidths[index]
                 val isActive = index == activeIndex
-                HeroPaginationSegment(
-                    isActive = isActive,
-                    slideIndex = index,
-                    totalSlides = itemsCount,
-                    progressProvider = progressProvider,
-                    reduceMotion = reduceMotion
+
+                // Background segment pill
+                drawRoundRect(
+                    color = Color.White.copy(alpha = if (isActive) 0.35f else alpha),
+                    topLeft = Offset(startX, 0f),
+                    size = Size(segWidthPx, heightPx),
+                    cornerRadius = cornerRadius
                 )
+
+                if (isActive) {
+                    val fraction = if (!reduceMotion) progressProvider().coerceIn(0f, 1f) else 1f
+                    if (fraction > 0f) {
+                        drawRoundRect(
+                            color = Color.White.copy(alpha = alpha),
+                            topLeft = Offset(startX, 0f),
+                            size = Size(segWidthPx * fraction, heightPx),
+                            cornerRadius = cornerRadius
+                        )
+                    }
+                }
+
+                startX += segWidthPx + gapPx
             }
-        } else {
-            // Compact sliding window for >8 slides
-            val maxVisible = 7
-            val windowStart = (activeIndex - maxVisible / 2).coerceIn(0, itemsCount - maxVisible)
-            repeat(maxVisible) { slot ->
-                if (slot > 0) Spacer(modifier = Modifier.width(5.dp))
-                val slideIndex = windowStart + slot
-                val isActive = slideIndex == activeIndex
-                val isEdge = (slot == 0 && windowStart > 0) || (slot == maxVisible - 1 && windowStart + maxVisible < itemsCount)
-                HeroPaginationSegment(
-                    isActive = isActive,
-                    slideIndex = slideIndex,
-                    totalSlides = itemsCount,
-                    progressProvider = progressProvider,
-                    reduceMotion = reduceMotion,
-                    isCompactEdge = isEdge
+        }
+    } else {
+        // Compact sliding window for >8 slides
+        val maxVisible = 7
+        val windowStart = (activeIndex - maxVisible / 2).coerceIn(0, itemsCount - maxVisible)
+
+        val slotData = (0 until maxVisible).map { slot ->
+            val slideIndex = windowStart + slot
+            val isActive = slideIndex == activeIndex
+            val isEdge = (slot == 0 && windowStart > 0) || (slot == maxVisible - 1 && windowStart + maxVisible < itemsCount)
+            val targetWidth = when {
+                isActive -> 28.dp
+                isEdge -> 8.dp
+                else -> 16.dp
+            }
+            val targetAlpha = if (isActive) 0.90f else 0.35f
+            val animWidth by animateDpAsState(
+                targetValue = targetWidth,
+                animationSpec = tween(durationMillis = 250, easing = LinearOutSlowInEasing),
+                label = "compactPaginationWidth_$slot"
+            )
+            val animAlpha by animateFloatAsState(
+                targetValue = targetAlpha,
+                animationSpec = tween(durationMillis = 250, easing = LinearOutSlowInEasing),
+                label = "compactPaginationAlpha_$slot"
+            )
+            Triple(animWidth, animAlpha, isActive)
+        }
+
+        Canvas(
+            modifier = modifier
+                .fillMaxWidth()
+                .height(2.dp)
+                .semantics {
+                    contentDescription = "Slide ${activeIndex + 1} of $itemsCount"
+                }
+        ) {
+            val widthsPx = slotData.map { with(density) { it.first.toPx() } }
+            val totalWidthPx = widthsPx.sum() + (maxVisible - 1) * gapPx
+            var startX = (size.width - totalWidthPx) / 2f
+
+            for (slot in 0 until maxVisible) {
+                val segWidthPx = widthsPx[slot]
+                val (_, alpha, isActive) = slotData[slot]
+
+                drawRoundRect(
+                    color = Color.White.copy(alpha = if (isActive) 0.35f else alpha),
+                    topLeft = Offset(startX, 0f),
+                    size = Size(segWidthPx, heightPx),
+                    cornerRadius = cornerRadius
                 )
+
+                if (isActive) {
+                    val fraction = if (!reduceMotion) progressProvider().coerceIn(0f, 1f) else 1f
+                    if (fraction > 0f) {
+                        drawRoundRect(
+                            color = Color.White.copy(alpha = alpha),
+                            topLeft = Offset(startX, 0f),
+                            size = Size(segWidthPx * fraction, heightPx),
+                            cornerRadius = cornerRadius
+                        )
+                    }
+                }
+
+                startX += segWidthPx + gapPx
             }
         }
     }
-}
-
-@Composable
-private fun HeroPaginationSegment(
-    isActive: Boolean,
-    slideIndex: Int,
-    totalSlides: Int,
-    progressProvider: () -> Float,
-    reduceMotion: Boolean,
-    isCompactEdge: Boolean = false
-) {
-    val targetWidth = when {
-        isActive -> 28.dp
-        isCompactEdge -> 8.dp
-        else -> 16.dp
-    }
-    val targetAlpha = if (isActive) 0.90f else 0.35f
-
-    val animatedWidth by animateDpAsState(
-        targetValue = targetWidth,
-        animationSpec = tween(durationMillis = 250, easing = LinearOutSlowInEasing),
-        label = "paginationWidth_$slideIndex"
-    )
-    val animatedAlpha by animateFloatAsState(
-        targetValue = targetAlpha,
-        animationSpec = tween(durationMillis = 250, easing = LinearOutSlowInEasing),
-        label = "paginationAlpha_$slideIndex"
-    )
-
-    Box(
-        modifier = Modifier
-            .height(2.dp)
-            .width(animatedWidth)
-            .clip(RoundedCornerShape(1.dp))
-            .background(Color.White.copy(alpha = if (isActive) 0.35f else animatedAlpha))
-            .semantics {
-                contentDescription = "Slide ${slideIndex + 1} of $totalSlides"
-            }
-            .then(
-                if (isActive) {
-                    Modifier.drawWithContent {
-                        drawContent()
-                        val fraction = if (!reduceMotion) progressProvider().coerceIn(0f, 1f) else 1f
-                        if (fraction > 0f) {
-                            drawRoundRect(
-                                color = Color.White.copy(alpha = animatedAlpha),
-                                size = androidx.compose.ui.geometry.Size(size.width * fraction, size.height),
-                                cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.height / 2f, size.height / 2f)
-                            )
-                        }
-                    }
-                } else Modifier
-            )
-    )
 }
 
 @Composable
@@ -1188,6 +1289,14 @@ fun HeroCarouselSkeleton(
                     modifier = Modifier
                         .width(108.dp)
                         .height(48.dp)
+                        .clip(ShapeFull)
+                        .shimmerEffect()
+                )
+
+                // Watchlist pill skeleton
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
                         .clip(ShapeFull)
                         .shimmerEffect()
                 )

@@ -8,6 +8,8 @@ import com.euthopiar.app.plugin.PluginRepositoryService
 import com.euthopiar.core.addons.AddonRepository
 import com.euthopiar.core.addons.AddonsUiState
 import com.euthopiar.core.addons.ManagedAddon
+import com.euthopiar.core.js.JsUniversalPlugin
+import com.euthopiar.core.js.network.httpRequestRaw
 import com.euthopiar.core.model.PluginManifest
 import com.euthopiar.core.registry.PluginRegistry
 import com.euthopiar.data.preferences.PreferencesRepository
@@ -93,42 +95,55 @@ class PluginManagerViewModel(
             _testingPluginIds.value = _testingPluginIds.value + manifest.id
             val startTime = System.currentTimeMillis()
             try {
-                val registered = registry.plugins.value.find { it.name.equals(manifest.name, ignoreCase = true) }
+                val cleanId = manifest.id.substringAfter(":")
+                val registered = registry.plugins.value.find {
+                    it.name.equals(manifest.name, ignoreCase = true) ||
+                    (it is JsUniversalPlugin && (it.scraper.id == manifest.id || it.scraper.id.substringAfter(":") == cleanId))
+                }
                 val isHealthy: Boolean
                 val message: String
                 if (registered != null) {
-                    val catalog = kotlinx.coroutines.withTimeoutOrNull(6000) {
-                        registered.getHomeCatalog()
+                    kotlinx.coroutines.withTimeout(8000) {
+                        registered.getStreams("603")
                     }
-                    if (catalog != null) {
+                    val latency = System.currentTimeMillis() - startTime
+                    isHealthy = true
+                    message = "Working · ${latency} ms"
+                } else if (manifest.siteUrl.isNotBlank()) {
+                    val response = kotlinx.coroutines.withTimeout(8000) {
+                        httpRequestRaw("GET", manifest.siteUrl, emptyMap(), "", followRedirects = true)
+                    }
+                    val latency = System.currentTimeMillis() - startTime
+                    if (response.status in 200..399) {
                         isHealthy = true
-                        val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(35)
                         message = "Working · ${latency} ms"
                     } else {
                         isHealthy = false
-                        message = "Not responding"
+                        message = "HTTP ${response.status}"
                     }
                 } else {
-                    if (manifest.siteUrl.isNotBlank()) {
-                        isHealthy = true
-                        val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(35)
-                        message = "Working · ${latency} ms"
-                    } else {
-                        isHealthy = false
-                        message = "Not responding"
-                    }
+                    isHealthy = false
+                    message = "Not responding"
                 }
 
                 val health = PluginHealth(isWorking = isHealthy, message = message)
-                _pluginHealthMap.value = _pluginHealthMap.value + (manifest.id to health)
+                val newMap = _pluginHealthMap.value.toMutableMap()
+                newMap[manifest.id] = health
+                newMap[cleanId] = health
+                _pluginHealthMap.value = newMap
                 withContext(Dispatchers.Main) {
                     onResult?.invoke(isHealthy, message)
                 }
             } catch (e: Exception) {
-                val health = PluginHealth(isWorking = false, message = "Not responding")
-                _pluginHealthMap.value = _pluginHealthMap.value + (manifest.id to health)
+                val cleanId = manifest.id.substringAfter(":")
+                val err = e.message?.takeIf { it.isNotBlank() } ?: "Not responding"
+                val health = PluginHealth(isWorking = false, message = err)
+                val newMap = _pluginHealthMap.value.toMutableMap()
+                newMap[manifest.id] = health
+                newMap[cleanId] = health
+                _pluginHealthMap.value = newMap
                 withContext(Dispatchers.Main) {
-                    onResult?.invoke(false, "Not responding")
+                    onResult?.invoke(false, err)
                 }
             } finally {
                 _testingPluginIds.value = _testingPluginIds.value - manifest.id
@@ -151,12 +166,13 @@ class PluginManagerViewModel(
         viewModelScope.launch {
             _isRefreshing.value = true
             try {
-                val urls = preferencesRepository.repositoryUrls.first().filter { it.isNotBlank() }
-                if (urls.isEmpty()) {
-                    withContext(Dispatchers.Main) {
-                        onResult(true, "No repositories configured")
-                    }
-                    return@launch
+                val existingUrls = preferencesRepository.repositoryUrls.first().filter { it.isNotBlank() }
+                val urls = if (existingUrls.isEmpty()) {
+                    val defaultUrl = PluginRepositoryService.DEFAULT_REPO_URL
+                    preferencesRepository.addRepositoryUrl(defaultUrl)
+                    listOf(defaultUrl)
+                } else {
+                    existingUrls
                 }
                 var total = 0
                 for (url in urls) {
@@ -189,7 +205,7 @@ class PluginManagerViewModel(
             _isRefreshing.value = true
             try {
                 addonRepository.initialize()
-                val installed = pluginService.getInstalledPlugins()
+                val installed = pluginService.getInstalledPlugins().distinctBy { it.id }
                 _installedPlugins.value = installed.filterNot { it.isAdultPlugin }
 
                 // Fetch community plugins from configured repos

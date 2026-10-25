@@ -167,4 +167,59 @@ class PlayerPlaybackSeekingTest {
         // Clean up
         viewModel.onExitPlayer()
     }
+
+    @Test
+    fun testRapidDoubleTapSeekAccumulatesWithoutStalePositionRace() {
+        val application = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.app.Application>()
+        val viewModel = PlayerViewModel(application)
+
+        // Rapid double taps in succession (+10s, +10s, +10s)
+        viewModel.seekRelative(10_000L)
+        assertEquals(10_000L, viewModel.uiState.value.currentPositionMs)
+
+        viewModel.seekRelative(10_000L)
+        assertEquals(20_000L, viewModel.uiState.value.currentPositionMs)
+
+        viewModel.seekRelative(10_000L)
+        assertEquals(30_000L, viewModel.uiState.value.currentPositionMs)
+
+        // Absolute seek overrides pending accumulator
+        viewModel.seekTo(5_000L)
+        assertEquals(5_000L, viewModel.uiState.value.currentPositionMs)
+
+        viewModel.onExitPlayer()
+    }
+
+    @Test
+    fun testPipControllerIsInPipModeHelper() {
+        PipController.setInPipMode(true)
+        assertTrue("PipController.isInPipMode() should return true", PipController.isInPipMode())
+
+        PipController.setInPipMode(false)
+        assertFalse("PipController.isInPipMode() should return false", PipController.isInPipMode())
+    }
+
+    @Test
+    fun testVideoQualityOptionProperties() {
+        val autoOption = VideoQualityOption(id = "auto", label = "Auto (Adaptive)", isAuto = true)
+        assertTrue(autoOption.isAuto)
+        assertEquals(-1, autoOption.groupIndex)
+        assertEquals(-1, autoOption.trackIndex)
+        assertNull(autoOption.bitrate)
+
+        val trackOption = VideoQualityOption(
+            id = "video_0_1",
+            label = "1080p (6.5 Mbps)",
+            height = 1080,
+            bitrate = 6_500_000,
+            groupIndex = 0,
+            trackIndex = 1,
+            isAuto = false
+        )
+        assertFalse(trackOption.isAuto)
+        assertEquals(1080, trackOption.height)
+        assertEquals(6_500_000, trackOption.bitrate)
+        assertEquals(0, trackOption.groupIndex)
+        assertEquals(1, trackOption.trackIndex)
+    }
 }

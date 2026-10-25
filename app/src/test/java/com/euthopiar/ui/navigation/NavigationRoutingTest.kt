@@ -235,5 +235,123 @@ class NavigationRoutingTest {
         val homeIdx = tabs.indexOfFirst { it.route == normalizeNavTabRoute("home") }
         assertEquals(tabs.indexOf(NavTab.HOME), homeIdx)
     }
+
+    @Test
+    fun testScrollAccumulatorMicroJitterDoesNotToggle() {
+        val thresholdPx = 77f // ~28dp at 2.75x density
+        val accumulator = ScrollDirectionAccumulator(thresholdPx)
+
+        // Micro-jitters while reading: small down, small up
+        assertNull(accumulator.onDelta(5f))
+        assertEquals(5f, accumulator.accumulatedScroll, 0.01f)
+        assertNull(accumulator.onDelta(10f))
+        assertEquals(15f, accumulator.accumulatedScroll, 0.01f)
+
+        // Reversal: small twitch up resets opposing accumulator
+        assertNull(accumulator.onDelta(-6f))
+        assertEquals(-6f, accumulator.accumulatedScroll, 0.01f)
+
+        // Sub-threshold movement never returns a decision
+        assertNull(accumulator.onDelta(-20f))
+        assertEquals(-26f, accumulator.accumulatedScroll, 0.01f)
+    }
+
+    @Test
+    fun testScrollAccumulatorDeliberateScrollHidesAndShowsNavbar() {
+        val thresholdPx = 77f
+        val accumulator = ScrollDirectionAccumulator(thresholdPx)
+
+        // Scroll down 40px (under threshold)
+        assertNull(accumulator.onDelta(40f))
+
+        // Scroll down another 40px (total 80px >= 77f) -> must request hide (false)
+        val hideDecision = accumulator.onDelta(40f)
+        assertNotNull(hideDecision)
+        assertEquals(false, hideDecision)
+        assertEquals(0f, accumulator.accumulatedScroll, 0.01f) // Resets on trigger
+
+        // User now scrolls up deliberately: 50px + 30px
+        assertNull(accumulator.onDelta(-50f))
+        val showDecision = accumulator.onDelta(-30f)
+        assertNotNull(showDecision)
+        assertEquals(true, showDecision)
+        assertEquals(0f, accumulator.accumulatedScroll, 0.01f)
+    }
+
+    @Test
+    fun testComputeScrollDeltaHeterogeneousHeightsPreventsInvertedDirection() {
+        val thresholdPx = 77f
+
+        // Case A: Downward scroll past a large Hero banner (400px) into a regular item (100px)
+        // User was at item 0, offset 390. User scrolls 20px down. Now at item 1, offset 10.
+        // Old formula: (1 - 0) * 100 + (10 - 390) = -280 (FATAL: inverted to scrolling UP!)
+        val deltaDown = computeScrollDelta(
+            currentIndex = 1,
+            currentOffset = 10,
+            previousIndex = 0,
+            previousOffset = 390,
+            itemDimension = 100,
+            thresholdPx = thresholdPx
+        )
+        assertTrue("Scrolling down past taller item must produce positive delta, was $deltaDown", deltaDown >= thresholdPx)
+
+        // Case B: Upward scroll from item 1 (100px) to item 0 (400px Hero)
+        // User was at item 1, offset 10. User scrolls 20px up. Now at item 0, offset 390.
+        val deltaUp = computeScrollDelta(
+            currentIndex = 0,
+            currentOffset = 390,
+            previousIndex = 1,
+            previousOffset = 10,
+            itemDimension = 400,
+            thresholdPx = thresholdPx
+        )
+        assertTrue("Scrolling up to taller item must produce negative delta, was $deltaUp", deltaUp <= -thresholdPx)
+    }
+
+    @Test
+    fun testComputeScrollDeltaMultiItemFling() {
+        val thresholdPx = 77f
+
+        // Fast fling forward by 5 items
+        val flingForwardDelta = computeScrollDelta(
+            currentIndex = 5,
+            currentOffset = 20,
+            previousIndex = 0,
+            previousOffset = 10,
+            itemDimension = 120,
+            thresholdPx = thresholdPx
+        )
+        assertTrue("Fling forward must be positive and at least threshold", flingForwardDelta >= thresholdPx)
+
+        // Fast fling backward by 5 items
+        val flingBackwardDelta = computeScrollDelta(
+            currentIndex = 0,
+            currentOffset = 10,
+            previousIndex = 5,
+            previousOffset = 20,
+            itemDimension = 120,
+            thresholdPx = thresholdPx
+        )
+        assertTrue("Fling backward must be negative and at most -threshold", flingBackwardDelta <= -thresholdPx)
+    }
+
+    @Test
+    fun testNavbarClearanceMathCoversThreeButtonNav() {
+        // Base floating navbar footprint: height (70dp) + vertical padding (24dp) = 94dp
+        // Standard minimum clearance: 144dp
+        val baseFootprintDp = 94f
+        val marginDp = 16f
+
+        // 1. Gesture Navigation: bottom inset is small (e.g. 16dp)
+        val gestureInsetDp = 16f
+        val gestureClearance = maxOf(144f, baseFootprintDp + gestureInsetDp + marginDp)
+        assertEquals("Gesture navigation clearance defaults to 144dp minimum", 144f, gestureClearance, 0.01f)
+
+        // 2. 3-Button Navigation: bottom inset is 48dp
+        val threeButtonInsetDp = 48f
+        val threeButtonClearance = maxOf(144f, baseFootprintDp + threeButtonInsetDp + marginDp)
+        assertEquals("3-Button navigation clearance must dynamically expand to 158dp", 158f, threeButtonClearance, 0.01f)
+        assertTrue(threeButtonClearance > 144f)
+    }
 }
 

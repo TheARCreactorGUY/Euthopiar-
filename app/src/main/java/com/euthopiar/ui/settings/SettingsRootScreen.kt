@@ -133,18 +133,6 @@ fun SettingsRootScreen(
         label = "headerTranslationY"
     )
 
-    // Soft ambient atmospheric wash in normal dark mode (disabled in AMOLED mode)
-    val infiniteTransition = rememberInfiniteTransition(label = "settingsHazeDrift")
-    val driftOffset = infiniteTransition.animateFloat(
-        initialValue = -10f,
-        targetValue = 10f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(22000, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "settingsDrift"
-    )
-
     val backgroundColor = if (isAmoled) ProfileGlassTokens.AmoledBackground else ProfileGlassTokens.BaseDarkBackground
 
     // Measured FloatingNavbar spacing:
@@ -161,15 +149,14 @@ fun SettingsRootScreen(
                 if (!isAmoled) {
                     Modifier.drawBehind {
                         val maxDim = maxOf(size.width, size.height)
-                        val effectiveDrift = if (reduceMotion) 0f else driftOffset.value
-                        // Soft Indigo wash top-right
+                        // Static Indigo wash top-right (0 GPU draw passes during idle)
                         drawRect(
                             brush = Brush.radialGradient(
                                 0.00f to ProfileGlassTokens.HazeIndigoBlob.copy(alpha = 0.22f),
                                 0.35f to ProfileGlassTokens.HazeIndigoBlob.copy(alpha = 0.12f),
                                 0.65f to ProfileGlassTokens.HazeIndigoBlob.copy(alpha = 0.03f),
                                 1.00f to Color.Transparent,
-                                center = Offset(size.width * 0.90f + effectiveDrift, size.height * 0.15f - effectiveDrift),
+                                center = Offset(size.width * 0.90f, size.height * 0.15f),
                                 radius = maxDim * 0.90f
                             )
                         )
@@ -490,8 +477,20 @@ fun SettingsRootScreen(
                     SettingsSectionHeader(title = SettingsCategory.About.title)
                 }
 
-                item(key = "row_about") {
+                item(key = "row_updates") {
                     StaggeredEnterRow(index = 6, isAnimated = hasAnimatedEnter, reduceMotion = reduceMotion) {
+                        SettingsHairlineRow(
+                            title = SettingsPage.Updates.title,
+                            subtitle = SettingsPage.Updates.subtitle,
+                            icon = SettingsPage.Updates.icon,
+                            onClick = { onNavigateToPage(SettingsPage.Updates.route) }
+                        )
+                    }
+                    SettingsRowHairline()
+                }
+
+                item(key = "row_about") {
+                    StaggeredEnterRow(index = 7, isAnimated = hasAnimatedEnter, reduceMotion = reduceMotion) {
                         SettingsHairlineRow(
                             title = SettingsPage.About.title,
                             subtitle = SettingsPage.About.subtitle,
@@ -504,6 +503,14 @@ fun SettingsRootScreen(
 
                 // App version caption
                 item(key = "app_version_caption") {
+                    val appVersionCaption = remember(context) {
+                        try {
+                            val ver = context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "1.0.0"
+                            "Euthopiar v$ver (Production)"
+                        } catch (_: Exception) {
+                            "Euthopiar (Production)"
+                        }
+                    }
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -511,7 +518,7 @@ fun SettingsRootScreen(
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = "Euthopiar v1.0.0-rc2 (Production)",
+                            text = appVersionCaption,
                             style = TextStyle(
                                 fontFamily = AppFontFamily,
                                 fontWeight = FontWeight.Normal,
@@ -605,8 +612,8 @@ private fun StaggeredEnterRow(
         val animAlpha by animateFloatAsState(
             targetValue = if (startAnim) 1f else 0f,
             animationSpec = tween(
-                durationMillis = 240,
-                delayMillis = 240 + (index * 40),
+                durationMillis = 160,
+                delayMillis = 30 + (index * 20),
                 easing = FastOutSlowInEasing
             ),
             label = "staggerAlpha_$index"
@@ -614,8 +621,8 @@ private fun StaggeredEnterRow(
         val animTranslationY by animateFloatAsState(
             targetValue = if (startAnim) 0f else 8f,
             animationSpec = tween(
-                durationMillis = 240,
-                delayMillis = 240 + (index * 40),
+                durationMillis = 160,
+                delayMillis = 30 + (index * 20),
                 easing = FastOutSlowInEasing
             ),
             label = "staggerTrans_$index"

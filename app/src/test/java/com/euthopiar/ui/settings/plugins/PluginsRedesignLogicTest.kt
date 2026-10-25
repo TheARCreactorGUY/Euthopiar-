@@ -199,6 +199,74 @@ class PluginsRedesignLogicTest {
         assertEquals("Installing 5 of 5", formatBulkAction(5, 0))
     }
 
+    @Test
+    fun testRepositoryScraperNamespacedIdMatching() {
+        val repoUrl = "https://example.com/repo/manifest.json"
+        val canonicalRepoId = com.euthopiar.core.js.computeCanonicalRepoId(repoUrl)
+
+        val installedPlugins = listOf(
+            createManifest("$canonicalRepoId:showbox", "ShowBox", true, siteUrl = repoUrl),
+            createManifest("local:custom_script", "CustomScript", true, siteUrl = "local"),
+            createManifest("repo_other:foreign_scraper", "Foreign", true, siteUrl = "https://other.com/manifest.json"),
+            createManifest("legacy_raw_id", "LegacyProvider", true, siteUrl = repoUrl)
+        )
+
+        fun isPluginInstalled(p: PluginManifest): Boolean {
+            val cleanId = p.id.substringAfter(":")
+            val namespacedId = "$canonicalRepoId:$cleanId"
+            return installedPlugins.any { installed ->
+                installed.id == namespacedId ||
+                (installed.id.startsWith("$canonicalRepoId:") && installed.id.substringAfter(":") == cleanId) ||
+                (installed.siteUrl.isNotBlank() && com.euthopiar.core.js.computeCanonicalRepoId(installed.siteUrl) == canonicalRepoId && installed.id.substringAfter(":") == cleanId) ||
+                (installed.id == p.id && !installed.id.contains(":") && (installed.siteUrl == repoUrl || installed.siteUrl.isBlank()))
+            }
+        }
+
+        // Raw manifest from repo with id = "showbox"
+        val repoPlugin = createManifest("showbox", "ShowBox", false, siteUrl = repoUrl)
+        assertTrue("Raw ID 'showbox' must match installed namespaced ID '$canonicalRepoId:showbox'", isPluginInstalled(repoPlugin))
+
+        // Raw manifest from repo already with namespaced ID
+        val namespacedPlugin = createManifest("$canonicalRepoId:showbox", "ShowBox", false, siteUrl = repoUrl)
+        assertTrue("Namespaced ID must match installed", isPluginInstalled(namespacedPlugin))
+
+        // Legacy raw ID from this repo
+        val legacyPlugin = createManifest("legacy_raw_id", "LegacyProvider", false, siteUrl = repoUrl)
+        assertTrue("Legacy raw ID must match installed legacy", isPluginInstalled(legacyPlugin))
+
+        // Local script with same raw ID should NOT match this repo
+        val localPlugin = createManifest("custom_script", "CustomScript", false, siteUrl = repoUrl)
+        org.junit.Assert.assertFalse("Local script 'local:custom_script' should NOT match repo scraper with same raw ID", isPluginInstalled(localPlugin))
+
+        // Foreign scraper from another repo should NOT match this repo
+        val foreignPlugin = createManifest("foreign_scraper", "Foreign", false, siteUrl = repoUrl)
+        org.junit.Assert.assertFalse("Foreign scraper from other repo should NOT match this repo", isPluginInstalled(foreignPlugin))
+
+        // Uninstalled plugin
+        val uninstalled = createManifest("unknown_provider", "Unknown", false, siteUrl = repoUrl)
+        org.junit.Assert.assertFalse("Uninstalled plugin should not match", isPluginInstalled(uninstalled))
+    }
+
+    @Test
+    fun testConfigurableAddonBehaviorHints() {
+        val addonManifest = com.euthopiar.core.addons.AddonManifest(
+            id = "org.stremio.torrentio",
+            name = "Torrentio",
+            behaviorHints = com.euthopiar.core.addons.AddonBehaviorHints(configurable = true)
+        )
+        val managedAddon = com.euthopiar.core.addons.ManagedAddon(
+            manifestUrl = "https://torrentio.strem.fun/providers=yts%7Csort=quality/manifest.json?api_key=123",
+            manifest = addonManifest
+        )
+        assertTrue("Addon should be marked configurable", managedAddon.manifest?.behaviorHints?.configurable == true)
+
+        val baseUrl = com.euthopiar.core.addons.addonTransportBaseUrl(managedAddon.manifestUrl)
+        assertEquals("https://torrentio.strem.fun/providers=yts%7Csort=quality", baseUrl)
+        val query = managedAddon.manifestUrl.substringAfter("?", "")
+        val configUrl = if (query.isNotBlank()) "$baseUrl/configure?$query" else "$baseUrl/configure"
+        assertEquals("https://torrentio.strem.fun/providers=yts%7Csort=quality/configure?api_key=123", configUrl)
+    }
+
     private fun filterScrapers(list: List<PluginManifest>, query: String): List<PluginManifest> {
         if (query.isBlank()) return list
         val q = query.trim().lowercase()
@@ -226,7 +294,8 @@ class PluginsRedesignLogicTest {
         name: String,
         isEnabled: Boolean,
         description: String = "",
-        supportedTypes: List<String> = emptyList()
+        supportedTypes: List<String> = emptyList(),
+        siteUrl: String = "https://example.com"
     ): PluginManifest {
         return PluginManifest(
             id = id,
@@ -235,7 +304,7 @@ class PluginsRedesignLogicTest {
             versionName = "1.0.0",
             author = "Author",
             description = description,
-            siteUrl = "https://example.com",
+            siteUrl = siteUrl,
             supportedTypes = supportedTypes,
             className = "com.euthopiar.plugin.$id",
             isEnabled = isEnabled

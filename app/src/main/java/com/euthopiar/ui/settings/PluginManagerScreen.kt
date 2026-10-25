@@ -63,6 +63,7 @@ fun PluginManagerScreen(
 
     var showAddSourceSheet by remember { mutableStateOf(false) }
     var showAddRepoDialog by remember { mutableStateOf(false) }
+    var alreadyInstalledAlert by remember { mutableStateOf<Pair<String, String>?>(null) }
     var repoUrlInput by remember { mutableStateOf("") }
     var repoError by remember { mutableStateOf<String?>(null) }
     var isAddingRepo by remember { mutableStateOf(false) }
@@ -210,9 +211,14 @@ fun PluginManagerScreen(
                             }
                         },
                         onInstall = { plugin ->
-                            viewModel.installPlugin(plugin) { success ->
-                                val msg = if (success) "Updated ${plugin.name} successfully" else "Failed to update ${plugin.name}"
-                                snackbarController.show(msg)
+                            val isAlreadyInstalled = installedPlugins.any { it.id.equals(plugin.id, ignoreCase = true) }
+                            if (isAlreadyInstalled) {
+                                alreadyInstalledAlert = "Plugin Already Installed" to "\"${plugin.name}\" is already installed on your device."
+                            } else {
+                                viewModel.installPlugin(plugin) { success ->
+                                    val msg = if (success) "Installed ${plugin.name} successfully" else "Failed to install ${plugin.name}"
+                                    snackbarController.show(msg)
+                                }
                             }
                         },
                         onUninstall = { plugin ->
@@ -376,6 +382,18 @@ fun PluginManagerScreen(
     }
 
     // Add Repository Glass Dialog
+    alreadyInstalledAlert?.let { (title, msg) ->
+        com.euthopiar.ui.components.EuthopiarGlassDialog(
+            title = title,
+            message = msg,
+            confirmText = "Got it",
+            dismissText = null,
+            icon = Icons.Outlined.CheckCircle,
+            onConfirm = { alreadyInstalledAlert = null },
+            onDismiss = { alreadyInstalledAlert = null }
+        )
+    }
+
     if (showAddRepoDialog) {
         val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
         androidx.compose.ui.window.Dialog(
@@ -564,8 +582,14 @@ fun PluginManagerScreen(
                                         repoError = "Link cannot be empty"
                                         return@pluginsPressable
                                     }
+                                    val targetUrl = repoUrlInput.trim()
+                                    if (repositoryUrls.contains(targetUrl)) {
+                                        showAddRepoDialog = false
+                                        alreadyInstalledAlert = "Repository Already Installed" to "This repository is already installed on your device."
+                                        return@pluginsPressable
+                                    }
                                     isAddingRepo = true
-                                    viewModel.addRepository(repoUrlInput) { success, message ->
+                                    viewModel.addRepository(targetUrl) { success, message ->
                                         isAddingRepo = false
                                         if (success) {
                                             showAddRepoDialog = false
@@ -676,7 +700,7 @@ private fun InstalledTabContent(
         ),
         verticalArrangement = Arrangement.spacedBy(Dimens.spacing12)
     ) {
-        items(installedPlugins, key = { it.id }) { manifest ->
+        items(installedPlugins.distinctBy { it.id }, key = { it.id }) { manifest ->
             val isActive = activePluginName.equals(manifest.name, ignoreCase = true)
             val isTesting = manifest.id in testingIds
             val health = healthMap[manifest.id]
@@ -1057,7 +1081,7 @@ private fun MarketplaceTabContent(
                     )
                 }
             } else {
-                items(providerRepos, key = { it.url }) { repo ->
+                items(providerRepos.distinctBy { it.url }, key = { it.url }) { repo ->
                     ProviderBoxCard(
                         repo = repo,
                         onClick = { onSelectRepo(repo) }
@@ -1141,7 +1165,7 @@ private fun MarketplaceTabContent(
                     )
                 }
             } else {
-                items(selectedRepo.plugins, key = { it.id }) { manifest ->
+                items(selectedRepo.plugins.distinctBy { it.id }, key = { it.id }) { manifest ->
                     val isInstalling = manifest.id in installingIds
                     val installed = installedPlugins.find { it.id.equals(manifest.id, ignoreCase = true) }
                     val isInstalled = installed != null
@@ -1416,7 +1440,7 @@ private fun RepositoriesTabContent(
         ),
         verticalArrangement = Arrangement.spacedBy(Dimens.spacing12)
     ) {
-        items(repositoryUrls.toList(), key = { it }) { url ->
+        items(repositoryUrls.toList().distinct(), key = { it }) { url ->
             Box(
                 modifier = Modifier
                     .fillMaxWidth()

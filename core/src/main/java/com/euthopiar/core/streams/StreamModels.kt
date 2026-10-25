@@ -30,7 +30,8 @@ data class StreamItem(
     val seeders: Int? = null,
     val peers: Int? = null,
     val isCached: Boolean = false,
-    val audioLanguages: List<String> = emptyList()
+    val audioLanguages: List<String> = emptyList(),
+    val matchScore: Double = 0.0
 ) {
     val effectiveInfoHash: String?
         get() = infoHash ?: url?.let { u ->
@@ -52,37 +53,75 @@ data class StreamItem(
         get() = directPlaybackUrl?.takeIf { it.startsWith("http://", ignoreCase = true) || it.startsWith("https://", ignoreCase = true) }
 
     val isTorrentStream: Boolean
-        get() = !infoHash.isNullOrBlank() || !magnetUrl.isNullOrBlank() ||
-                streamType?.equals("torrent", ignoreCase = true) == true ||
-                streamType?.equals("p2p", ignoreCase = true) == true ||
-                (url != null && (url.startsWith("magnet:", ignoreCase = true) ||
-                        url.startsWith("torrent://", ignoreCase = true) ||
-                        url.startsWith("torrent:", ignoreCase = true) ||
-                        ((url.length == 40 || url.length == 64) && url.all { it in '0'..'9' || it.lowercaseChar() in 'a'..'f' })))
+        get() {
+            val clean = url?.trim()?.substringBefore('?')
+            val isTorrentHash = clean != null && (
+                ((clean.length == 40 || clean.length == 64) && clean.all { it in '0'..'9' || it.lowercaseChar() in 'a'..'f' }) ||
+                (clean.length == 32 && clean.all { it.uppercaseChar() in 'A'..'Z' || it in '2'..'7' })
+            )
+            return !infoHash.isNullOrBlank() || !magnetUrl.isNullOrBlank() ||
+                    streamType?.equals("torrent", ignoreCase = true) == true ||
+                    streamType?.equals("p2p", ignoreCase = true) == true ||
+                    (url != null && (url.startsWith("magnet:", ignoreCase = true) ||
+                            url.startsWith("torrent://", ignoreCase = true) ||
+                            url.startsWith("torrent:", ignoreCase = true) ||
+                            isTorrentHash ||
+                            com.euthopiar.core.p2p.extractP2pStreamRequest(url, infoHash) != null))
+        }
 
     val effectiveMagnetOrHash: String?
         get() {
-            var base = magnetUrl ?: if (!infoHash.isNullOrBlank()) "magnet:?xt=urn:btih:$infoHash" else url?.takeIf { it.startsWith("magnet:", ignoreCase = true) }
-            if (base == null && url != null) {
-                val cleanUrl = url.trim()
-                if (cleanUrl.startsWith("torrent://", ignoreCase = true) || cleanUrl.startsWith("torrent:", ignoreCase = true)) {
-                    val raw = cleanUrl.removePrefix("torrent://").removePrefix("TORRENT://")
+            var rawTorrentUrl = url?.trim()
+            if (rawTorrentUrl != null && rawTorrentUrl.startsWith("torrent://", ignoreCase = true)) {
+                if (fileIdx != null && fileIdx >= 0 && rawTorrentUrl.count { it == '/' } < 3) {
+                    rawTorrentUrl = "$rawTorrentUrl/$fileIdx"
+                }
+            }
+
+            var base: String? = magnetUrl
+            if (base == null && !infoHash.isNullOrBlank()) {
+                val idxSuffix = if (fileIdx != null && fileIdx >= 0) "&index=$fileIdx" else ""
+                base = "magnet:?xt=urn:btih:$infoHash$idxSuffix"
+            }
+            if (base == null && rawTorrentUrl != null && rawTorrentUrl.startsWith("magnet:", ignoreCase = true)) {
+                base = rawTorrentUrl
+            }
+
+            if (base == null && rawTorrentUrl != null) {
+                if (rawTorrentUrl.startsWith("torrent://", ignoreCase = true) || rawTorrentUrl.startsWith("torrent:", ignoreCase = true)) {
+                    val raw = rawTorrentUrl.removePrefix("torrent://").removePrefix("TORRENT://")
                         .removePrefix("torrent:").removePrefix("TORRENT:")
                         .substringBefore('/').substringBefore('?').trim()
                     if (raw.isNotEmpty()) {
-                        base = "magnet:?xt=urn:btih:$raw"
+                        val idxSuffix = if (fileIdx != null && fileIdx >= 0) "&index=$fileIdx" else ""
+                        base = "magnet:?xt=urn:btih:$raw$idxSuffix"
                     }
-                } else if ((cleanUrl.length == 40 || cleanUrl.length == 64) && cleanUrl.all { it in '0'..'9' || it.lowercaseChar() in 'a'..'f' }) {
-                    base = "magnet:?xt=urn:btih:$cleanUrl"
+                } else {
+                    val cleanHash = rawTorrentUrl.substringBefore('?').trim()
+                    if (((cleanHash.length == 40 || cleanHash.length == 64) && cleanHash.all { it in '0'..'9' || it.lowercaseChar() in 'a'..'f' }) ||
+                        (cleanHash.length == 32 && cleanHash.all { it.uppercaseChar() in 'A'..'Z' || it in '2'..'7' })) {
+                        val idxSuffix = if (fileIdx != null && fileIdx >= 0) "&index=$fileIdx" else ""
+                        base = "magnet:?xt=urn:btih:$cleanHash$idxSuffix"
+                    }
                 }
             }
+
             if (base != null) {
-                val effectiveIdx = fileIdx ?: if (url?.startsWith("torrent://", ignoreCase = true) == true) {
-                    val path = url.removePrefix("torrent://").removePrefix("TORRENT://").substringBefore('?')
+                val effectiveIdx = (if (fileIdx != null && fileIdx >= 0) fileIdx else null) ?: if (rawTorrentUrl?.startsWith("torrent://", ignoreCase = true) == true || rawTorrentUrl?.startsWith("torrent:", ignoreCase = true) == true) {
+                    val path = if (rawTorrentUrl.startsWith("torrent://", ignoreCase = true)) {
+                        rawTorrentUrl.substring("torrent://".length).substringBefore('?')
+                    } else {
+                        rawTorrentUrl.substring("torrent:".length).substringBefore('?')
+                    }
                     if ('/' in path) path.substringAfter('/').trim().toIntOrNull() else null
                 } else null
 
-                if (effectiveIdx != null && !base.contains("index=", ignoreCase = true) && !base.contains("indices=", ignoreCase = true)) {
+                if (effectiveIdx != null &&
+                    !base.contains("index=", ignoreCase = true) &&
+                    !base.contains("indices=", ignoreCase = true) &&
+                    !base.contains("fileidx=", ignoreCase = true) &&
+                    !base.contains("so=", ignoreCase = true)
+                ) {
                     val delim = if (base.contains("?")) "&" else "?"
                     base = "$base${delim}index=$effectiveIdx"
                 }

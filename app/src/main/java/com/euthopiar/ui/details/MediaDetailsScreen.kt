@@ -14,6 +14,8 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import kotlinx.coroutines.delay
@@ -28,6 +30,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
@@ -48,6 +52,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
@@ -127,9 +132,11 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.asPaddingValues
@@ -372,10 +379,12 @@ fun MediaDetailsScreen(
                         Box(modifier = Modifier.fillMaxSize()) {
                             Row(modifier = Modifier.fillMaxSize()) {
                                 // Left Column: Artwork, Header, Play, Overview
+                                val leftScrollState = rememberScrollState()
                                 Column(
                                     modifier = Modifier
                                         .weight(0.45f)
                                         .fillMaxHeight()
+                                        .verticalScroll(leftScrollState)
                                         .padding(Dimens.spacing24)
                                 ) {
                                     DetailsBackdropHero(
@@ -450,10 +459,12 @@ fun MediaDetailsScreen(
                                 }
 
                                 // Right Column: Prime Video Style Tabs
+                                val rightScrollState = rememberScrollState()
                                 Column(
                                     modifier = Modifier
                                         .weight(0.55f)
                                         .fillMaxHeight()
+                                        .verticalScroll(rightScrollState)
                                         .padding(top = Dimens.spacing24, end = Dimens.spacing24, bottom = Dimens.spacing24)
                                 ) {
                                     DetailsTabsContent(
@@ -481,7 +492,7 @@ fun MediaDetailsScreen(
                                 }
                             }
 
-                            // Tablet Floating Glass Back Button (Fix for tablet navigation)
+                            // Tablet Floating Glass Back and Close Buttons (Fix for tablet navigation)
                             Box(
                                 modifier = Modifier
                                     .align(Alignment.TopStart)
@@ -489,16 +500,33 @@ fun MediaDetailsScreen(
                                     .padding(start = Dimens.spacing24, top = Dimens.spacing8)
                                     .zIndex(10f)
                             ) {
-                                MediaDetailsGlassIconButton(
-                                    icon = Icons.AutoMirrored.Filled.ArrowBack,
-                                    contentDescription = "Back",
-                                    onClick = { safeNavigate(onBack) },
-                                    size = 40.dp,
-                                    radius = 14.dp,
-                                    iconSize = 20.dp,
-                                    hazeState = detailsHazeState,
-                                    isOverArtwork = true
-                                )
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    MediaDetailsGlassIconButton(
+                                        icon = Icons.AutoMirrored.Filled.ArrowBack,
+                                        contentDescription = "Back",
+                                        onClick = { safeNavigate(onBack) },
+                                        size = 40.dp,
+                                        radius = 14.dp,
+                                        iconSize = 20.dp,
+                                        hazeState = detailsHazeState,
+                                        isOverArtwork = true
+                                    )
+                                    if (depth >= 3 && onCloseToRoot != null) {
+                                        MediaDetailsGlassIconButton(
+                                            icon = Icons.Filled.Close,
+                                            contentDescription = "Close to tab root",
+                                            onClick = { safeNavigate { onCloseToRoot() } },
+                                            size = 40.dp,
+                                            radius = 14.dp,
+                                            iconSize = 20.dp,
+                                            hazeState = detailsHazeState,
+                                            isOverArtwork = true
+                                        )
+                                    }
+                                }
                             }
                         }
                     } else {
@@ -557,15 +585,29 @@ fun MediaDetailsScreen(
                         }
 
                         val reduceMotion = LocalReduceMotion.current
-                        val animatedTopBarAlpha by animateFloatAsState(
-                            targetValue = if (isCompactTopBarVisible) topBarProgress else 0f,
-                            animationSpec = if (reduceMotion) tween(120) else tween(200, easing = FastOutSlowInEasing),
-                            label = "compactBarAlpha"
+                        val compactBarAlpha = if (reduceMotion) (if (isCompactTopBarVisible) 1f else 0f) else topBarProgress
+                        val isScrolled by remember {
+                            derivedStateOf { topBarProgress > 0.5f }
+                        }
+                        val backButtonSize by animateDpAsState(
+                            targetValue = if (isScrolled) 36.dp else 40.dp,
+                            animationSpec = if (reduceMotion) tween(120) else spring(dampingRatio = 0.85f, stiffness = Spring.StiffnessMedium),
+                            label = "backButtonSize"
                         )
-                        val animatedTopBarSlideY by animateDpAsState(
-                            targetValue = if (isCompactTopBarVisible) 0.dp else (-8).dp,
-                            animationSpec = if (reduceMotion) tween(120) else tween(200, easing = FastOutSlowInEasing),
-                            label = "compactBarSlide"
+                        val backButtonRadius by animateDpAsState(
+                            targetValue = if (isScrolled) 12.dp else 14.dp,
+                            animationSpec = if (reduceMotion) tween(120) else spring(dampingRatio = 0.85f, stiffness = Spring.StiffnessMedium),
+                            label = "backButtonRadius"
+                        )
+                        val backButtonIconSize by animateDpAsState(
+                            targetValue = if (isScrolled) 18.dp else 20.dp,
+                            animationSpec = if (reduceMotion) tween(120) else spring(dampingRatio = 0.85f, stiffness = Spring.StiffnessMedium),
+                            label = "backButtonIconSize"
+                        )
+                        val backButtonOffsetY by animateDpAsState(
+                            targetValue = if (isScrolled) 10.dp else 8.dp,
+                            animationSpec = if (reduceMotion) tween(120) else spring(dampingRatio = 0.85f, stiffness = Spring.StiffnessMedium),
+                            label = "backButtonOffsetY"
                         )
                         val bigLogoAlpha by remember {
                             derivedStateOf {
@@ -595,7 +637,6 @@ fun MediaDetailsScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .height(heroHeight)
-                                    .hazeSource(state = detailsHazeState)
                                     .graphicsLayer {
                                         alpha = heroScrollAlpha
                                         val offset = if (lazyListState.firstVisibleItemIndex == 0) {
@@ -784,7 +825,7 @@ fun MediaDetailsScreen(
                             }
 
                             // Compact Top Bar (Fix 1)
-                            if (animatedTopBarAlpha > 0.01f) {
+                            if (compactBarAlpha > 0.01f) {
                                 Box(
                                     modifier = Modifier
                                         .align(Alignment.TopCenter)
@@ -792,8 +833,7 @@ fun MediaDetailsScreen(
                                         .height(topBarHeight)
                                         .zIndex(15f)
                                         .graphicsLayer {
-                                            alpha = animatedTopBarAlpha
-                                            translationY = animatedTopBarSlideY.toPx()
+                                            alpha = compactBarAlpha
                                         }
                                         .then(
                                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -803,7 +843,7 @@ fun MediaDetailsScreen(
                                                     fallbackTint = HazeTint(Color(0xFF0A0C10).copy(alpha = 0.85f))
                                                 }
                                             } else {
-                                                Modifier.background(Color(0xFF0A0C10).copy(alpha = 0.60f * animatedTopBarAlpha))
+                                                Modifier.background(Color(0xFF0A0C10).copy(alpha = 0.60f * compactBarAlpha))
                                             }
                                         )
                                 ) {
@@ -813,7 +853,7 @@ fun MediaDetailsScreen(
                                             .align(Alignment.BottomCenter)
                                             .fillMaxWidth()
                                             .height(0.5.dp)
-                                            .background(Color.White.copy(alpha = 0.14f * animatedTopBarAlpha))
+                                            .background(Color.White.copy(alpha = 0.14f * compactBarAlpha))
                                     )
 
                                     // Aligned to bottom of bar (below status bar inset, height 68dp)
@@ -825,20 +865,12 @@ fun MediaDetailsScreen(
                                             .padding(horizontal = 16.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        // Glass back button: 36 by 36 dp, 12 dp radius
-                                        MediaDetailsGlassIconButton(
-                                            icon = Icons.AutoMirrored.Filled.ArrowBack,
-                                            contentDescription = "Back",
-                                            onClick = { safeNavigate(onBack) },
-                                            size = 36.dp,
-                                            radius = 12.dp,
-                                            iconSize = 18.dp,
-                                            hazeState = detailsHazeState
-                                        )
+                                        // Reserved space for the single persistent back button (48dp touch target)
+                                        Spacer(modifier = Modifier.width(48.dp))
 
                                         Spacer(modifier = Modifier.width(12.dp))
 
-                                        val smallLogoAlpha = ((1f - bigLogoAlpha) * animatedTopBarAlpha).coerceIn(0f, 1f)
+                                        val smallLogoAlpha = ((1f - bigLogoAlpha) * compactBarAlpha).coerceIn(0f, 1f)
 
                                         // Title logo art scaled down to 28-30dp tall (fallback title 15sp medium wide letter spacing)
                                         Box(
@@ -878,61 +910,54 @@ fun MediaDetailsScreen(
 
                                         if (depth >= 3 && onCloseToRoot != null) {
                                             Spacer(modifier = Modifier.weight(1f))
-                                            MediaDetailsGlassIconButton(
-                                                icon = Icons.Filled.Close,
-                                                contentDescription = "Close to tab root",
-                                                onClick = { safeNavigate { onCloseToRoot() } },
-                                                size = 36.dp,
-                                                radius = 12.dp,
-                                                iconSize = 18.dp,
-                                                hazeState = detailsHazeState
-                                            )
+                                            // Reserved space for the single persistent close button (48dp touch target)
+                                            Spacer(modifier = Modifier.width(48.dp))
                                         }
                                     }
                                 }
                             }
 
-                            // Unscrolled Floating Back Button (over Hero Backdrop)
-                            if (animatedTopBarAlpha < 0.99f) {
+                            // Single Unified Persistent Back Button (Seamless Docking into Top Bar)
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopStart)
+                                    .statusBarsPadding()
+                                    .offset(y = backButtonOffsetY)
+                                    .padding(start = 16.dp)
+                                    .zIndex(25f)
+                            ) {
+                                MediaDetailsGlassIconButton(
+                                    icon = Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = "Back",
+                                    onClick = { safeNavigate(onBack) },
+                                    size = backButtonSize,
+                                    radius = backButtonRadius,
+                                    iconSize = backButtonIconSize,
+                                    hazeState = detailsHazeState,
+                                    isOverArtwork = !isScrolled
+                                )
+                            }
+
+                            // Single Unified Persistent Close to Tab Root Button (when depth >= 3)
+                            if (depth >= 3 && onCloseToRoot != null) {
                                 Box(
                                     modifier = Modifier
-                                        .align(Alignment.TopStart)
+                                        .align(Alignment.TopEnd)
                                         .statusBarsPadding()
-                                        .padding(start = 16.dp, top = 8.dp)
-                                        .zIndex(10f)
-                                        .graphicsLayer {
-                                            alpha = (1f - animatedTopBarAlpha).coerceIn(0f, 1f)
-                                        }
+                                        .offset(y = backButtonOffsetY)
+                                        .padding(end = 16.dp)
+                                        .zIndex(25f)
                                 ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        // Glass square 40 by 40 dp, 14 dp radius
-                                        MediaDetailsGlassIconButton(
-                                            icon = Icons.AutoMirrored.Filled.ArrowBack,
-                                            contentDescription = "Back",
-                                            onClick = { safeNavigate(onBack) },
-                                            size = 40.dp,
-                                            radius = 14.dp,
-                                            iconSize = 20.dp,
-                                            hazeState = detailsHazeState,
-                                            isOverArtwork = true
-                                        )
-
-                                        if (depth >= 3 && onCloseToRoot != null) {
-                                            MediaDetailsGlassIconButton(
-                                                icon = Icons.Filled.Close,
-                                                contentDescription = "Close to tab root",
-                                                onClick = { safeNavigate { onCloseToRoot() } },
-                                                size = 40.dp,
-                                                radius = 14.dp,
-                                                iconSize = 20.dp,
-                                                hazeState = detailsHazeState,
-                                                isOverArtwork = true
-                                            )
-                                        }
-                                    }
+                                    MediaDetailsGlassIconButton(
+                                        icon = Icons.Filled.Close,
+                                        contentDescription = "Close to tab root",
+                                        onClick = { safeNavigate { onCloseToRoot() } },
+                                        size = backButtonSize,
+                                        radius = backButtonRadius,
+                                        iconSize = backButtonIconSize,
+                                        hazeState = detailsHazeState,
+                                        isOverArtwork = !isScrolled
+                                    )
                                 }
                             }
                         }
@@ -2083,12 +2108,16 @@ private fun ActionButtonItem(
     hazeState: HazeState? = null
 ) {
     val reduceMotion = LocalReduceMotion.current
+    val haptic = LocalHapticFeedback.current
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
 
     val scaleAnim by animateFloatAsState(
-        targetValue = if (isPressed && !reduceMotion) 0.98f else 1f,
-        animationSpec = tween(durationMillis = 120, easing = FastOutSlowInEasing),
+        targetValue = if (isPressed && !reduceMotion) 0.96f else 1f,
+        animationSpec = if (reduceMotion) snap() else spring(
+            dampingRatio = Spring.DampingRatioNoBouncy,
+            stiffness = Spring.StiffnessMedium
+        ),
         label = "actionBtnScale"
     )
 
@@ -2108,7 +2137,12 @@ private fun ActionButtonItem(
                 indication = null,
                 role = Role.Button,
                 onClickLabel = label,
-                onClick = onClick
+                onClick = {
+                    try {
+                        haptic.performHapticFeedback(HapticFeedbackType.Confirm)
+                    } catch (_: Throwable) {}
+                    onClick()
+                }
             )
             .graphicsLayer {
                 scaleX = scaleAnim
@@ -2176,8 +2210,8 @@ private fun ActionButtonItem(
                         if (reduceMotion) {
                             fadeIn(tween(0)) togetherWith fadeOut(tween(0))
                         } else {
-                            (scaleIn(tween(160), initialScale = 0.7f) + fadeIn(tween(160)))
-                                .togetherWith(scaleOut(tween(140), targetScale = 0.7f) + fadeOut(tween(140)))
+                            (scaleIn(tween(160), initialScale = 0.95f) + fadeIn(tween(160)))
+                                .togetherWith(scaleOut(tween(140), targetScale = 0.95f) + fadeOut(tween(140)))
                         }
                     },
                     label = "actionIconAnim"
@@ -2225,7 +2259,8 @@ private fun ActionButtonItem(
 @Composable
 private fun ExpandableOverview(overview: String?) {
     if (overview.isNullOrBlank()) return
-    var expanded by remember { mutableStateOf(false) }
+    var expanded by remember(overview) { mutableStateOf(false) }
+    var canExpand by remember(overview) { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(
@@ -2234,18 +2269,25 @@ private fun ExpandableOverview(overview: String?) {
             color = Color.White.copy(alpha = 0.70f),
             maxLines = if (expanded) Int.MAX_VALUE else 3,
             overflow = TextOverflow.Ellipsis,
+            onTextLayout = { textLayoutResult ->
+                if (!expanded) {
+                    canExpand = textLayoutResult.hasVisualOverflow || textLayoutResult.lineCount > 3
+                }
+            },
             modifier = Modifier.animateContentSize(tween(240, easing = FastOutSlowInEasing))
         )
-        Spacer(modifier = Modifier.height(Dimens.spacing4))
-        Text(
-            text = if (expanded) "Less" else "More",
-            style = AppTypography.labelLarge,
-            fontWeight = FontWeight.Medium,
-            color = Color.White,
-            modifier = Modifier
-                .pressable { expanded = !expanded }
-                .padding(vertical = Dimens.spacing4)
-        )
+        if (canExpand) {
+            Spacer(modifier = Modifier.height(Dimens.spacing4))
+            Text(
+                text = if (expanded) "Less" else "More",
+                style = AppTypography.labelLarge,
+                fontWeight = FontWeight.Medium,
+                color = Color.White,
+                modifier = Modifier
+                    .pressable { expanded = !expanded }
+                    .padding(vertical = Dimens.spacing4)
+            )
+        }
     }
 }
 
@@ -2350,7 +2392,7 @@ private fun EpisodesTabContent(
     hazeState: HazeState? = null
 ) {
     val seasonEpisodes = remember(detail.episodes, selectedSeason) {
-        detail.episodes.filter { it.seasonNumber == selectedSeason }.ifEmpty { detail.episodes }
+        detail.episodes.filter { it.seasonNumber == selectedSeason }
     }
     var expandedEpisodeId by remember { mutableStateOf<String?>(null) }
     val reduceMotion = LocalReduceMotion.current
@@ -2371,9 +2413,13 @@ private fun EpisodesTabContent(
             // Glass dropdown
             val dropdownInteractionSource = remember { MutableInteractionSource() }
             val isDropdownPressed by dropdownInteractionSource.collectIsPressedAsState()
+            val dropdownHaptic = LocalHapticFeedback.current
             val dropdownScale by animateFloatAsState(
-                targetValue = if (isDropdownPressed && !reduceMotion) 0.98f else 1f,
-                animationSpec = tween(120),
+                targetValue = if (isDropdownPressed && !reduceMotion) 0.96f else 1f,
+                animationSpec = if (reduceMotion) snap() else spring(
+                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    stiffness = Spring.StiffnessMedium
+                ),
                 label = "dropdownScale"
             )
 
@@ -2389,7 +2435,12 @@ private fun EpisodesTabContent(
                         indication = null,
                         role = Role.Button,
                         onClickLabel = "Select season, currently Season $selectedSeason",
-                        onClick = onSelectSeason
+                        onClick = {
+                            try {
+                                dropdownHaptic.performHapticFeedback(HapticFeedbackType.Confirm)
+                            } catch (_: Throwable) {}
+                            onSelectSeason()
+                        }
                     ),
                 contentAlignment = Alignment.CenterStart
             ) {
@@ -2476,49 +2527,68 @@ private fun EpisodesTabContent(
             label = "episodesListTransition"
         ) { currentSeason ->
             val episodesForCurrentSeason = remember(detail.episodes, currentSeason) {
-                detail.episodes.filter { it.seasonNumber == currentSeason }.ifEmpty { detail.episodes }
+                detail.episodes.filter { it.seasonNumber == currentSeason }
             }
 
             Column(modifier = Modifier.fillMaxWidth()) {
-                episodesForCurrentSeason.forEachIndexed { index, episode ->
-                    val playback = episodePlaybackMap[episode.seasonNumber to episode.episodeNumber]
-                    val progress = if (playback != null && playback.durationMs > 0) {
-                        (playback.currentPositionMs.toFloat() / playback.durationMs.toFloat()).coerceIn(0f, 1f)
-                    } else 0f
-                    val isWatched = playback?.isCompleted == true || (playback != null && playback.durationMs > 0 && playback.currentPositionMs >= (playback.durationMs * 0.9f).toLong())
-                    val isExpanded = expandedEpisodeId == episode.id
-
-                    val epDownload = downloads.firstOrNull {
-                        (it.episodeId != null && it.episodeId == episode.id) ||
-                        (it.seasonNumber == episode.seasonNumber && it.episodeNumber == episode.episodeNumber &&
-                            (it.mediaId == detail.id || it.title.contains(detail.title, ignoreCase = true)))
-                    }
-
-                    EpisodeRowItem(
-                        episode = episode,
-                        detail = detail,
-                        progress = progress,
-                        isWatched = isWatched,
-                        isExpanded = isExpanded,
-                        downloadItem = epDownload,
-                        staggerIndex = index,
-                        hazeState = hazeState,
-                        onRowClick = {
-                            expandedEpisodeId = if (isExpanded) null else episode.id
-                        },
-                        onPlayClick = { onPlayEpisode(episode) },
-                        onDownloadClick = { onDownloadEpisode(episode) },
-                        onToggleWatched = { onToggleWatched(episode) },
-                        onAddToPlaylist = { onAddToPlaylistEpisode(episode) }
-                    )
-
-                    // Hairline between every row and after the last one
+                if (episodesForCurrentSeason.isEmpty()) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(0.5.dp)
-                            .background(Color.White.copy(alpha = 0.14f))
-                    )
+                            .padding(vertical = 32.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "No episodes available for this season",
+                            style = TextStyle(
+                                fontFamily = AppFontFamily,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Normal,
+                                color = Color.White.copy(alpha = 0.50f)
+                            )
+                        )
+                    }
+                } else {
+                    episodesForCurrentSeason.forEachIndexed { index, episode ->
+                        val playback = episodePlaybackMap[episode.seasonNumber to episode.episodeNumber]
+                        val progress = if (playback != null && playback.durationMs > 0) {
+                            (playback.currentPositionMs.toFloat() / playback.durationMs.toFloat()).coerceIn(0f, 1f)
+                        } else 0f
+                        val isWatched = playback?.isCompleted == true || (playback != null && playback.durationMs > 0 && playback.currentPositionMs >= (playback.durationMs * 0.9f).toLong())
+                        val isExpanded = expandedEpisodeId == episode.id
+
+                        val epDownload = downloads.firstOrNull {
+                            (it.episodeId != null && it.episodeId == episode.id) ||
+                            (it.seasonNumber == episode.seasonNumber && it.episodeNumber == episode.episodeNumber &&
+                                (it.mediaId == detail.id || it.title.contains(detail.title, ignoreCase = true)))
+                        }
+
+                        EpisodeRowItem(
+                            episode = episode,
+                            detail = detail,
+                            progress = progress,
+                            isWatched = isWatched,
+                            isExpanded = isExpanded,
+                            downloadItem = epDownload,
+                            staggerIndex = index,
+                            hazeState = hazeState,
+                            onRowClick = {
+                                expandedEpisodeId = if (isExpanded) null else episode.id
+                            },
+                            onPlayClick = { onPlayEpisode(episode) },
+                            onDownloadClick = { onDownloadEpisode(episode) },
+                            onToggleWatched = { onToggleWatched(episode) },
+                            onAddToPlaylist = { onAddToPlaylistEpisode(episode) }
+                        )
+
+                        // Hairline between every row and after the last one
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(0.5.dp)
+                                .background(Color.White.copy(alpha = 0.14f))
+                        )
+                    }
                 }
             }
         }

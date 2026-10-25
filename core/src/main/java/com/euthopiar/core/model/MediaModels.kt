@@ -123,6 +123,25 @@ data class EpisodeItem(
     val availableLanguages: List<String> = emptyList()
 )
 
+enum class StreamContainer {
+    AUTO,
+    HLS,
+    DASH,
+    MP4,
+    MKV,
+    WEBM,
+    TS,
+    P2P
+}
+
+@Serializable
+data class DrmConfig(
+    val scheme: String = "clearkey",
+    val licenseUrl: String? = null,
+    val headers: Map<String, String> = emptyMap(),
+    val clearKeys: Map<String, String> = emptyMap()
+)
+
 @Immutable
 @Serializable
 data class StreamSource(
@@ -136,8 +155,26 @@ data class StreamSource(
     val headers: Map<String, String> = emptyMap(), // Referer, Origin, User-Agent
     val responseHeaders: Map<String, String> = emptyMap(),
     val infoHash: String? = null,
-    val seeders: Int? = null
+    val seeders: Int? = null,
+    val fileIdx: Int? = null,
+    val addonId: String? = null,
+    val season: Int? = null,
+    val episode: Int? = null,
+    val subtitles: List<SubtitleTrack> = emptyList(),
+    val matchScore: Double = 0.0,
+    val size: String? = null,
+    val isCached: Boolean = false,
+    val hdrType: String? = null,
+    val codec: String? = null,
+    val addonName: String? = null,
+    val container: StreamContainer = if (isM3u8) StreamContainer.HLS else StreamContainer.AUTO,
+    val drm: DrmConfig? = null,
+    val trackers: List<String> = emptyList(),
+    val manifestContent: String? = null
 ) {
+    val server: String get() = serverName
+    val isM3M8: Boolean get() = isM3u8
+
     // Secondary constructor to ensure positional arguments StreamSource(url, quality, isM3u8, headers) compile identically
     constructor(
         url: String,
@@ -155,7 +192,74 @@ data class StreamSource(
         headers = headers,
         responseHeaders = emptyMap(),
         infoHash = null,
-        seeders = null
+        seeders = null,
+        fileIdx = null,
+        addonId = null,
+        season = null,
+        episode = null,
+        subtitles = emptyList(),
+        matchScore = 0.0,
+        size = null,
+        isCached = false,
+        hdrType = null,
+        codec = null,
+        addonName = null,
+        container = if (isM3u8) StreamContainer.HLS else StreamContainer.AUTO,
+        drm = null,
+        trackers = emptyList(),
+        manifestContent = null
+    )
+
+    constructor(
+        server: String,
+        url: String,
+        quality: String = "Auto",
+        isM3M8: Boolean = false,
+        headers: Map<String, String> = emptyMap(),
+        subtitles: List<SubtitleTrack> = emptyList(),
+        infoHash: String? = null,
+        seeders: Int? = null,
+        fileIdx: Int? = null,
+        addonId: String? = null,
+        season: Int? = null,
+        episode: Int? = null,
+        audioTracks: List<AudioTrackDescriptor> = emptyList(),
+        releaseType: AudioReleaseType = AudioReleaseType.ORIGINAL,
+        responseHeaders: Map<String, String> = emptyMap(),
+        resolutionLabel: String = quality,
+        matchScore: Double = 0.0,
+        size: String? = null,
+        isCached: Boolean = false,
+        hdrType: String? = null,
+        codec: String? = null,
+        addonName: String? = null
+    ) : this(
+        url = url,
+        serverName = server,
+        resolutionLabel = resolutionLabel,
+        quality = quality,
+        isM3u8 = isM3M8,
+        audioTracks = audioTracks,
+        releaseType = releaseType,
+        headers = headers,
+        responseHeaders = responseHeaders,
+        infoHash = infoHash,
+        seeders = seeders,
+        fileIdx = fileIdx,
+        addonId = addonId,
+        season = season,
+        episode = episode,
+        subtitles = subtitles,
+        matchScore = matchScore,
+        size = size,
+        isCached = isCached,
+        hdrType = hdrType,
+        codec = codec,
+        addonName = addonName,
+        container = if (isM3M8) StreamContainer.HLS else StreamContainer.AUTO,
+        drm = null,
+        trackers = emptyList(),
+        manifestContent = null
     )
 }
 
@@ -163,8 +267,13 @@ data class StreamSource(
 @Serializable
 data class SubtitleTrack(
     val url: String,
-    val language: String
-)
+    val language: String,
+    val headers: Map<String, String> = emptyMap(),
+    val name: String = language,
+    val mimeType: String? = null
+) {
+    val lang: String get() = language
+}
 
 @Immutable
 data class StreamResult(
@@ -181,7 +290,10 @@ data class DownloadOption(
     val url: String,
     val source: String,
     val provider: String? = null,
-    val headers: Map<String, String> = emptyMap()
+    val headers: Map<String, String> = emptyMap(),
+    val isM3u8: Boolean = false,
+    val container: StreamContainer = if (isM3u8) StreamContainer.HLS else StreamContainer.AUTO,
+    val trackers: List<String> = emptyList()
 )
 
 @Immutable

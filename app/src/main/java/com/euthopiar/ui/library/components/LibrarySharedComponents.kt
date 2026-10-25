@@ -3,6 +3,7 @@ package com.euthopiar.ui.library.components
 import android.os.Build
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -216,17 +217,28 @@ fun LibraryAmbientHazeBackground(
     val isAmoled = LocalAmoledMode.current
     val baseBg = if (isAmoled) Color.Black else LibraryColors.Background
 
-    val (topBlobColor, bottomBlobColor) = when (tabIndex) {
+    val (rawTopColor, rawBottomColor) = when (tabIndex) {
         0 -> LibraryColors.HazeTeal to LibraryColors.HazeIndigo
         2 -> LibraryColors.HazeViolet to LibraryColors.HazeIndigo
         else -> LibraryColors.HazeIndigo to LibraryColors.HazeRose
     }
+    val topBlobColor by animateColorAsState(
+        targetValue = rawTopColor,
+        animationSpec = tween(durationMillis = if (reduceMotion) 0 else 350, easing = FastOutSlowInEasing),
+        label = "topBlobColor"
+    )
+    val bottomBlobColor by animateColorAsState(
+        targetValue = rawBottomColor,
+        animationSpec = tween(durationMillis = if (reduceMotion) 0 else 350, easing = FastOutSlowInEasing),
+        label = "bottomBlobColor"
+    )
 
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .background(baseBg)
-            .hazeSource(state = hazeState)
+    Box(modifier = modifier.fillMaxSize()) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(baseBg)
+                .hazeSource(state = hazeState)
             .drawBehind {
                 if (!isAmoled) {
                     val effectiveDrift1 = if (reduceMotion) 0f else drift1.value
@@ -262,6 +274,7 @@ fun LibraryAmbientHazeBackground(
             }
     ) {
         content()
+    }
     }
 }
 

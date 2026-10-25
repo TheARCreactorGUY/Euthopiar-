@@ -10,14 +10,15 @@ import androidx.compose.ui.unit.dp
  */
 object GlassDefaults {
     val BlurRadius: Dp = 24.dp
-    const val TintAlpha: Float = 0.10f
+    const val TintAlpha: Float = 0.08f
     val TintColor: Color = Color.White.copy(alpha = TintAlpha)
-    const val NoiseFactor: Float = 0.03f
+    const val NoiseFactor: Float = 0.045f
 
     val BorderBrush: Brush = Brush.verticalGradient(
         listOf(
-            Color.White.copy(alpha = 0.25f),
-            Color.White.copy(alpha = 0.05f)
+            Color.White.copy(alpha = 0.35f),
+            Color.White.copy(alpha = 0.14f),
+            Color.White.copy(alpha = 0.06f)
         )
     )
 

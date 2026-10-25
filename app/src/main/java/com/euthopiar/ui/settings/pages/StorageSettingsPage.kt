@@ -13,9 +13,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.CheckCircleOutline
 import androidx.compose.material.icons.outlined.CleaningServices
 import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.SettingsBackupRestore
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -32,14 +36,18 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.euthopiar.data.backup.BackupSummary
 import com.euthopiar.ui.components.EuthopiarGlassDialog
 import com.euthopiar.ui.settings.components.*
 import com.euthopiar.ui.theme.AppFontFamily
 import com.euthopiar.ui.theme.LocalReduceMotion
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 
 /**
@@ -92,8 +100,19 @@ fun StorageSettingsPage(
     var showClearConfirmation by remember { mutableStateOf(false) }
     var isDrainAnimating by remember { mutableStateOf(false) }
     var startingDrainBytes by remember { mutableStateOf(0L) }
-    var isExporting by remember { mutableStateOf(false) }
-    var isImporting by remember { mutableStateOf(false) }
+
+    val backupUiState by viewModel.backupUiState.collectAsState()
+    val isExporting = backupUiState is BackupUiState.Exporting
+    val isImporting = backupUiState is BackupUiState.Inspecting || backupUiState is BackupUiState.Restoring
+
+    // Handle toast notification for export completion
+    LaunchedEffect(backupUiState) {
+        val state = backupUiState
+        if (state is BackupUiState.ExportSuccess) {
+            Toast.makeText(context, state.message, Toast.LENGTH_SHORT).show()
+            viewModel.dismissBackupState()
+        }
+    }
 
     // Animated float tracking the displayed byte size for the 550ms countdown roll-down
     val animatedByteSize = remember { Animatable(cacheSizeBytes.toFloat().coerceAtLeast(0f)) }
@@ -132,8 +151,23 @@ fun StorageSettingsPage(
                 val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                 context.contentResolver.takePersistableUriPermission(uri, flags)
             } catch (_: Exception) {}
-            val path = uri.path ?: uri.toString()
-            viewModel.setCustomDownloadDir(path)
+            val resolvedPath = try {
+                val docId = android.provider.DocumentsContract.getTreeDocumentId(uri)
+                val split = docId.split(":")
+                val type = split.getOrNull(0) ?: ""
+                val relativePath = split.getOrNull(1)?.trim('/') ?: ""
+                if (type.equals("primary", ignoreCase = true)) {
+                    val base = android.os.Environment.getExternalStorageDirectory().absolutePath
+                    if (relativePath.isNotEmpty()) "$base/$relativePath" else base
+                } else if (type.isNotBlank()) {
+                    if (relativePath.isNotEmpty()) "/storage/$type/$relativePath" else "/storage/$type"
+                } else {
+                    uri.path ?: uri.toString()
+                }
+            } catch (_: Exception) {
+                uri.path ?: uri.toString()
+            }
+            viewModel.setCustomDownloadDir(resolvedPath)
             Toast.makeText(context, "Download directory updated", Toast.LENGTH_SHORT).show()
         }
     }
@@ -142,12 +176,7 @@ fun StorageSettingsPage(
         contract = ActivityResultContracts.CreateDocument("application/json")
     ) { uri ->
         if (uri != null) {
-            viewModel.exportConfiguration(uri) { _, msg ->
-                isExporting = false
-                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-            }
-        } else {
-            isExporting = false
+            viewModel.exportConfiguration(uri)
         }
     }
 
@@ -155,12 +184,7 @@ fun StorageSettingsPage(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) {
-            viewModel.importConfiguration(uri) { _, msg ->
-                isImporting = false
-                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-            }
-        } else {
-            isImporting = false
+            viewModel.inspectBackup(uri)
         }
     }
 
@@ -172,49 +196,48 @@ fun StorageSettingsPage(
 
         coroutineScope.launch {
             try {
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
             } catch (_: Exception) {}
 
-            val startTime = System.currentTimeMillis()
-            // Await actual IO file deletion to prevent race condition
+            // Await actual IO file deletion
             viewModel.clearCacheSuspend()
-            val elapsed = System.currentTimeMillis() - startTime
-            if (elapsed < 350L) {
-                delay(350L - elapsed)
-            }
 
             if (reduceMotion) {
                 // Immediate update for reduced motion
                 animatedByteSize.snapTo(0f)
                 isDrainAnimating = false
             } else {
-                // Signature 550ms cubic-bezier roll-down & bar drain
+                // Snappy 220ms cubic-bezier roll-down & bar drain
                 val drainEasing = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
 
                 launch {
                     animatedByteSize.animateTo(
                         targetValue = 0f,
-                        animationSpec = tween(durationMillis = 550, easing = drainEasing)
+                        animationSpec = tween(durationMillis = 220, easing = drainEasing)
                     )
                 }
 
-                delay(550L)
+                delay(220L)
 
-                // Track Release Pulse (400ms sweep shimmer)
+                // Track Release Pulse (200ms sweep shimmer)
                 launch {
                     trackPulseAlpha.animateTo(
                         targetValue = 0.20f,
-                        animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)
+                        animationSpec = tween(durationMillis = 100, easing = FastOutSlowInEasing)
                     )
                     trackPulseAlpha.animateTo(
                         targetValue = 0f,
-                        animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)
+                        animationSpec = tween(durationMillis = 100, easing = FastOutSlowInEasing)
                     )
                 }
 
-                delay(400L)
+                delay(200L)
                 isDrainAnimating = false
             }
+
+            try {
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            } catch (_: Exception) {}
 
             Toast.makeText(context, "Cache cleared successfully", Toast.LENGTH_SHORT).show()
         }
@@ -513,11 +536,10 @@ fun StorageSettingsPage(
 
         OpenSettingsRow(
             title = "Export configuration",
-            subtitle = "Save preferences and repository list to JSON (secrets excluded)",
-            enabled = !isExporting,
+            subtitle = "Save preferences, user profiles, and repository configurations to JSON",
+            enabled = !isExporting && !isImporting,
             onClick = {
-                if (!isExporting) {
-                    isExporting = true
+                if (!isExporting && !isImporting) {
                     val timestamp = System.currentTimeMillis() / 1000
                     exportLauncher.launch("euthopiar_backup_$timestamp.json")
                 }
@@ -542,12 +564,11 @@ fun StorageSettingsPage(
 
         OpenSettingsRow(
             title = "Import configuration",
-            subtitle = "Restore app layout and repository sources from backup file",
-            enabled = !isImporting,
+            subtitle = "Restore app layout, user profiles, and repository sources from backup file",
+            enabled = !isImporting && !isExporting,
             onClick = {
-                if (!isImporting) {
-                    isImporting = true
-                    importLauncher.launch(arrayOf("application/json", "text/*"))
+                if (!isImporting && !isExporting) {
+                    importLauncher.launch(arrayOf("application/json", "text/*", "*/*"))
                 }
             },
             trailingContent = {
@@ -568,7 +589,7 @@ fun StorageSettingsPage(
             }
         )
 
-        // Shared Glass Confirmation Dialog
+        // Shared Glass Confirmation Dialog for Cache Clear
         if (showClearConfirmation) {
             EuthopiarGlassDialog(
                 title = "Clear image & HTTP cache?",
@@ -580,5 +601,174 @@ fun StorageSettingsPage(
                 onDismiss = { showClearConfirmation = false }
             )
         }
+
+        // Configuration Restore Confirmation Dialog with Glass Inspection Preview Card
+        when (val state = backupUiState) {
+            is BackupUiState.ReadyToRestore -> {
+                EuthopiarGlassDialog(
+                    title = "Restore configuration?",
+                    message = "Restoring this backup will replace current settings, profiles, and repository configurations.",
+                    confirmText = "Restore backup",
+                    dismissText = "Cancel",
+                    icon = Icons.Outlined.SettingsBackupRestore,
+                    itemPreview = {
+                        BackupInspectionPreviewCard(state.inspection.summary)
+                    },
+                    onConfirm = {
+                        viewModel.confirmRestore(state.inspection)
+                    },
+                    onDismiss = {
+                        viewModel.dismissBackupState()
+                    }
+                )
+            }
+            is BackupUiState.RestoreSuccess -> {
+                EuthopiarGlassDialog(
+                    title = "Backup restored",
+                    message = "Configuration has been restored successfully. Restart Euthopiar now to apply all changes.",
+                    confirmText = "Restart now",
+                    dismissText = "Later",
+                    icon = Icons.Outlined.CheckCircleOutline,
+                    onConfirm = {
+                        restartApp(context)
+                    },
+                    onDismiss = {
+                        viewModel.dismissBackupState()
+                    }
+                )
+            }
+            is BackupUiState.RestoreError -> {
+                EuthopiarGlassDialog(
+                    title = "Restore failed",
+                    message = state.message,
+                    confirmText = "Dismiss",
+                    dismissText = null,
+                    icon = Icons.Outlined.ErrorOutline,
+                    onConfirm = {
+                        viewModel.dismissBackupState()
+                    }
+                )
+            }
+            is BackupUiState.ExportError -> {
+                EuthopiarGlassDialog(
+                    title = "Export failed",
+                    message = state.message,
+                    confirmText = "Dismiss",
+                    dismissText = null,
+                    icon = Icons.Outlined.ErrorOutline,
+                    onConfirm = {
+                        viewModel.dismissBackupState()
+                    }
+                )
+            }
+            else -> {}
+        }
+    }
+}
+
+/**
+ * Editorial Frosted-Glass Card displaying metadata of a verified configuration snapshot before restore.
+ */
+@Composable
+private fun BackupInspectionPreviewCard(summary: BackupSummary?) {
+    if (summary == null) return
+
+    val formattedDate = remember(summary.exportedAt) {
+        if (summary.exportedAt > 0L) {
+            val sdf = SimpleDateFormat("MMM d, yyyy · h:mm a", Locale.getDefault())
+            sdf.format(Date(summary.exportedAt))
+        } else {
+            "Unknown date"
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color.White.copy(alpha = 0.05f))
+            .border(0.5.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(14.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "BACKUP SNAPSHOT",
+                style = TextStyle(
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    letterSpacing = 0.12.em,
+                    color = Color.White.copy(alpha = 0.45f)
+                )
+            )
+            Text(
+                text = formattedDate,
+                style = TextStyle(
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Normal,
+                    color = Color.White.copy(alpha = 0.65f)
+                )
+            )
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(0.5.dp)
+                .background(Color.White.copy(alpha = 0.10f))
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceAround
+        ) {
+            BackupStatItem(label = "Settings", count = summary.preferencesCount)
+            BackupStatItem(label = "Profiles", count = summary.profilesCount)
+            BackupStatItem(label = "Sources", count = summary.repositoriesCount)
+            BackupStatItem(label = "Addons", count = summary.addonsCount)
+        }
+    }
+}
+
+@Composable
+private fun BackupStatItem(label: String, count: Int) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            text = count.toString(),
+            style = TextStyle(
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Medium,
+                color = Color.White
+            )
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            text = label,
+            style = TextStyle(
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Normal,
+                color = Color.White.copy(alpha = 0.50f)
+            )
+        )
+    }
+}
+
+/**
+ * Clean application restart trigger recreating the task cleanly.
+ */
+private fun restartApp(context: android.content.Context) {
+    try {
+        val pm = context.packageManager
+        val intent = pm.getLaunchIntentForPackage(context.packageName)
+        val componentName = intent?.component
+        val restartIntent = Intent.makeRestartActivityTask(componentName)
+        context.startActivity(restartIntent)
+        Runtime.getRuntime().exit(0)
+    } catch (e: Exception) {
+        android.util.Log.e("StorageSettings", "Failed to restart app: ${e.message}", e)
     }
 }

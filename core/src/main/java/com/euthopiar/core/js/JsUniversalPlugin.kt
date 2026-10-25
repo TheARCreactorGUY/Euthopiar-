@@ -58,14 +58,22 @@ class JsUniversalPlugin(
         val tmdbId = parts.getOrNull(0) ?: episodeData
         val season = parts.getOrNull(1)?.toIntOrNull()
         val episode = parts.getOrNull(2)?.toIntOrNull()
+        val isAnimeOnly = scraper.supportedTypes.any { it.equals("anime", ignoreCase = true) } &&
+                !scraper.supportedTypes.any { it.equals("tv", ignoreCase = true) || it.equals("series", ignoreCase = true) }
+        val isExplicitAnime = episodeData.contains(":anime:") || episodeData.startsWith("anime:")
         val isTv = season != null && episode != null
+        val mediaType = when {
+            isAnimeOnly || isExplicitAnime -> "anime"
+            isTv -> "tv"
+            else -> "movie"
+        }
 
         emit(StreamEmission.StatusUpdate(scraper.name, "Resolving streams..."))
         try {
             val results = PluginRuntime.executePlugin(
                 code = scraper.code,
                 tmdbId = tmdbId,
-                mediaType = if (isTv) "tv" else "movie",
+                mediaType = mediaType,
                 season = season,
                 episode = episode,
                 scraperId = scraper.id,
@@ -74,7 +82,7 @@ class JsUniversalPlugin(
 
             for (res in results) {
                 val serverName = if (res.name != null) "${scraper.name} (${res.name})" else scraper.name
-                val source = res.toStreamSource().copy(
+                val source = res.toStreamSource(scraper.formats).copy(
                     serverName = serverName
                 )
                 emit(StreamEmission.SourceFound(source))

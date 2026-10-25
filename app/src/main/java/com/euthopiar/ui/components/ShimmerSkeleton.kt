@@ -278,7 +278,7 @@ fun HomeScreenSkeleton(
                 }
                 Spacer(modifier = Modifier.height(Dimens.spacing16))
                 // Action Buttons
-                Row(horizontalArrangement = Arrangement.spacedBy(Dimens.spacing12)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(Dimens.spacing8)) {
                     ShimmerBox(
                         modifier = Modifier
                             .width(120.dp)
@@ -289,6 +289,11 @@ fun HomeScreenSkeleton(
                         modifier = Modifier
                             .width(110.dp)
                             .height(Dimens.buttonHeight),
+                        shape = ShapeFull
+                    )
+                    ShimmerBox(
+                        modifier = Modifier
+                            .size(Dimens.buttonHeight),
                         shape = ShapeFull
                     )
                 }

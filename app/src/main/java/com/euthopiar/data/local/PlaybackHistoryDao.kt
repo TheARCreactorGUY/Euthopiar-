@@ -32,6 +32,9 @@ interface PlaybackHistoryDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(item: PlaybackHistoryEntity)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertBatch(items: List<PlaybackHistoryEntity>)
+
     @Query("UPDATE playback_history SET isDismissedFromContinueWatching = 1 WHERE id = :id")
     suspend fun dismissFromContinueWatching(id: String)
 

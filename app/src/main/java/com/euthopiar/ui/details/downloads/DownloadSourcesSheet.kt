@@ -145,6 +145,17 @@ fun DownloadSourcesSheet(
     val mediaType = if (detail.type == MediaType.TV_SERIES || detail.type == MediaType.ANIME) "tv" else "movie"
 
     LaunchedEffect(detail.id, s, e) {
+        val detailImdb = detail.imdbId
+        val resolvedImdb = if (!detailImdb.isNullOrBlank() && detailImdb.startsWith("tt")) {
+            detailImdb
+        } else {
+            withContext(Dispatchers.IO) {
+                com.euthopiar.core.util.TmdbBridge.resolveImdbId(
+                    type = detail.type,
+                    tmdbId = detail.id
+                )
+            }
+        }
         StreamsRepository.load(
             type = mediaType,
             videoId = detail.id,
@@ -152,7 +163,8 @@ fun DownloadSourcesSheet(
             episode = e,
             title = detail.title,
             year = detail.year,
-            forceRefresh = false
+            forceRefresh = false,
+            imdbId = resolvedImdb ?: detail.imdbId
         )
     }
 
@@ -188,7 +200,7 @@ fun DownloadSourcesSheet(
 
     val executeStreamDownload: (StreamItem, String) -> Unit = { stream, streamKey ->
         val cleanKey = DownloadTokens.getStableStreamKey(stream)
-        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        haptic.performHapticFeedback(HapticFeedbackType.Confirm)
         activeDownloadStreamId = cleanKey
         activeDownloadState = StreamDownloadState.STARTING
 
@@ -232,9 +244,13 @@ fun DownloadSourcesSheet(
                         onDownloadStarted("Unrestricting with ${effectiveProvider.displayName}...")
                         val resolveResult = withContext(Dispatchers.IO) {
                             DebridManager.getInstance().resolveStream(
-                                effectiveProvider,
-                                apiKey,
-                                magnet
+                                providerType = effectiveProvider,
+                                apiKey = apiKey,
+                                linkOrMagnet = magnet,
+                                fileIdx = stream.fileIdx,
+                                season = effectiveEpisode?.seasonNumber,
+                                episode = effectiveEpisode?.episodeNumber,
+                                originalResolutionLabel = stream.quality
                             )
                         }
 
@@ -253,6 +269,9 @@ fun DownloadSourcesSheet(
                                 stream = directStream
                             )
                             if (enqueued) {
+                                try {
+                                    haptic.performHapticFeedback(HapticFeedbackType.Confirm)
+                                } catch (_: Throwable) {}
                                 activeDownloadState = StreamDownloadState.ADDED
                                 delay(DownloadTokens.DISMISS_DELAY_MS)
                                 onDownloadStarted("Downloading $cleanQuality...")
@@ -275,6 +294,9 @@ fun DownloadSourcesSheet(
                                 stream = torrentStream
                             )
                             if (enqueued) {
+                                try {
+                                    haptic.performHapticFeedback(HapticFeedbackType.Confirm)
+                                } catch (_: Throwable) {}
                                 activeDownloadState = StreamDownloadState.ADDED
                                 delay(DownloadTokens.DISMISS_DELAY_MS)
                                 onDownloadStarted("Starting Native P2P Download...")
@@ -365,7 +387,8 @@ fun DownloadSourcesSheet(
             episode = e,
             title = detail.title,
             year = detail.year,
-            forceRefresh = true
+            forceRefresh = true,
+            imdbId = detail.imdbId
         )
     }
 

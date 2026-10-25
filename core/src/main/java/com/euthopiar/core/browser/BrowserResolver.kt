@@ -1,6 +1,25 @@
 package com.euthopiar.core.browser
 
 /**
+ * Sniffed media resource captured during browser resolution.
+ */
+data class SniffedMediaResource(
+    val url: String,
+    val headers: Map<String, String> = emptyMap(),
+    val mimeType: String? = null,
+    val isSubtitles: Boolean = false
+)
+
+/**
+ * Sniffed subtitle resource captured during browser resolution.
+ */
+data class SniffedSubtitleResource(
+    val url: String,
+    val lang: String = "Unknown",
+    val name: String = "Unknown"
+)
+
+/**
  * Request payload for resolving dynamic or protected web pages via the Host Browser Engine.
  */
 data class BrowserResolveRequest(
@@ -11,7 +30,11 @@ data class BrowserResolveRequest(
     val waitForSelector: String? = null,
     val waitForText: String? = null,
     val urlSniffRegex: Regex? = null,
-    val evaluateJsAfterLoad: String? = null
+    val evaluateJsAfterLoad: String? = null,
+    val stopOnFirstMediaMatch: Boolean = false,
+    val extraDelayAfterLoadMs: Long = 0L,
+    val autoClickPlaySelectors: Boolean = true,
+    val autoClickServers: Boolean = false
 )
 
 /**
@@ -24,7 +47,9 @@ data class BrowserResolveResult(
     val cookieString: String,
     val userAgent: String,
     val sniffedUrls: List<String> = emptyList(),
-    val jsResult: String? = null
+    val jsResult: String? = null,
+    val sniffedMedia: List<SniffedMediaResource> = emptyList(),
+    val sniffedSubtitles: List<SniffedSubtitleResource> = emptyList()
 )
 
 /**

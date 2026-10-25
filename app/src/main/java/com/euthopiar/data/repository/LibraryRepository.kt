@@ -94,6 +94,28 @@ class LibraryRepository(
         }
     }
 
+    suspend fun setWatchlistStatus(item: MediaItem, status: String) {
+        val profileId = currentProfileId()
+        val existing = watchlistDao.getWatchlistItem(item.id, profileId)
+        if (existing != null) {
+            watchlistDao.updateStatus(item.id, status, profileId)
+        } else {
+            val entity = WatchlistEntity(
+                mediaId = item.id,
+                profileId = profileId,
+                title = item.title,
+                posterUrl = item.posterUrl,
+                backdropUrl = item.backdropUrl,
+                mediaType = item.type.name,
+                rating = item.rating?.toDoubleOrNull(),
+                year = item.year,
+                status = status,
+                addedTimestamp = System.currentTimeMillis()
+            )
+            watchlistDao.insert(entity)
+        }
+    }
+
     suspend fun toggleWatchlist(item: MediaItem): Boolean {
         val profileId = currentProfileId()
         val exists = watchlistDao.countWatchlist(item.id, profileId) > 0
@@ -157,6 +179,20 @@ class LibraryRepository(
         for (item in items) {
             watchlistDao.insert(item.copy(profileId = profileId))
         }
+    }
+
+    suspend fun insertPlaybackHistoryBatch(items: List<PlaybackHistoryEntity>) {
+        if (items.isEmpty()) return
+        val profileId = currentProfileId()
+        val scoped = items.map { entity ->
+            val properId = if (entity.id.contains("::")) {
+                entity.id
+            } else {
+                PlaybackHistoryEntity.buildId(entity.provider, entity.mediaId, entity.seasonNumber, entity.episodeNumber, profileId)
+            }
+            entity.copy(id = properId, profileId = profileId)
+        }
+        playbackHistoryDao.upsertBatch(scoped)
     }
 
     suspend fun addToWatchlist(

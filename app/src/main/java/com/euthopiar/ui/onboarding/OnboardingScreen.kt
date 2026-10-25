@@ -3,62 +3,65 @@ package com.euthopiar.ui.onboarding
 import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.res.painterResource
-import coil3.compose.AsyncImage
-import coil3.request.ImageRequest
-import coil3.request.crossfade
-import com.euthopiar.ui.icons.EuthopiarIcons
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.rounded.ArrowForward
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.LockOpen
-import androidx.compose.material.icons.filled.Upload
-import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.Dashboard
-import androidx.compose.material.icons.rounded.GridView
-import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.ViewAgenda
-import androidx.compose.material.icons.rounded.ViewStream
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -66,17 +69,39 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
+import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.request.crossfade
+import coil3.request.error
+import coil3.request.fallback
 import com.euthopiar.data.preferences.CardScaleMode
 import com.euthopiar.data.preferences.NavbarStyle
 import com.euthopiar.data.preferences.PreferencesRepository
@@ -84,74 +109,102 @@ import com.euthopiar.data.profile.CustomAvatarRepository
 import com.euthopiar.data.profile.ProfileManager
 import com.euthopiar.data.profile.ProfileType
 import com.euthopiar.data.profile.defaultAvatarPresets
-import com.euthopiar.ui.components.DropdownOption
-import com.euthopiar.ui.components.GlassDropdownRow
-import com.euthopiar.ui.components.OnboardingStepHeader
-import com.euthopiar.ui.components.PrimaryButton
-import com.euthopiar.ui.profile.DetroitAvatarUploadDialog
+import com.euthopiar.data.profile.hashPin
+import com.euthopiar.ui.icons.EuthopiarIcons
+import com.euthopiar.ui.profile.AvatarWithThinRing
+import com.euthopiar.ui.profile.DashedCircleButton
 import com.euthopiar.ui.profile.DetroitCircleCropDialog
-import com.euthopiar.ui.profile.DetroitPinDialog
 import com.euthopiar.ui.profile.ImageCropUtils
-import com.euthopiar.ui.profile.ProfileAvatarImage
-import com.euthopiar.ui.theme.Accent
-import com.euthopiar.ui.theme.AppTypography
-import com.euthopiar.ui.theme.Dimens
-import com.euthopiar.ui.theme.ShapeFull
-import com.euthopiar.ui.theme.TextPrimary
-import com.euthopiar.ui.theme.TextSecondary
-import com.euthopiar.ui.theme.pressable
+import com.euthopiar.ui.profile.PinCreatorDialog
+import com.euthopiar.ui.profile.ProfileGlassChip
+import com.euthopiar.ui.profile.ProfileGlassPill
+import com.euthopiar.ui.profile.ProfileGlassTokens
+import com.euthopiar.ui.profile.ProfileGlassToggle
+import com.euthopiar.ui.theme.AppFontFamily
+import com.euthopiar.ui.theme.LocalAmoledMode
+import com.euthopiar.ui.theme.LocalReduceMotion
+import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.hazeSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.withContext
 
 /**
- * The Cinematic Sanctuary Gateway (Onboarding Flow).
- * Organized into a 3-Act interactive experience:
- * - Act I: The Sanctuary (Drifting Marquee with seamless DstIn feathering & manifesto)
- * - Act II: The Persona (Detroit Profile Creator — creates user's main profile)
- * - Act III: The Canvas (Live interactive canvas preview of navigation & card density)
+ * Redesigned 3-Page First-Launch Onboarding Flow for Euthopiar.
+ *
+ * Page 1: Welcome (Edge-to-edge drifting poster collage + manifesto + "Get started" pill)
+ * Page 2: Profile Creation (Full-screen Settings profile component)
+ * Page 3: Customize (Live preview card + mini navbar + Posters & Appearance segmented controls + "Enter Euthopiar" pill)
  */
 @Composable
 fun OnboardingScreen(
     onComplete: () -> Unit,
     modifier: Modifier = Modifier,
+    viewModel: OnboardingViewModel = viewModel(),
 ) {
-    val pagerState = rememberPagerState(pageCount = { 3 })
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
+    val postersState by viewModel.postersState.collectAsState()
     val haptic = LocalHapticFeedback.current
+    val reduceMotion = LocalReduceMotion.current
+    val isSystemAmoled = LocalAmoledMode.current
 
     val profileManager = remember { ProfileManager.getInstance(context) }
     val preferencesRepository = remember { PreferencesRepository.getInstance(context) }
 
-    val initialNavbarStyle by preferencesRepository.navbarStyle.collectAsState(initial = NavbarStyle.FLOATING)
     val initialCardScale by preferencesRepository.cardScaleMode.collectAsState(initial = CardScaleMode.FLAGSHIP)
+    val preferenceAmoled by preferencesRepository.amoledMode.collectAsState(initial = isSystemAmoled)
 
-    // Act 2 Profile Creator State
+    // Current page: 0 = Welcome, 1 = Profile, 2 = Customize
+    var currentPage by remember { mutableIntStateOf(0) }
+    var previousPage by remember { mutableIntStateOf(0) }
+
+    // Page 2: Profile Creation State
     var profileName by remember { mutableStateOf("") }
     var profileAvatarId by remember { mutableStateOf("avatar_1") }
-    var profileType by remember { mutableStateOf(ProfileType.STANDARD) }
-    var profileIsLocked by remember { mutableStateOf(false) }
-    var profilePin by remember { mutableStateOf<String?>(null) }
+    var profileRole by remember { mutableStateOf(ProfileType.STANDARD) }
+    var isKidsProfile by remember { mutableStateOf(false) }
+    var profilePinHash by remember { mutableStateOf<String?>(null) }
+    var profilePlainPin by remember { mutableStateOf<String?>(null) }
 
-    // Act 3 Canvas State
-    var selectedNavbarStyle by remember(initialNavbarStyle) { mutableStateOf(initialNavbarStyle) }
+    // Page 3: Customize State
     var selectedCardScale by remember(initialCardScale) { mutableStateOf(initialCardScale) }
+    var isAmoledActive by remember(preferenceAmoled) { mutableStateOf(preferenceAmoled) }
 
-    fun finishOnboarding() {
+    var isSubmitting by remember { mutableStateOf(false) }
+    val hazeState = remember { HazeState() }
+
+    // Debounced action runner to prevent rapid double-clicks
+    var isActionInProgress by remember { mutableStateOf(false) }
+    fun executeDebounced(action: () -> Unit) {
+        if (isActionInProgress || isSubmitting) return
+        isActionInProgress = true
+        action()
         coroutineScope.launch {
-            // 1. Commit created profile as the main primary profile
+            kotlinx.coroutines.delay(350)
+            isActionInProgress = false
+        }
+    }
+
+    // Persist and finish onboarding
+    fun finishOnboarding() {
+        if (isSubmitting) return
+        isSubmitting = true
+        coroutineScope.launch {
+            // 1. Commit created profile as the primary profile
             profileManager.setInitialPrimaryProfile(
                 name = profileName.trim().ifEmpty { "Cinephile" },
                 avatarId = profileAvatarId,
-                type = profileType,
-                isLocked = profileIsLocked,
-                pin = profilePin,
+                type = if (isKidsProfile) ProfileType.KIDS else profileRole,
+                isLocked = !profilePinHash.isNullOrBlank() || !profilePlainPin.isNullOrBlank(),
+                pin = profilePlainPin,
             )
 
-            // 2. Persist chosen layout settings
-            preferencesRepository.setNavbarStyle(selectedNavbarStyle)
+            // 2. Persist chosen layout settings (Navbar style silently defaults to Floating)
+            preferencesRepository.setNavbarStyle(NavbarStyle.FLOATING)
             preferencesRepository.setCardScaleMode(selectedCardScale)
+            preferencesRepository.setAmoledMode(isAmoledActive)
 
             // 3. Mark first run completed in DataStore
             preferencesRepository.setFirstRunCompleted(true)
@@ -168,270 +221,309 @@ fun OnboardingScreen(
         }
     }
 
-    Column(
+    fun navigateToPage(page: Int) {
+        if (page != currentPage) {
+            previousPage = currentPage
+            currentPage = page
+        }
+    }
+
+    // System Back handling: go back one step if on page 1 or 2
+    BackHandler(enabled = currentPage > 0) {
+        if (currentPage > 0) {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            navigateToPage(currentPage - 1)
+        }
+    }
+
+    // Base background with atmospheric haze blobs (or pure #000000 with haze OFF in AMOLED)
+    Box(
         modifier = modifier
             .fillMaxSize()
-            .onboardingTwilightBackground()
-            .statusBarsPadding()
-            .navigationBarsPadding(),
+            .onboardingBackground(isAmoled = isAmoledActive)
+            .hazeSource(state = hazeState),
     ) {
-        // Top Navigation Bar
-        if (pagerState.currentPage < 2) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                // Left: Back button (on pages > 0) or brand icon
-                Box(
-                    modifier = Modifier.sizeIn(minWidth = Dimens.minTouchTarget, minHeight = Dimens.minTouchTarget),
-                    contentAlignment = Alignment.CenterStart,
-                ) {
-                    if (pagerState.currentPage > 0) {
-                        Row(
-                            modifier = Modifier
-                                .clip(ShapeFull)
-                                .pressable(
-                                    onClickLabel = "Back",
-                                    onClick = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        coroutineScope.launch {
-                                            pagerState.animateScrollToPage(pagerState.currentPage - 1)
-                                        }
-                                    },
-                                )
-                                .padding(horizontal = 8.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back",
-                                tint = TextSecondary,
-                                modifier = Modifier.size(18.dp),
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "Back",
-                                style = AppTypography.labelLarge.copy(fontSize = 13.sp),
-                                color = TextSecondary,
-                            )
-                        }
-                    } else {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(start = 4.dp),
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.PlayArrow,
-                                contentDescription = null,
-                                tint = Accent,
-                                modifier = Modifier.size(20.dp),
-                            )
-                        }
-                    }
-                }
-
-                // Center: Liquid Jelly Pager Indicator
-                OnboardingJellyIndicator(
-                    pagerState = pagerState,
-                    pageCount = 3,
-                )
-
-                // Right: Skip button
-                Box(
-                    modifier = Modifier.sizeIn(minWidth = Dimens.minTouchTarget, minHeight = Dimens.minTouchTarget),
-                    contentAlignment = Alignment.CenterEnd,
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .clip(ShapeFull)
-                            .background(Color.White.copy(alpha = 0.05f))
-                            .border(1.dp, Color.White.copy(alpha = 0.08f), ShapeFull)
-                            .pressable(
-                                onClickLabel = "Skip onboarding",
-                                onClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    finishOnboarding()
-                                },
-                            )
-                            .padding(horizontal = 14.dp, vertical = 6.dp),
-                    ) {
-                        Text(
-                            text = "Skip",
-                            style = AppTypography.labelMedium.copy(fontSize = 12.sp, fontWeight = FontWeight.Medium),
-                            color = TextSecondary,
-                        )
-                    }
-                }
-            }
-        }
-
-        // Pager Content
-        HorizontalPager(
-            state = pagerState,
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth(),
-        ) { pageIndex ->
-            when (pageIndex) {
-                0 -> Act1TheSanctuary(
-                    onBeginJourney = {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        coroutineScope.launch {
-                            pagerState.animateScrollToPage(1)
-                        }
-                    },
-                )
-
-                1 -> Act2DetroitProfileCreator(
-                    profileName = profileName,
-                    onProfileNameChange = { profileName = it },
-                    avatarId = profileAvatarId,
-                    onAvatarIdChange = { profileAvatarId = it },
-                    type = profileType,
-                    onTypeChange = { profileType = it },
-                    isLocked = profileIsLocked,
-                    pin = profilePin,
-                    onLockToggled = { locked, newPin ->
-                        profileIsLocked = locked
-                        profilePin = newPin
-                    },
-                    onContinue = {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        coroutineScope.launch {
-                            pagerState.animateScrollToPage(2)
-                        }
-                    },
-                )
-
-                2 -> Act3TheCanvas(
-                    selectedNavbarStyle = selectedNavbarStyle,
-                    selectedCardScale = selectedCardScale,
-                    onNavbarStyleChanged = { selectedNavbarStyle = it },
-                    onCardScaleChanged = { selectedCardScale = it },
-                    onBack = {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        coroutineScope.launch {
-                            pagerState.animateScrollToPage(1)
-                        }
-                    },
-                    onSkip = {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        finishOnboarding()
-                    },
-                    onEnterSanctuary = {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        finishOnboarding()
-                    },
-                )
-            }
-        }
-    }
-}
-
-/**
- * Act 1: The Sanctuary — Drifting cinema poster marquee, high-impact wordmark, and manifesto.
- */
-@Composable
-private fun Act1TheSanctuary(
-    onBeginJourney: () -> Unit,
-) {
-    Column(
-        modifier = Modifier.fillMaxSize(),
-    ) {
-        OnboardingPosterMarquee(
-            modifier = Modifier.fillMaxWidth(),
-        )
-
-        Spacer(modifier = Modifier.weight(1f))
-
-        // Brand Narrative Lockup
         Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 24.dp, vertical = 8.dp),
+                .fillMaxSize()
+                .statusBarsPadding(),
         ) {
+            // SHARED SCAFFOLD TOP: Progress Bar (8 dp below inset, 14 dp above top row)
             Box(
                 modifier = Modifier
-                    .clip(ShapeFull)
-                    .background(Accent.copy(alpha = 0.14f))
-                    .border(1.dp, Accent.copy(alpha = 0.35f), ShapeFull)
-                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                    .fillMaxWidth()
+                    .padding(top = 8.dp, bottom = 14.dp)
+                    .padding(horizontal = 20.dp),
+                contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    text = "CINEMATIC SANCTUARY",
-                    style = AppTypography.labelSmall.copy(
-                        fontSize = 10.sp,
-                        letterSpacing = 2.sp,
-                        fontWeight = FontWeight.Bold,
-                    ),
-                    color = Accent,
-                )
+                Box(modifier = Modifier.widthIn(max = 480.dp)) {
+                    OnboardingProgressBar(
+                        currentStep = currentPage + 1,
+                        totalSteps = 3,
+                    )
+                }
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            // SHARED SCAFFOLD TOP: Top Row (40 dp tall: Back circle & Skip chip)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Box(modifier = Modifier.widthIn(max = 480.dp)) {
+                    OnboardingTopRow(
+                        showBackButton = currentPage > 0,
+                        onBack = {
+                            executeDebounced {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                navigateToPage(currentPage - 1)
+                            }
+                        },
+                        onSkip = {
+                            executeDebounced {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                finishOnboarding()
+                            }
+                        },
+                        hazeState = hazeState,
+                        isAmoled = isAmoledActive,
+                    )
+                }
+            }
 
-            Text(
-                text = "EUTHOPIAR",
-                style = AppTypography.displayHero.copy(
-                    fontSize = 34.sp,
-                    letterSpacing = 4.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                ),
-                color = Color.White,
-            )
+            // PAGE CONTENT WITH SLIDE & FADE TRANSITION
+            val movingForward = currentPage >= previousPage
+            AnimatedContent(
+                targetState = currentPage,
+                transitionSpec = {
+                    if (reduceMotion) {
+                        fadeIn(animationSpec = tween(120)) togetherWith fadeOut(animationSpec = tween(100))
+                    } else {
+                        val slideDistance = 24
+                        if (movingForward) {
+                            (fadeIn(animationSpec = tween(300, easing = FastOutSlowInEasing)) +
+                                slideInHorizontally(animationSpec = tween(300, easing = FastOutSlowInEasing)) { slideDistance })
+                                .togetherWith(
+                                    fadeOut(animationSpec = tween(180, easing = FastOutSlowInEasing)) +
+                                        slideOutHorizontally(animationSpec = tween(180, easing = FastOutSlowInEasing)) { -slideDistance }
+                                )
+                        } else {
+                            (fadeIn(animationSpec = tween(300, easing = FastOutSlowInEasing)) +
+                                slideInHorizontally(animationSpec = tween(300, easing = FastOutSlowInEasing)) { -slideDistance })
+                                .togetherWith(
+                                    fadeOut(animationSpec = tween(180, easing = FastOutSlowInEasing)) +
+                                        slideOutHorizontally(animationSpec = tween(180, easing = FastOutSlowInEasing)) { slideDistance }
+                                )
+                        }
+                    }
+                },
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                label = "onboardingPageTransition",
+            ) { targetPage ->
+                when (targetPage) {
+                    0 -> OnboardingPage1Welcome(
+                        isActive = currentPage == 0,
+                        topRowPosters = postersState.topRowPosters,
+                        bottomRowPosters = postersState.bottomRowPosters,
+                        isLoading = postersState.isLoading,
+                        onGetStarted = {
+                            executeDebounced {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                navigateToPage(1)
+                            }
+                        },
+                    )
 
-            Spacer(modifier = Modifier.height(8.dp))
+                    1 -> OnboardingPage2Profile(
+                        profileName = profileName,
+                        onProfileNameChange = { profileName = it },
+                        avatarId = profileAvatarId,
+                        onAvatarIdChange = { profileAvatarId = it },
+                        role = profileRole,
+                        onRoleChange = { profileRole = it },
+                        isKids = isKidsProfile,
+                        onKidsChange = { isKidsProfile = it },
+                        pinHash = profilePinHash,
+                        plainPin = profilePlainPin,
+                        onPinChange = { hash, plain ->
+                            profilePinHash = hash
+                            profilePlainPin = plain
+                        },
+                        onContinue = {
+                            executeDebounced {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                navigateToPage(2)
+                            }
+                        },
+                        hazeState = hazeState,
+                        isAmoled = isAmoledActive,
+                    )
 
-            Text(
-                text = "Your private sanctuary for cinema and series. Unified universal providers, seamless failover, and uncompromising presentation.",
-                style = AppTypography.bodyMedium.copy(
-                    lineHeight = 21.sp,
-                    fontSize = 14.sp,
-                ),
-                color = TextSecondary,
-            )
-
-            Spacer(modifier = Modifier.height(28.dp))
-
-            PrimaryButton(
-                text = "Begin Journey",
-                icon = Icons.AutoMirrored.Rounded.ArrowForward,
-                isAccentRed = true,
-                onClick = onBeginJourney,
-                modifier = Modifier.fillMaxWidth(),
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
+                    2 -> OnboardingPage3Customize(
+                        selectedCardScale = selectedCardScale,
+                        onCardScaleChanged = { selectedCardScale = it },
+                        isAmoled = isAmoledActive,
+                        onAmoledChanged = { enabled ->
+                            isAmoledActive = enabled
+                            coroutineScope.launch {
+                                preferencesRepository.setAmoledMode(enabled)
+                            }
+                        },
+                        isSubmitting = isSubmitting,
+                        previewItems = postersState.previewPosters,
+                        isLoadingPosters = postersState.isLoading,
+                        onEnterSanctuary = {
+                            executeDebounced {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                finishOnboarding()
+                            }
+                        },
+                        hazeState = hazeState,
+                    )
+                }
+            }
         }
     }
 }
 
 /**
- * Act 2: Profile Creator ported from Detroit.
- * Creates the user's primary main profile rather than a prepackaged profile.
+ * PAGE 1: WELCOME
+ * Full-bleed poster collage (304 dp) + text block overlapping by ~40 dp + 52 dp white pill "Get started".
  */
 @Composable
-private fun Act2DetroitProfileCreator(
+private fun OnboardingPage1Welcome(
+    isActive: Boolean,
+    topRowPosters: List<ShowcasePosterItem> = ShowcaseRowTop,
+    bottomRowPosters: List<ShowcasePosterItem> = ShowcaseRowBottom,
+    isLoading: Boolean = false,
+    onGetStarted: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .navigationBarsPadding(),
+    ) {
+        Spacer(modifier = Modifier.height(18.dp))
+
+        // Full-bleed edge-to-edge poster collage
+        OnboardingPosterMarquee(
+            modifier = Modifier.fillMaxWidth(),
+            topRowItems = topRowPosters,
+            bottomRowItems = bottomRowPosters,
+            isLoading = isLoading,
+            isActive = isActive,
+        )
+
+        // Text block + CTA (centered with max width 480 dp on large displays)
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp),
+            contentAlignment = Alignment.BottomCenter,
+        ) {
+            Column(
+                modifier = Modifier
+                    .widthIn(max = 480.dp)
+                    .fillMaxWidth()
+                    .padding(bottom = 24.dp),
+            ) {
+                // Small label above headline
+                Text(
+                    text = "WELCOME",
+                    style = TextStyle(
+                        fontFamily = AppFontFamily,
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 11.sp,
+                        lineHeight = 14.sp,
+                        letterSpacing = 0.12.sp,
+                        color = OnboardingTokens.TextMuted45,
+                    ),
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Big headline: 40 sp Medium, line height 1.0, letter spacing -0.03 em, 2 lines
+                Text(
+                    text = "Your private\ncinema.",
+                    style = TextStyle(
+                        fontFamily = AppFontFamily,
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 40.sp,
+                        lineHeight = 40.sp,
+                        letterSpacing = (-0.03).sp,
+                        color = Color.White,
+                    ),
+                    modifier = Modifier.semantics { heading() },
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Truthful, neutral descriptive copy under 110 characters
+                Text(
+                    text = "Movies, series, and anime from all your sources, with automatic fallback when one goes down.",
+                    style = TextStyle(
+                        fontFamily = AppFontFamily,
+                        fontWeight = FontWeight.Normal,
+                        fontSize = 14.sp,
+                        lineHeight = 20.sp,
+                        color = OnboardingTokens.TextMuted55,
+                    ),
+                    modifier = Modifier.widthIn(max = 280.dp),
+                )
+
+                Spacer(modifier = Modifier.height(26.dp))
+
+                // Primary White Pill: 52 dp tall with outline right-arrow icon
+                OnboardingWhitePillButton(
+                    text = "Get started",
+                    onClick = onGetStarted,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * PAGE 2: PROFILE CREATION
+ * Full-screen profile creator reusing the exact fields, styling, validation, and crop/PIN dialogs
+ * from the Settings Profile Studio experience.
+ */
+@Composable
+private fun OnboardingPage2Profile(
     profileName: String,
     onProfileNameChange: (String) -> Unit,
     avatarId: String,
     onAvatarIdChange: (String) -> Unit,
-    type: ProfileType,
-    onTypeChange: (ProfileType) -> Unit,
-    isLocked: Boolean,
-    pin: String?,
-    onLockToggled: (Boolean, String?) -> Unit,
+    role: ProfileType,
+    onRoleChange: (ProfileType) -> Unit,
+    isKids: Boolean,
+    onKidsChange: (Boolean) -> Unit,
+    pinHash: String?,
+    plainPin: String?,
+    onPinChange: (String?, String?) -> Unit,
     onContinue: () -> Unit,
+    hazeState: HazeState,
+    isAmoled: Boolean,
 ) {
-    var showPinDialog by remember { mutableStateOf(false) }
-    var showUploadDialog by remember { mutableStateOf(false) }
-    var pendingCropBitmap by remember { mutableStateOf<Bitmap?>(null) }
-
     val context = LocalContext.current
-    val galleryPicker = rememberLauncherForActivityResult(
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    val reduceMotion = LocalReduceMotion.current
+
+    var validationError by remember { mutableStateOf<String?>(null) }
+    var isNameFocused by remember { mutableStateOf(false) }
+    var showPinCreator by remember { mutableStateOf(false) }
+    var pendingCropBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var roleDropdownExpanded by remember { mutableStateOf(false) }
+
+    val isPinSet = !pinHash.isNullOrBlank() || !plainPin.isNullOrBlank()
+
+    val galleryLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent(),
     ) { uri: Uri? ->
         if (uri != null) {
@@ -442,428 +534,717 @@ private fun Act2DetroitProfileCreator(
         }
     }
 
-    val cardBgColor = Color(0xFF13141B)
-    val inputBgColor = Color(0xFF1A1B24)
+    fun validateAndProceed() {
+        val trimmed = profileName.trim()
+        if (trimmed.isEmpty()) {
+            validationError = "Enter a name"
+            return
+        }
+        validationError = null
+        focusManager.clearFocus()
+        keyboardController?.hide()
+        onContinue()
+    }
 
-    Column(
+    val pageBgColor = if (isAmoled) OnboardingTokens.AmoledBackground else OnboardingTokens.DarkBackground
+
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp, vertical = 8.dp),
+            .imePadding(),
     ) {
-        // Section Badge
-        Box(
+        Column(
             modifier = Modifier
-                .clip(ShapeFull)
-                .background(Color.White.copy(alpha = 0.06f))
-                .border(1.dp, Color.White.copy(alpha = 0.10f), ShapeFull)
-                .padding(horizontal = 12.dp, vertical = 4.dp),
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text(
-                text = "ACT II • YOUR PROFILE",
-                style = AppTypography.labelSmall.copy(
-                    fontSize = 10.sp,
-                    letterSpacing = 2.sp,
-                    fontWeight = FontWeight.Bold,
-                ),
-                color = TextSecondary,
-            )
-        }
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        Text(
-            text = "Create Your Profile",
-            style = AppTypography.titleLarge.copy(
-                fontSize = 26.sp,
-                fontWeight = FontWeight.Bold,
-            ),
-            color = Color.White,
-        )
-
-        Spacer(modifier = Modifier.height(4.dp))
-
-        Text(
-            text = "This will be your primary account for personal watchlists and recommendations.",
-            style = AppTypography.bodyMedium.copy(fontSize = 14.sp),
-            color = TextSecondary,
-        )
-
-        Spacer(modifier = Modifier.height(18.dp))
-
-        // Profile Creator Container Card
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(20.dp))
-                .background(cardBgColor)
-                .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(20.dp))
-                .padding(18.dp),
-        ) {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                // Top: Name field on left, Live Preview on right
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        Text(
-                            text = "PROFILE NAME",
-                            style = androidx.compose.ui.text.TextStyle(
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 11.sp,
-                                letterSpacing = 0.8.sp,
-                                color = TextSecondary,
-                            ),
-                        )
-
-                        BasicTextField(
-                            value = profileName,
-                            onValueChange = onProfileNameChange,
-                            singleLine = true,
-                            textStyle = androidx.compose.ui.text.TextStyle(
-                                color = TextPrimary,
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Medium,
-                            ),
-                            cursorBrush = SolidColor(Accent),
-                            decorationBox = { innerTextField ->
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(inputBgColor)
-                                        .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
-                                        .padding(horizontal = 14.dp, vertical = 11.dp),
-                                    contentAlignment = Alignment.CenterStart,
-                                ) {
-                                    if (profileName.isEmpty()) {
-                                        Text(
-                                            text = "Enter name (e.g. Alex)",
-                                            style = androidx.compose.ui.text.TextStyle(
-                                                color = TextSecondary.copy(alpha = 0.6f),
-                                                fontSize = 15.sp,
-                                            ),
-                                        )
-                                    }
-                                    innerTextField()
-                                }
-                            },
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.width(16.dp))
-
-                    // Live Preview
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        ProfileAvatarImage(
-                            avatarId = avatarId,
-                            size = 56.dp,
-                            borderColor = Accent,
-                            borderWidth = 2.dp,
-                        )
-
-                        Text(
-                            text = if (profileName.isBlank()) "Enter name" else profileName.trim(),
-                            style = androidx.compose.ui.text.TextStyle(
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 12.sp,
-                                color = if (profileName.isBlank()) TextSecondary else TextPrimary,
-                            ),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.width(72.dp),
-                        )
-
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(3.dp),
-                        ) {
-                            Icon(
-                                imageVector = if (isLocked) Icons.Default.Lock else Icons.Default.LockOpen,
-                                contentDescription = if (isLocked) "Locked" else "Unlocked",
-                                tint = if (isLocked) Accent else TextSecondary,
-                                modifier = Modifier.size(13.dp),
-                            )
-                            Text(
-                                text = if (isLocked) "Locked" else "Open",
-                                style = androidx.compose.ui.text.TextStyle(fontSize = 10.sp),
-                                color = TextSecondary,
-                            )
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-                HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
+            Column(
+                modifier = Modifier
+                    .widthIn(max = 480.dp)
+                    .fillMaxWidth(),
+            ) {
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // Avatar Presets (8 Presets)
+                // Small label above headline
                 Text(
-                    text = "SELECT AVATAR (8 PRESETS)",
-                    style = androidx.compose.ui.text.TextStyle(
-                        fontWeight = FontWeight.Bold,
+                    text = "STEP 2",
+                    style = TextStyle(
+                        fontFamily = AppFontFamily,
+                        fontWeight = FontWeight.Medium,
                         fontSize = 11.sp,
-                        letterSpacing = 0.8.sp,
-                        color = TextSecondary,
-                    ),
-                )
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                val avatarGrid = remember { defaultAvatarPresets.chunked(4) }
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    avatarGrid.forEach { rowPresets ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            rowPresets.forEach { preset ->
-                                val isSelected = preset.id == avatarId
-                                Box(
-                                    modifier = Modifier
-                                        .size(56.dp)
-                                        .clip(CircleShape)
-                                        .clickable { onAvatarIdChange(preset.id) },
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    ProfileAvatarImage(
-                                        avatarId = preset.id,
-                                        size = 52.dp,
-                                        borderColor = if (isSelected) Accent else Color.Transparent,
-                                        borderWidth = 2.5.dp,
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Custom Upload
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    val isCustomSelected = avatarId.startsWith("custom:")
-
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(56.dp)
-                                .clip(CircleShape)
-                                .clickable { showUploadDialog = true },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            if (isCustomSelected) {
-                                ProfileAvatarImage(
-                                    avatarId = avatarId,
-                                    size = 52.dp,
-                                    borderColor = Accent,
-                                    borderWidth = 2.5.dp,
-                                )
-                            } else {
-                                Box(
-                                    modifier = Modifier
-                                        .size(52.dp)
-                                        .clip(CircleShape)
-                                        .background(inputBgColor)
-                                        .border(1.dp, Color.White.copy(alpha = 0.12f), CircleShape),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Upload,
-                                        contentDescription = "Upload Avatar",
-                                        tint = Accent,
-                                        modifier = Modifier.size(24.dp),
-                                    )
-                                }
-                            }
-                        }
-
-                        Text(
-                            text = "Upload",
-                            style = androidx.compose.ui.text.TextStyle(
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 11.sp,
-                                color = if (isCustomSelected) Accent else TextSecondary,
-                            ),
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-                HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
-                Spacer(modifier = Modifier.height(14.dp))
-
-                // Role Selector (Chips)
-                Text(
-                    text = "PROFILE ROLE",
-                    style = androidx.compose.ui.text.TextStyle(
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 11.sp,
-                        letterSpacing = 0.8.sp,
-                        color = TextSecondary,
+                        lineHeight = 14.sp,
+                        letterSpacing = 0.12.sp,
+                        color = OnboardingTokens.TextMuted45,
                     ),
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    ProfileType.entries.forEach { pType ->
-                        val isSelected = type == pType
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(if (isSelected) Accent.copy(alpha = 0.18f) else inputBgColor)
-                                .border(
-                                    width = 1.dp,
-                                    color = if (isSelected) Accent else Color.White.copy(alpha = 0.08f),
-                                    shape = RoundedCornerShape(10.dp),
-                                )
-                                .clickable { onTypeChange(pType) },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                text = pType.displayName,
-                                style = androidx.compose.ui.text.TextStyle(
-                                    fontSize = 12.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (isSelected) Accent else TextPrimary,
-                                ),
-                                modifier = Modifier.padding(vertical = 8.dp),
-                            )
-                        }
-                    }
-                }
+                // Main Headline: 40 sp Medium
+                Text(
+                    text = "Your profile.",
+                    style = TextStyle(
+                        fontFamily = AppFontFamily,
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 40.sp,
+                        lineHeight = 40.sp,
+                        letterSpacing = (-0.03).sp,
+                        color = Color.White,
+                    ),
+                    modifier = Modifier.semantics { heading() },
+                )
 
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
-                // Profile Lock Toggle
+                Text(
+                    text = "Pick an avatar and a name for your personal watchlists.",
+                    style = TextStyle(
+                        fontFamily = AppFontFamily,
+                        fontWeight = FontWeight.Normal,
+                        fontSize = 14.sp,
+                        lineHeight = 20.sp,
+                        color = OnboardingTokens.TextMuted55,
+                    ),
+                )
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // 1. Live Preview Row (Avatar with thin ring + live name + chip)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(inputBgColor)
-                        .clickable {
-                            if (!isLocked) {
-                                showPinDialog = true
-                            } else {
-                                onLockToggled(false, null)
-                            }
-                        }
-                        .padding(horizontal = 14.dp, vertical = 10.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                        .padding(vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    AvatarWithThinRing(
+                        avatarId = avatarId,
+                        avatarSize = 62.dp,
+                        ringGap = 5.dp,
+                        ringBorderWidth = 0.5.dp,
+                        ringColor = Color.White.copy(alpha = 0.16f),
+                    )
+
+                    Spacer(modifier = Modifier.width(16.dp))
+
+                    Column(
                         modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.Center,
                     ) {
-                        Icon(
-                            imageVector = if (isLocked) Icons.Default.Lock else Icons.Default.LockOpen,
-                            contentDescription = "Lock",
-                            tint = if (isLocked) Accent else TextSecondary,
-                            modifier = Modifier.size(20.dp),
+                        Text(
+                            text = if (profileName.isBlank()) "Profile name" else profileName.trim(),
+                            style = TextStyle(
+                                fontFamily = AppFontFamily,
+                                fontWeight = FontWeight.Medium,
+                                fontSize = 20.sp,
+                                lineHeight = 24.sp,
+                                color = if (profileName.isBlank()) Color.White.copy(alpha = 0.40f) else Color.White,
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
-                        Column {
-                            Text(
-                                text = "Profile PIN Lock",
-                                style = androidx.compose.ui.text.TextStyle(
-                                    fontWeight = FontWeight.SemiBold,
-                                    fontSize = 14.sp,
-                                    color = TextPrimary,
-                                ),
-                            )
-                            Text(
-                                text = if (isLocked) "Protected with 4-digit PIN" else "Prompt for 4-digit PIN on opening",
-                                style = androidx.compose.ui.text.TextStyle(
-                                    fontSize = 12.sp,
-                                    color = TextSecondary,
-                                ),
-                            )
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        ProfileGlassChip(
+                            text = if (isKids) "Kids" else role.displayName,
+                            showLockIcon = isPinSet,
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // 2. Avatar Picker Section
+                Text(
+                    text = "CHOOSE AVATAR",
+                    style = TextStyle(
+                        fontFamily = AppFontFamily,
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 11.sp,
+                        lineHeight = 14.sp,
+                        letterSpacing = 0.08.sp,
+                        color = OnboardingTokens.TextMuted45,
+                    ),
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                HorizontalDivider(
+                    thickness = OnboardingTokens.HairlineWidth,
+                    color = OnboardingTokens.HairlineDivider,
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                val allAvatarItems = defaultAvatarPresets
+                val isCustomAvatarSelected = avatarId.startsWith("custom:")
+
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    // Row 1: First 5 Presets
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        for (i in 0 until minOf(5, allAvatarItems.size)) {
+                            val preset = allAvatarItems[i]
+                            val isSelected = avatarId == preset.id
+                            Box(
+                                modifier = Modifier.size(52.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                AvatarWithThinRing(
+                                    avatarId = preset.id,
+                                    avatarSize = 48.dp,
+                                    ringGap = 2.dp,
+                                    isSelected = isSelected,
+                                    showSelectedCheck = true,
+                                    isAvatarOption = true,
+                                    onClick = {
+                                        onAvatarIdChange(preset.id)
+                                        validationError = null
+                                    },
+                                )
+                            }
                         }
                     }
 
-                    Switch(
-                        checked = isLocked,
-                        onCheckedChange = { enable ->
-                            if (enable) {
-                                showPinDialog = true
-                            } else {
-                                onLockToggled(false, null)
+                    // Row 2: Remaining presets + custom photo tile
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        for (i in 5 until allAvatarItems.size) {
+                            val preset = allAvatarItems[i]
+                            val isSelected = avatarId == preset.id
+                            Box(
+                                modifier = Modifier.size(52.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                AvatarWithThinRing(
+                                    avatarId = preset.id,
+                                    avatarSize = 48.dp,
+                                    ringGap = 2.dp,
+                                    isSelected = isSelected,
+                                    showSelectedCheck = true,
+                                    isAvatarOption = true,
+                                    onClick = {
+                                        onAvatarIdChange(preset.id)
+                                        validationError = null
+                                    },
+                                )
                             }
-                        },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = Accent,
-                            uncheckedThumbColor = TextSecondary,
-                            uncheckedTrackColor = Color(0xFF2A2B38),
+                        }
+
+                        // Custom Photo Upload Tile
+                        Box(
+                            modifier = Modifier.size(52.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (isCustomAvatarSelected) {
+                                AvatarWithThinRing(
+                                    avatarId = avatarId,
+                                    avatarSize = 48.dp,
+                                    ringGap = 2.dp,
+                                    isSelected = true,
+                                    showSelectedCheck = true,
+                                    isAvatarOption = true,
+                                    onClick = { galleryLauncher.launch("image/*") },
+                                )
+                            } else {
+                                DashedCircleButton(
+                                    size = 48.dp,
+                                    iconSize = 20.dp,
+                                    contentDescription = "Upload custom photo",
+                                    onClick = { galleryLauncher.launch("image/*") },
+                                )
+                            }
+                        }
+
+                        // 5th Slot spacer for alignment
+                        Box(
+                            modifier = Modifier.size(52.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (isCustomAvatarSelected) {
+                                DashedCircleButton(
+                                    size = 48.dp,
+                                    iconSize = 20.dp,
+                                    contentDescription = "Upload new custom photo",
+                                    onClick = { galleryLauncher.launch("image/*") },
+                                )
+                            } else {
+                                Spacer(modifier = Modifier.size(52.dp))
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // 3. Profile Name Input Field
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "PROFILE NAME",
+                        style = TextStyle(
+                            fontFamily = AppFontFamily,
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 11.sp,
+                            lineHeight = 14.sp,
+                            letterSpacing = 0.08.sp,
+                            color = OnboardingTokens.TextMuted45,
+                        ),
+                    )
+
+                    Text(
+                        text = "${profileName.length}/20",
+                        style = TextStyle(
+                            fontFamily = AppFontFamily,
+                            fontWeight = FontWeight.Normal,
+                            fontSize = 11.sp,
+                            color = OnboardingTokens.TextMuted45,
                         ),
                     )
                 }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                val fieldBorderColor = when {
+                    validationError != null -> Color.White.copy(alpha = 0.60f)
+                    isNameFocused -> Color.White.copy(alpha = 0.30f)
+                    else -> OnboardingTokens.GlassHairlineBorder
+                }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(OnboardingTokens.GlassFill)
+                        .border(OnboardingTokens.HairlineWidth, fieldBorderColor, RoundedCornerShape(12.dp))
+                        .padding(horizontal = 14.dp),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            modifier = Modifier.weight(1f),
+                            contentAlignment = Alignment.CenterStart,
+                        ) {
+                            if (profileName.isEmpty()) {
+                                Text(
+                                    text = "Living Room",
+                                    style = TextStyle(
+                                        fontFamily = AppFontFamily,
+                                        fontWeight = FontWeight.Normal,
+                                        fontSize = 15.sp,
+                                        color = Color.White.copy(alpha = 0.40f),
+                                    ),
+                                )
+                            }
+                            BasicTextField(
+                                value = profileName,
+                                onValueChange = {
+                                    if (it.length <= 20) {
+                                        onProfileNameChange(it)
+                                        if (validationError != null) validationError = null
+                                    }
+                                },
+                                singleLine = true,
+                                textStyle = TextStyle(
+                                    fontFamily = AppFontFamily,
+                                    fontWeight = FontWeight.Normal,
+                                    fontSize = 15.sp,
+                                    color = Color.White,
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .onFocusChanged { isNameFocused = it.isFocused },
+                            )
+                        }
+
+                        if (profileName.isNotEmpty()) {
+                            Box(
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .clickable(
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = null,
+                                        role = Role.Button,
+                                        onClickLabel = "Clear text",
+                                        onClick = {
+                                            onProfileNameChange("")
+                                            validationError = null
+                                        },
+                                    ),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Close,
+                                    contentDescription = "Clear",
+                                    tint = Color.White.copy(alpha = 0.60f),
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Inline validation error in white 70% (NEVER RED)
+                if (validationError != null) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = validationError ?: "",
+                        style = TextStyle(
+                            fontFamily = AppFontFamily,
+                            fontWeight = FontWeight.Normal,
+                            fontSize = 12.sp,
+                            color = OnboardingTokens.TextMuted70,
+                        ),
+                        modifier = Modifier.padding(start = 4.dp),
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // 4. Role Selection Field
+                Text(
+                    text = "PROFILE ROLE",
+                    style = TextStyle(
+                        fontFamily = AppFontFamily,
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 11.sp,
+                        lineHeight = 14.sp,
+                        letterSpacing = 0.08.sp,
+                        color = OnboardingTokens.TextMuted45,
+                    ),
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                val chevronRotation by animateFloatAsState(
+                    targetValue = if (roleDropdownExpanded) 180f else 0f,
+                    animationSpec = if (reduceMotion) tween(0) else tween(200, easing = FastOutSlowInEasing),
+                    label = "chevronRot",
+                )
+
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(56.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(OnboardingTokens.GlassFill)
+                            .border(OnboardingTokens.HairlineWidth, OnboardingTokens.GlassHairlineBorder, RoundedCornerShape(12.dp))
+                            .clickable { roleDropdownExpanded = !roleDropdownExpanded }
+                            .padding(horizontal = 14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.Center,
+                        ) {
+                            Text(
+                                text = role.displayName,
+                                style = TextStyle(
+                                    fontFamily = AppFontFamily,
+                                    fontWeight = FontWeight.Medium,
+                                    fontSize = 15.sp,
+                                    lineHeight = 18.sp,
+                                    color = Color.White,
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = role.description,
+                                style = TextStyle(
+                                    fontFamily = AppFontFamily,
+                                    fontWeight = FontWeight.Normal,
+                                    fontSize = 12.sp,
+                                    lineHeight = 15.sp,
+                                    color = OnboardingTokens.TextMuted50,
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+
+                        Icon(
+                            imageVector = Icons.Outlined.KeyboardArrowDown,
+                            contentDescription = "Select role",
+                            tint = Color.White.copy(alpha = 0.60f),
+                            modifier = Modifier
+                                .size(20.dp)
+                                .graphicsLayer { rotationZ = chevronRotation },
+                        )
+                    }
+
+                    if (roleDropdownExpanded) {
+                        Popup(
+                            alignment = Alignment.TopStart,
+                            offset = IntOffset(0, with(LocalDensity.current) { 60.dp.roundToPx() }),
+                            onDismissRequest = { roleDropdownExpanded = false },
+                            properties = PopupProperties(focusable = true),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(
+                                        if (isAmoled) ProfileGlassTokens.AmoledBackground else ProfileGlassTokens.SheetGlassFallback
+                                    )
+                                    .border(OnboardingTokens.HairlineWidth, OnboardingTokens.GlassHairlineBorder, RoundedCornerShape(12.dp))
+                                    .padding(vertical = 4.dp),
+                            ) {
+                                Column {
+                                    ProfileType.entries.forEachIndexed { index, option ->
+                                        val isSelected = role == option
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable {
+                                                    onRoleChange(option)
+                                                    onKidsChange(option == ProfileType.KIDS)
+                                                    roleDropdownExpanded = false
+                                                }
+                                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = option.displayName,
+                                                    style = TextStyle(
+                                                        fontFamily = AppFontFamily,
+                                                        fontWeight = FontWeight.Medium,
+                                                        fontSize = 15.sp,
+                                                        color = Color.White,
+                                                    ),
+                                                )
+                                                Text(
+                                                    text = option.description,
+                                                    style = TextStyle(
+                                                        fontFamily = AppFontFamily,
+                                                        fontWeight = FontWeight.Normal,
+                                                        fontSize = 12.sp,
+                                                        color = OnboardingTokens.TextMuted50,
+                                                    ),
+                                                )
+                                            }
+
+                                            if (isSelected) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(20.dp)
+                                                        .clip(CircleShape)
+                                                        .background(Color.White),
+                                                    contentAlignment = Alignment.Center,
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Outlined.Check,
+                                                        contentDescription = "Selected",
+                                                        tint = OnboardingTokens.TextDarkButton,
+                                                        modifier = Modifier.size(13.dp),
+                                                    )
+                                                }
+                                            }
+                                        }
+
+                                        if (index < ProfileType.entries.size - 1) {
+                                            HorizontalDivider(
+                                                thickness = OnboardingTokens.HairlineWidth,
+                                                color = OnboardingTokens.HairlineDivider,
+                                                modifier = Modifier.padding(horizontal = 14.dp),
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // 5. Hairline Divided Toggle Rows
+                HorizontalDivider(
+                    thickness = OnboardingTokens.HairlineWidth,
+                    color = OnboardingTokens.HairlineDivider,
+                )
+
+                // Kids Profile Toggle
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Kids profile",
+                            style = TextStyle(
+                                fontFamily = AppFontFamily,
+                                fontWeight = FontWeight.Medium,
+                                fontSize = 15.sp,
+                                lineHeight = 18.sp,
+                                color = Color.White,
+                            ),
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "Curate content for younger viewers",
+                            style = TextStyle(
+                                fontFamily = AppFontFamily,
+                                fontWeight = FontWeight.Normal,
+                                fontSize = 12.sp,
+                                lineHeight = 15.sp,
+                                color = OnboardingTokens.TextMuted50,
+                            ),
+                        )
+                    }
+
+                    ProfileGlassToggle(
+                        checked = isKids,
+                        onCheckedChange = { checked ->
+                            onKidsChange(checked)
+                            onRoleChange(if (checked) ProfileType.KIDS else ProfileType.STANDARD)
+                        },
+                    )
+                }
+
+                HorizontalDivider(
+                    thickness = OnboardingTokens.HairlineWidth,
+                    color = OnboardingTokens.HairlineDivider,
+                )
+
+                // PIN Lock Toggle
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "PIN lock",
+                            style = TextStyle(
+                                fontFamily = AppFontFamily,
+                                fontWeight = FontWeight.Medium,
+                                fontSize = 15.sp,
+                                lineHeight = 18.sp,
+                                color = Color.White,
+                            ),
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "Require a 4-digit PIN to switch in",
+                            style = TextStyle(
+                                fontFamily = AppFontFamily,
+                                fontWeight = FontWeight.Normal,
+                                fontSize = 12.sp,
+                                lineHeight = 15.sp,
+                                color = OnboardingTokens.TextMuted50,
+                            ),
+                        )
+                    }
+
+                    ProfileGlassToggle(
+                        checked = isPinSet,
+                        onCheckedChange = { checked ->
+                            if (checked) {
+                                showPinCreator = true
+                            } else {
+                                onPinChange(null, null)
+                            }
+                        },
+                    )
+                }
+
+                AnimatedVisibility(
+                    visible = isPinSet,
+                    enter = fadeIn() + expandVertically(),
+                    exit = fadeOut() + shrinkVertically(),
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        ProfileGlassPill(
+                            text = "Change PIN",
+                            onClick = { showPinCreator = true },
+                            visualHeight = 32.dp,
+                            fontSize = 12,
+                        )
+
+                        ProfileGlassPill(
+                            text = "Remove PIN",
+                            onClick = { onPinChange(null, null) },
+                            visualHeight = 32.dp,
+                            fontSize = 12,
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(90.dp)) // Extra space for pinned footer
             }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
-
-        PrimaryButton(
-            text = "Continue to Canvas",
-            icon = Icons.AutoMirrored.Rounded.ArrowForward,
-            onClick = onContinue,
-            modifier = Modifier.fillMaxWidth(),
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
+        // Pinned Bottom White Pill Button with background fade scrim
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.BottomCenter)
+                .background(
+                    Brush.verticalGradient(
+                        0.0f to Color.Transparent,
+                        0.4f to pageBgColor.copy(alpha = 0.85f),
+                        1.0f to pageBgColor,
+                    ),
+                )
+                .navigationBarsPadding()
+                .padding(horizontal = 20.dp, vertical = 16.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(modifier = Modifier.widthIn(max = 480.dp).fillMaxWidth()) {
+                OnboardingWhitePillButton(
+                    text = "Continue",
+                    onClick = ::validateAndProceed,
+                )
+            }
+        }
     }
 
-    if (showPinDialog) {
-        DetroitPinDialog(
-            onDismissRequest = { showPinDialog = false },
+    // PIN Creator Dialog
+    if (showPinCreator) {
+        PinCreatorDialog(
+            onDismissRequest = { showPinCreator = false },
             onPinConfirmed = { confirmedPin ->
-                onLockToggled(true, confirmedPin)
-                showPinDialog = false
+                onPinChange(hashPin(confirmedPin), confirmedPin)
+                showPinCreator = false
             },
         )
     }
 
-    if (showUploadDialog) {
-        DetroitAvatarUploadDialog(
-            currentAvatarId = avatarId,
-            onDismissRequest = { showUploadDialog = false },
-            onAvatarSelected = { selectedCustomId ->
-                onAvatarIdChange(selectedCustomId)
-                showUploadDialog = false
-            },
-            onChooseFromGallery = {
-                showUploadDialog = false
-                galleryPicker.launch("image/*")
-            },
-        )
-    }
-
+    // Custom Avatar Crop Dialog
     pendingCropBitmap?.let { bmp ->
         DetroitCircleCropDialog(
             sourceBitmap = bmp,
@@ -878,247 +1259,289 @@ private fun Act2DetroitProfileCreator(
 }
 
 /**
- * Act 3: The Canvas — Interface navigation style & poster density tailoring
- * with Live Interactive Preview Canvas.
+ * PAGE 3: CUSTOMIZE ("Craft Your Canvas")
+ * - Headline: "Make it" / "yours."
+ * - Subtitle: "Change any of this later in Settings."
+ * - Live Preview Card (fixed 160 dp area height, animated mini posters, static mini bottom nav bar)
+ * - Posters choice block (CardScaleMode segmented control)
+ * - Appearance choice block (Dark vs AMOLED segmented control, applies live)
+ * - Removed Navigation block
+ * - Pinned 52 dp white pill "Enter Euthopiar" with spinner on loading
  */
 @Composable
-private fun Act3TheCanvas(
-    selectedNavbarStyle: NavbarStyle,
+private fun OnboardingPage3Customize(
     selectedCardScale: CardScaleMode,
-    onNavbarStyleChanged: (NavbarStyle) -> Unit,
     onCardScaleChanged: (CardScaleMode) -> Unit,
-    onBack: () -> Unit,
-    onSkip: () -> Unit,
+    isAmoled: Boolean,
+    onAmoledChanged: (Boolean) -> Unit,
+    isSubmitting: Boolean,
     onEnterSanctuary: () -> Unit,
+    hazeState: HazeState,
+    previewItems: List<ShowcasePosterItem> = ShowcaseRowTop.take(5),
+    isLoadingPosters: Boolean = false,
 ) {
-    val navbarOptions = remember {
-        listOf(
-            DropdownOption(
-                value = NavbarStyle.FLOATING,
-                title = "Floating Glass Pill",
-                subtitle = "Frosted acrylic dock suspended above bottom with fluid motion",
-            ),
-            DropdownOption(
-                value = NavbarStyle.DOCKED,
-                title = "Docked Edge Bar",
-                subtitle = "Classic edge-to-edge docked navigation bar",
-            ),
-        )
+    val pageBgColor = if (isAmoled) OnboardingTokens.AmoledBackground else OnboardingTokens.DarkBackground
+
+    val posterDescription = when (selectedCardScale) {
+        CardScaleMode.FLAGSHIP -> "Large posters, two per row"
+        CardScaleMode.BALANCED -> "Balanced layout with rich breathing room"
+        CardScaleMode.COMPACT -> "Compact grid for maximum catalog density"
     }
 
-    val posterOptions = remember {
-        listOf(
-            DropdownOption(
-                value = CardScaleMode.FLAGSHIP,
-                title = "Flagship Cinema",
-                subtitle = "Cinematic 2.0x poster scale with rich breathing room",
-                dividerBefore = false,
-            ),
-            DropdownOption(
-                value = CardScaleMode.BALANCED,
-                title = "Balanced",
-                subtitle = "1.5x Vertical, 1.25x Horizontal cards",
-                dividerBefore = false,
-            ),
-            DropdownOption(
-                value = CardScaleMode.COMPACT,
-                title = "Compact Grid",
-                subtitle = "Balanced 1.0x layout for maximum catalog density",
-                dividerBefore = false,
-            ),
-        )
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 20.dp, vertical = 8.dp),
-    ) {
-        // 1. OnboardingStepHeader replacing old three-dot indicator and section chip
-        OnboardingStepHeader(
-            step = 3,
-            total = 3,
-            onBack = onBack,
-            onSkip = onSkip,
-        )
-
-        Spacer(modifier = Modifier.height(14.dp))
-
-        // 2. Title & Subtitle
-        Text(
-            text = "Craft Your Canvas",
-            style = AppTypography.titleLarge.copy(
-                fontSize = 26.sp,
-                fontWeight = FontWeight.Bold,
-            ),
-            color = Color.White,
-        )
-
-        Spacer(modifier = Modifier.height(4.dp))
-
-        Text(
-            text = "Personalize your layout and view live changes in the canvas preview.",
-            style = AppTypography.bodyMedium.copy(fontSize = 14.sp),
-            color = TextSecondary,
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // 3. Pinned Live Interactive Canvas Preview
-        LiveCanvasPreviewBox(
-            navbarStyle = selectedNavbarStyle,
-            cardScale = selectedCardScale,
-        )
-
-        Spacer(modifier = Modifier.height(14.dp))
-
-        // 4. Dropdown rows column (scrolls if needed, preview & header stay pinned)
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState()),
-        ) {
-            GlassDropdownRow(
-                label = "Navigation",
-                description = "How the bar sits",
-                options = navbarOptions,
-                selected = selectedNavbarStyle,
-                onSelected = onNavbarStyleChanged,
-                showTopDivider = false,
-            )
-
-            GlassDropdownRow(
-                label = "Posters",
-                description = "Size and density",
-                options = posterOptions,
-                selected = selectedCardScale,
-                onSelected = onCardScaleChanged,
-                showTopDivider = true,
-            )
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // 5. Final CTA Button
-        PrimaryButton(
-            text = "Enter Euthopiar",
-            icon = Icons.Rounded.Check,
-            isAccentRed = true,
-            onClick = onEnterSanctuary,
-            modifier = Modifier.fillMaxWidth(),
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-    }
-}
-
-/**
- * Legacy radio-list option composables preserved in-file to satisfy non-deletion requirements.
- */
-@Suppress("unused")
-@Composable
-private fun LegacyAct3RadioChoiceOptions(
-    selectedNavbarStyle: NavbarStyle,
-    selectedCardScale: CardScaleMode,
-    onNavbarStyleChanged: (NavbarStyle) -> Unit,
-    onCardScaleChanged: (CardScaleMode) -> Unit,
-) {
-    OnboardingChoiceCard(
-        title = "Floating Glass Pill",
-        subtitle = "Frosted acrylic dock suspended above bottom with fluid motion",
-        icon = Icons.Rounded.ViewStream,
-        isSelected = selectedNavbarStyle == NavbarStyle.FLOATING,
-        onClick = { onNavbarStyleChanged(NavbarStyle.FLOATING) },
-    )
-    OnboardingChoiceCard(
-        title = "Docked Edge Bar",
-        subtitle = "Classic edge-to-edge docked navigation bar",
-        icon = Icons.Rounded.Dashboard,
-        isSelected = selectedNavbarStyle == NavbarStyle.DOCKED,
-        onClick = { onNavbarStyleChanged(NavbarStyle.DOCKED) },
-    )
-    OnboardingChoiceCard(
-        title = "Flagship Cinema",
-        subtitle = "Cinematic 2.0x poster scale with rich breathing room",
-        icon = Icons.Rounded.ViewAgenda,
-        isSelected = selectedCardScale == CardScaleMode.FLAGSHIP,
-        onClick = { onCardScaleChanged(CardScaleMode.FLAGSHIP) },
-    )
-    OnboardingChoiceCard(
-        title = "Compact Grid",
-        subtitle = "Balanced 1.0x layout for maximum catalog density",
-        icon = Icons.Rounded.GridView,
-        isSelected = selectedCardScale == CardScaleMode.COMPACT,
-        onClick = { onCardScaleChanged(CardScaleMode.COMPACT) },
-    )
-}
-
-/**
- * Live interactive canvas preview mockup reflecting navbar style and poster density dynamically
- * with real poster cards in their real sizes and the exact real bottom navigation bars.
- */
-@Composable
-private fun LiveCanvasPreviewBox(
-    navbarStyle: NavbarStyle,
-    cardScale: CardScaleMode,
-) {
-    val context = LocalContext.current
-    val isFlagship = cardScale == CardScaleMode.FLAGSHIP
-    val isFloating = navbarStyle == NavbarStyle.FLOATING
-
-    val animatedPosterWidth by animateDpAsState(
-        targetValue = if (isFlagship) 140.dp else 100.dp,
-        animationSpec = spring(),
-        label = "previewPosterWidth",
-    )
-    val animatedPosterHeight by animateDpAsState(
-        targetValue = if (isFlagship) 208.dp else 148.dp,
-        animationSpec = spring(),
-        label = "previewPosterHeight",
-    )
-    val animatedContainerHeight by animateDpAsState(
-        targetValue = if (isFlagship) 330.dp else 272.dp,
-        animationSpec = spring(),
-        label = "previewContainerHeight",
-    )
-
-    val animatedNavbarRadius by animateDpAsState(
-        targetValue = if (isFloating) 28.dp else 0.dp,
-        animationSpec = spring(),
-        label = "previewNavRadius",
-    )
-    val animatedNavbarMargin by animateDpAsState(
-        targetValue = if (isFloating) 16.dp else 0.dp,
-        animationSpec = spring(),
-        label = "previewNavMargin",
-    )
-    val animatedNavbarBottomPadding by animateDpAsState(
-        targetValue = if (isFloating) 8.dp else 0.dp,
-        animationSpec = spring(),
-        label = "previewNavBottom",
-    )
-
-    val previewItems = remember {
-        (ShowcaseRowTop + ShowcaseRowBottom).distinctBy { it.title }
+    val appearanceDescription = if (isAmoled) {
+        "Pure black. Best on OLED screens."
+    } else {
+        "Dark with a soft glow."
     }
 
     Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(animatedContainerHeight)
-            .clip(RoundedCornerShape(18.dp))
-            .background(Color(0xFF0C0D12))
-            .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(18.dp)),
+        modifier = Modifier.fillMaxSize(),
     ) {
         Column(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            // Live Header with Status Indicator
-            Row(
+            Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                    .widthIn(max = 480.dp)
+                    .fillMaxWidth(),
+            ) {
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // Big Headline: 40 sp Medium, 2 lines
+                Text(
+                    text = "Make it\nyours.",
+                    style = TextStyle(
+                        fontFamily = AppFontFamily,
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 40.sp,
+                        lineHeight = 40.sp,
+                        letterSpacing = (-0.03).sp,
+                        color = Color.White,
+                    ),
+                    modifier = Modifier.semantics { heading() },
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(
+                    text = "Change any of this later in Settings.",
+                    style = TextStyle(
+                        fontFamily = AppFontFamily,
+                        fontWeight = FontWeight.Normal,
+                        fontSize = 13.sp,
+                        lineHeight = 18.sp,
+                        color = OnboardingTokens.TextMuted50,
+                    ),
+                )
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                // LIVE PREVIEW CARD (Fixed 160 dp height for poster stage, glass card)
+                OnboardingLivePreviewCard(
+                    cardScale = selectedCardScale,
+                    isAmoled = isAmoled,
+                    hazeState = hazeState,
+                    previewItems = previewItems,
+                    isLoading = isLoadingPosters,
+                )
+
+                Spacer(modifier = Modifier.height(18.dp))
+
+                // CHOICE BLOCK 1: POSTERS
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 18.dp),
+                ) {
+                    Text(
+                        text = "Posters",
+                        style = TextStyle(
+                            fontFamily = AppFontFamily,
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 15.sp,
+                            lineHeight = 19.sp,
+                            color = Color.White,
+                        ),
+                    )
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    Text(
+                        text = posterDescription,
+                        style = TextStyle(
+                            fontFamily = AppFontFamily,
+                            fontWeight = FontWeight.Normal,
+                            fontSize = 12.sp,
+                            lineHeight = 16.sp,
+                            color = OnboardingTokens.TextMuted50,
+                        ),
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    OnboardingSegmentedControl(
+                        options = listOf(CardScaleMode.FLAGSHIP, CardScaleMode.BALANCED, CardScaleMode.COMPACT),
+                        selectedOption = selectedCardScale,
+                        onOptionSelected = onCardScaleChanged,
+                        labelProvider = { mode ->
+                            when (mode) {
+                                CardScaleMode.FLAGSHIP -> "Large"
+                                CardScaleMode.BALANCED -> "Balanced"
+                                CardScaleMode.COMPACT -> "Compact"
+                            }
+                        },
+                        hazeState = hazeState,
+                        isAmoled = isAmoled,
+                    )
+                }
+
+                HorizontalDivider(
+                    thickness = OnboardingTokens.HairlineWidth,
+                    color = OnboardingTokens.HairlineDivider,
+                )
+
+                // CHOICE BLOCK 2: APPEARANCE
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 18.dp),
+                ) {
+                    Text(
+                        text = "Appearance",
+                        style = TextStyle(
+                            fontFamily = AppFontFamily,
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 15.sp,
+                            lineHeight = 19.sp,
+                            color = Color.White,
+                        ),
+                    )
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    Text(
+                        text = appearanceDescription,
+                        style = TextStyle(
+                            fontFamily = AppFontFamily,
+                            fontWeight = FontWeight.Normal,
+                            fontSize = 12.sp,
+                            lineHeight = 16.sp,
+                            color = OnboardingTokens.TextMuted50,
+                        ),
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    OnboardingSegmentedControl(
+                        options = listOf(false, true),
+                        selectedOption = isAmoled,
+                        onOptionSelected = onAmoledChanged,
+                        labelProvider = { isAmoledSelected ->
+                            if (isAmoledSelected) "AMOLED black" else "Dark"
+                        },
+                        hazeState = hazeState,
+                        isAmoled = isAmoled,
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(88.dp)) // Extra space for pinned button
+            }
+        }
+
+        // Pinned Bottom Button: "Enter Euthopiar"
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.BottomCenter)
+                .background(
+                    Brush.verticalGradient(
+                        0.0f to Color.Transparent,
+                        0.4f to pageBgColor.copy(alpha = 0.85f),
+                        1.0f to pageBgColor,
+                    ),
+                )
+                .navigationBarsPadding()
+                .padding(horizontal = 20.dp, vertical = 16.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(modifier = Modifier.widthIn(max = 480.dp).fillMaxWidth()) {
+                OnboardingWhitePillButton(
+                    text = "Enter Euthopiar",
+                    isLoading = isSubmitting,
+                    onClick = onEnterSanctuary,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * LIVE PREVIEW CARD
+ * - Glass card: 16 dp radius, 12 dp padding
+ * - Header row: left "LIVE PREVIEW" 11 sp uppercase; right muted summary e.g. "Large · Dark"
+ * - Fixed 160 dp poster area height, 5 mini posters, animated width/height
+ * - Static mini bottom navigation bar with tinted glass lens on Home
+ */
+@Composable
+private fun OnboardingLivePreviewCard(
+    cardScale: CardScaleMode,
+    isAmoled: Boolean,
+    hazeState: HazeState,
+    previewItems: List<ShowcasePosterItem> = ShowcaseRowTop.take(5),
+    isLoading: Boolean = false,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val reduceMotion = LocalReduceMotion.current
+
+    val posterWidth by animateDpAsState(
+        targetValue = when (cardScale) {
+            CardScaleMode.FLAGSHIP -> 104.dp
+            CardScaleMode.BALANCED -> 72.dp
+            CardScaleMode.COMPACT -> 54.dp
+        },
+        animationSpec = if (reduceMotion) tween(0) else tween(240, easing = FastOutSlowInEasing),
+        label = "miniPosterWidth",
+    )
+
+    val posterHeight by animateDpAsState(
+        targetValue = when (cardScale) {
+            CardScaleMode.FLAGSHIP -> 156.dp
+            CardScaleMode.BALANCED -> 108.dp
+            CardScaleMode.COMPACT -> 81.dp
+        },
+        animationSpec = if (reduceMotion) tween(0) else tween(240, easing = FastOutSlowInEasing),
+        label = "miniPosterHeight",
+    )
+
+    val scaleLabel = when (cardScale) {
+        CardScaleMode.FLAGSHIP -> "Large"
+        CardScaleMode.BALANCED -> "Balanced"
+        CardScaleMode.COMPACT -> "Compact"
+    }
+
+    val summaryText = "$scaleLabel · ${if (isAmoled) "AMOLED" else "Dark"}"
+    val itemsToRender = if (previewItems.isNotEmpty()) previewItems else ShowcaseRowTop.take(5)
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .onboardingGlassSurface(
+                shape = RoundedCornerShape(16.dp),
+                hazeState = hazeState,
+                isAmoled = isAmoled,
+            )
+            .padding(12.dp)
+            .clearAndSetSemantics { contentDescription = "Preview of your layout" },
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // Header Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -1126,248 +1549,236 @@ private fun LiveCanvasPreviewBox(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(7.dp)
-                            .clip(CircleShape)
-                            .background(Accent),
-                    )
                     Text(
-                        text = "LIVE CANVAS PREVIEW",
-                        style = androidx.compose.ui.text.TextStyle(
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 10.sp,
-                            letterSpacing = 1.sp,
-                            color = Color.White.copy(alpha = 0.7f),
+                        text = "LIVE PREVIEW",
+                        style = TextStyle(
+                            fontFamily = AppFontFamily,
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 11.sp,
+                            lineHeight = 14.sp,
+                            letterSpacing = 0.12.sp,
+                            color = OnboardingTokens.TextMuted45,
                         ),
                     )
+                    if (isLoading) {
+                        CircularProgressIndicator(
+                            strokeWidth = 1.5.dp,
+                            color = OnboardingTokens.TextMuted45,
+                            modifier = Modifier.size(10.dp),
+                        )
+                    }
                 }
 
                 Text(
-                    text = "${if (isFlagship) "2.0x Flagship" else "1.0x Compact"} • ${if (isFloating) "Floating Pill" else "Docked Bar"}",
-                    style = androidx.compose.ui.text.TextStyle(
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = Accent,
+                    text = summaryText,
+                    style = TextStyle(
+                        fontFamily = AppFontFamily,
+                        fontWeight = FontWeight.Normal,
+                        fontSize = 12.sp,
+                        color = OnboardingTokens.TextMuted55,
                     ),
                 )
             }
 
-            // Real Content Cards in Real Dimensions (Horizontal Scrollable)
-            Row(
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Row of mini posters with FIXED 160 dp area height so card never jumps
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f)
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 14.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                    .height(160.dp),
+                contentAlignment = Alignment.TopStart,
             ) {
-                previewItems.forEachIndexed { idx, item ->
-                    Box(
-                        modifier = Modifier
-                            .size(width = animatedPosterWidth, height = animatedPosterHeight)
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(Color(0xFF14151E))
-                            .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(14.dp)),
-                    ) {
-                        // Offline Fallback
-                        Image(
-                            painter = painterResource(id = item.fallbackDrawableRes),
-                            contentDescription = null,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize(),
-                        )
-
-                        // TMDB Real Poster
-                        AsyncImage(
-                            model = ImageRequest.Builder(context)
-                                .data(item.posterUrl)
-                                .crossfade(true)
-                                .build(),
-                            contentDescription = null,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize(),
-                        )
-
-                        // Top Specular Sheen
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    itemsToRender.forEach { item ->
                         Box(
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .height(animatedPosterHeight * 0.30f)
-                                .background(
-                                    Brush.verticalGradient(
-                                        colors = listOf(
-                                            Color.White.copy(alpha = 0.12f),
-                                            Color.Transparent,
-                                        ),
-                                    ),
+                                .size(width = posterWidth, height = posterHeight)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(OnboardingTokens.GlassFill)
+                                .border(
+                                    width = OnboardingTokens.HairlineWidth,
+                                    color = OnboardingTokens.GlassHairlineBorder,
+                                    shape = RoundedCornerShape(10.dp),
                                 ),
-                        )
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            // Fallback local illustration if offline or loading
+                            Image(
+                                painter = painterResource(id = item.fallbackDrawableRes),
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize(),
+                            )
 
-                        // 4K Ultra HD Badge (on first 2 items)
-                        if (idx < 2) {
+                            // Dark subtle glass scrim over the fallback
                             Box(
                                 modifier = Modifier
-                                    .padding(6.dp)
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(Accent)
-                                    .padding(horizontal = 4.dp, vertical = 1.5.dp)
-                                    .align(Alignment.TopStart),
-                            ) {
-                                Text(
-                                    text = "4K HDR",
-                                    fontSize = 7.5.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White,
-                                )
-                            }
-                        }
-
-                        // Bottom Title & Metadata Gradient
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .align(Alignment.BottomStart)
-                                .background(
-                                    Brush.verticalGradient(
-                                        colors = listOf(
-                                            Color.Transparent,
-                                            Color(0xFF0B0B0F).copy(alpha = 0.94f),
-                                        ),
-                                    ),
-                                )
-                                .padding(horizontal = 8.dp, vertical = 6.dp),
-                        ) {
-                            Text(
-                                text = item.title,
-                                style = androidx.compose.ui.text.TextStyle(
-                                    fontSize = if (isFlagship) 11.sp else 9.5.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = Color.White,
-                                ),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(alpha = 0.20f)),
                             )
-                            Text(
-                                text = "${item.genre} • ${item.year}",
-                                style = androidx.compose.ui.text.TextStyle(
-                                    fontSize = if (isFlagship) 9.sp else 8.sp,
-                                    color = Color.White.copy(alpha = 0.55f),
-                                ),
-                                maxLines = 1,
+
+                            AsyncImage(
+                                model = ImageRequest.Builder(context)
+                                    .data(item.posterUrl)
+                                    .crossfade(200)
+                                    .error(item.fallbackDrawableRes)
+                                    .fallback(item.fallbackDrawableRes)
+                                    .build(),
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize(),
                             )
                         }
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-            // Exact Real Navbar Mockup (Floating Glass Pill vs Docked Edge Bar)
+            // Static Mini Bottom Navigation Bar
+            // Glass pill, 20 dp radius, 4 dp inner padding, 4 tabs (Home, Search, Library, Profile)
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = animatedNavbarMargin)
-                    .padding(bottom = animatedNavbarBottomPadding)
-                    .height(52.dp)
-                    .clip(RoundedCornerShape(animatedNavbarRadius))
-                    .background(
-                        if (isFloating) Color(0xFF161822).copy(alpha = 0.92f) else Color(0xFF0F1017)
-                    )
+                    .height(56.dp)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(OnboardingTokens.GlassFill)
                     .border(
-                        width = 1.dp,
-                        color = if (isFloating) Color.White.copy(alpha = 0.14f) else Color.White.copy(alpha = 0.08f),
-                        shape = RoundedCornerShape(animatedNavbarRadius),
-                    ),
+                        width = OnboardingTokens.HairlineWidth,
+                        color = OnboardingTokens.GlassHairlineBorder,
+                        shape = RoundedCornerShape(20.dp),
+                    )
+                    .padding(4.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp),
+                    modifier = Modifier.fillMaxSize(),
                     horizontalArrangement = Arrangement.SpaceAround,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    // 1. Home (Selected)
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    // Home Tab (Active with tinted glass lens: white 70% opacity, 14 dp radius, #0B0B0F text & icon)
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(Color.White.copy(alpha = 0.70f)),
+                        contentAlignment = Alignment.Center,
                     ) {
-                        Icon(
-                            imageVector = EuthopiarIcons.Home.filled,
-                            contentDescription = "Home",
-                            tint = Accent,
-                            modifier = Modifier.size(19.dp),
-                        )
-                        Text(
-                            text = "Home",
-                            style = androidx.compose.ui.text.TextStyle(
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Accent,
-                            ),
-                        )
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            Icon(
+                                imageVector = EuthopiarIcons.Home.outlined,
+                                contentDescription = "Home",
+                                tint = OnboardingTokens.TextDarkButton,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Text(
+                                text = "Home",
+                                style = TextStyle(
+                                    fontFamily = AppFontFamily,
+                                    fontWeight = FontWeight.Medium,
+                                    fontSize = 11.sp,
+                                    color = OnboardingTokens.TextDarkButton,
+                                ),
+                            )
+                        }
                     }
 
-                    // 2. Search
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    // Search Tab (Inactive)
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp),
+                        contentAlignment = Alignment.Center,
                     ) {
-                        Icon(
-                            imageVector = EuthopiarIcons.Search.outlined,
-                            contentDescription = "Search",
-                            tint = Color.White.copy(alpha = 0.45f),
-                            modifier = Modifier.size(19.dp),
-                        )
-                        Text(
-                            text = "Search",
-                            style = androidx.compose.ui.text.TextStyle(
-                                fontSize = 9.sp,
-                                color = Color.White.copy(alpha = 0.5f),
-                            ),
-                        )
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            Icon(
+                                imageVector = EuthopiarIcons.Search.outlined,
+                                contentDescription = "Search",
+                                tint = OnboardingTokens.TextMuted70,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Text(
+                                text = "Search",
+                                style = TextStyle(
+                                    fontFamily = AppFontFamily,
+                                    fontWeight = FontWeight.Normal,
+                                    fontSize = 11.sp,
+                                    color = OnboardingTokens.TextMuted70,
+                                ),
+                            )
+                        }
                     }
 
-                    // 3. Library
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    // Library Tab (Inactive)
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp),
+                        contentAlignment = Alignment.Center,
                     ) {
-                        Icon(
-                            imageVector = EuthopiarIcons.Library.outlined,
-                            contentDescription = "Library",
-                            tint = Color.White.copy(alpha = 0.45f),
-                            modifier = Modifier.size(19.dp),
-                        )
-                        Text(
-                            text = "Library",
-                            style = androidx.compose.ui.text.TextStyle(
-                                fontSize = 9.sp,
-                                color = Color.White.copy(alpha = 0.5f),
-                            ),
-                        )
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            Icon(
+                                imageVector = EuthopiarIcons.Library.outlined,
+                                contentDescription = "Library",
+                                tint = OnboardingTokens.TextMuted70,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Text(
+                                text = "Library",
+                                style = TextStyle(
+                                    fontFamily = AppFontFamily,
+                                    fontWeight = FontWeight.Normal,
+                                    fontSize = 11.sp,
+                                    color = OnboardingTokens.TextMuted70,
+                                ),
+                            )
+                        }
                     }
 
-                    // 4. Profile
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    // Profile Tab (Inactive)
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp),
+                        contentAlignment = Alignment.Center,
                     ) {
-                        Icon(
-                            imageVector = EuthopiarIcons.Profile.outlined,
-                            contentDescription = "Profile",
-                            tint = Color.White.copy(alpha = 0.45f),
-                            modifier = Modifier.size(19.dp),
-                        )
-                        Text(
-                            text = "Profile",
-                            style = androidx.compose.ui.text.TextStyle(
-                                fontSize = 9.sp,
-                                color = Color.White.copy(alpha = 0.5f),
-                            ),
-                        )
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            Icon(
+                                imageVector = EuthopiarIcons.Profile.outlined,
+                                contentDescription = "Profile",
+                                tint = OnboardingTokens.TextMuted70,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Text(
+                                text = "Profile",
+                                style = TextStyle(
+                                    fontFamily = AppFontFamily,
+                                    fontWeight = FontWeight.Normal,
+                                    fontSize = 11.sp,
+                                    color = OnboardingTokens.TextMuted70,
+                                ),
+                            )
+                        }
                     }
                 }
             }

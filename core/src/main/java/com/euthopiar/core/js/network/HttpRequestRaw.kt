@@ -19,8 +19,16 @@ data class RawHttpResponse(
     val headers: Map<String, String>
 )
 
-private val noRedirectClient: okhttp3.OkHttpClient by lazy {
+private val baseRawClient: okhttp3.OkHttpClient by lazy {
     DohDns.sharedBaseClient.newBuilder()
+        .callTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+        .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+        .build()
+}
+
+private val noRedirectClient: okhttp3.OkHttpClient by lazy {
+    baseRawClient.newBuilder()
         .followRedirects(false)
         .followSslRedirects(false)
         .build()
@@ -55,7 +63,7 @@ suspend fun httpRequestRaw(
     }.build()
 
     val client = if (followRedirects) {
-        DohDns.sharedBaseClient
+        baseRawClient
     } else {
         noRedirectClient
     }
@@ -68,6 +76,29 @@ suspend fun httpRequestRaw(
     }
     try {
         call.execute().use { response ->
+            val headersMap = response.headers.toMultimap().mapValues { (_, values) ->
+                values.joinToString(",")
+            }.mapKeys { (name, _) -> name.lowercase() }
+
+            val contentType = response.header("Content-Type")?.lowercase() ?: ""
+            val contentLength = response.header("Content-Length")?.toLongOrNull() ?: -1L
+            val isMpegUrl = contentType.contains("mpegurl") || contentType.contains("application/x-mpegurl")
+            val isBinaryVideo = (contentType.startsWith("video/") && !isMpegUrl) || (contentLength > 15 * 1024 * 1024L)
+
+            if (isBinaryVideo) {
+                // Binary video stream guard: close body without reading huge payload, return synthetic link
+                val finalUrl = response.request.url.toString()
+                val syntheticJson = "{\"url\":\"$finalUrl\",\"streamUrl\":\"$finalUrl\",\"synthetic\":true}"
+                return@withContext RawHttpResponse(
+                    status = response.code,
+                    statusText = response.message,
+                    url = finalUrl,
+                    body = syntheticJson,
+                    bodyBytes = syntheticJson.toByteArray(Charsets.UTF_8),
+                    headers = headersMap
+                )
+            }
+
             val bodyStream = response.body?.byteStream()
             val responseBytes = if (bodyStream != null) {
                 val maxBytes = maxResponseBodyBytes.coerceAtLeast(0)
@@ -84,9 +115,6 @@ suspend fun httpRequestRaw(
             } else ByteArray(0)
 
             val decoded = String(responseBytes, Charsets.UTF_8)
-            val headersMap = response.headers.toMultimap().mapValues { (_, values) ->
-                values.joinToString(",")
-            }.mapKeys { (name, _) -> name.lowercase() }
 
             RawHttpResponse(
                 status = response.code,
