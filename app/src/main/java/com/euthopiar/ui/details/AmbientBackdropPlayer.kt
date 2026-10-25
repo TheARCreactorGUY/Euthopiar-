@@ -6,6 +6,8 @@ import android.view.View
 import android.view.ViewGroup
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceResponse
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -28,13 +30,20 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.euthopiar.ui.components.extractYouTubeVideoId
+import kotlinx.coroutines.delay
 
 private class AmbientPlayerBridge(
-    private val onPlaybackActive: (Boolean) -> Unit
+    private val onPlaybackActive: (Boolean) -> Unit,
+    private val onPlaybackError: () -> Unit
 ) {
     @JavascriptInterface
     fun onPlaybackActive(active: Boolean) {
         onPlaybackActive(active)
+    }
+
+    @JavascriptInterface
+    fun onPlaybackError() {
+        onPlaybackError()
     }
 }
 
@@ -53,6 +62,7 @@ fun AmbientBackdropPlayer(
     canPlay: Boolean,
     isMuted: Boolean = true,
     onPlaybackActive: (Boolean) -> Unit = {},
+    onPlaybackError: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val videoId = remember(trailerUrl) { extractYouTubeVideoId(trailerUrl) }
@@ -61,7 +71,26 @@ fun AmbientBackdropPlayer(
     val lifecycleOwner = LocalLifecycleOwner.current
     val currentCanPlay by rememberUpdatedState(canPlay)
     val currentOnPlaybackActive by rememberUpdatedState(onPlaybackActive)
+    val currentOnPlaybackError by rememberUpdatedState(onPlaybackError)
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
+    var hasPlaybackStarted by remember(videoId) { mutableStateOf(false) }
+
+    LaunchedEffect(videoId) {
+        hasPlaybackStarted = false
+    }
+
+    LaunchedEffect(canPlay, hasPlaybackStarted) {
+        if (canPlay && !hasPlaybackStarted) {
+            delay(6500L)
+            if (!hasPlaybackStarted) {
+                webViewRef?.let { wv ->
+                    wv.visibility = View.GONE
+                    wv.evaluateJavascript("if (typeof hidePlayer === 'function') hidePlayer(); if (typeof pauseVideo === 'function') pauseVideo();", null)
+                }
+                currentOnPlaybackError()
+            }
+        }
+    }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -112,7 +141,7 @@ fun AmbientBackdropPlayer(
         webViewRef?.let { wv ->
             if (canPlay) {
                 wv.visibility = View.VISIBLE
-                wv.evaluateJavascript("if (typeof playVideo === 'function') playVideo(); if (typeof revealPlayer === 'function') revealPlayer();", null)
+                wv.evaluateJavascript("if (typeof playVideo === 'function') playVideo();", null)
             } else {
                 wv.evaluateJavascript("if (typeof hidePlayer === 'function') hidePlayer(); if (typeof pauseVideo === 'function') pauseVideo();", null)
             }
@@ -143,14 +172,42 @@ fun AmbientBackdropPlayer(
                         webChromeClient = WebChromeClient()
                         webViewClient = object : WebViewClient() {
                             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean = false
+
+                            override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+                                super.onReceivedError(view, request, error)
+                                val isEmbedFrame = request?.url?.path?.contains("/embed/") == true || request?.url?.host?.contains("youtube") == true
+                                if (request?.isForMainFrame == true || isEmbedFrame) {
+                                    view?.visibility = View.GONE
+                                    view?.post { currentOnPlaybackError() }
+                                }
+                            }
+
+                            override fun onReceivedHttpError(view: WebView?, request: WebResourceRequest?, errorResponse: WebResourceResponse?) {
+                                super.onReceivedHttpError(view, request, errorResponse)
+                                val isEmbedFrame = request?.url?.path?.contains("/embed/") == true || request?.url?.host?.contains("youtube") == true
+                                if (request?.isForMainFrame == true || isEmbedFrame) {
+                                    view?.visibility = View.GONE
+                                    view?.post { currentOnPlaybackError() }
+                                }
+                            }
                         }
                         setBackgroundColor(AndroidColor.TRANSPARENT)
 
-                        val bridge = AmbientPlayerBridge { active ->
-                            post {
-                                currentOnPlaybackActive(active)
+                        val bridge = AmbientPlayerBridge(
+                            onPlaybackActive = { active ->
+                                post {
+                                    if (active) {
+                                        hasPlaybackStarted = true
+                                    }
+                                    currentOnPlaybackActive(active)
+                                }
+                            },
+                            onPlaybackError = {
+                                post {
+                                    currentOnPlaybackError()
+                                }
                             }
-                        }
+                        )
                         addJavascriptInterface(bridge, "AndroidBridge")
 
                         val muteParam = if (isMuted) "1" else "0"
@@ -262,6 +319,13 @@ fun AmbientBackdropPlayer(
                                 window.addEventListener('message', function(event) {
                                     try {
                                         var data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+                                        if (data && (data.event === 'onError' || (data.info && data.info.error !== undefined))) {
+                                            hidePlayer();
+                                            if (window.AndroidBridge && window.AndroidBridge.onPlaybackError) {
+                                                window.AndroidBridge.onPlaybackError();
+                                            }
+                                            return;
+                                        }
                                         var state = (data && data.info && data.info.playerState !== undefined) ? data.info.playerState : (data && data.event === 'onStateChange' ? data.info : null);
                                         if (state === 1) {
                                             revealPlayer();
@@ -293,7 +357,7 @@ fun AmbientBackdropPlayer(
                         if (webView.visibility != View.VISIBLE) {
                             webView.visibility = View.VISIBLE
                         }
-                        webView.evaluateJavascript("if (typeof playVideo === 'function') playVideo(); if (typeof revealPlayer === 'function') revealPlayer();", null)
+                        webView.evaluateJavascript("if (typeof playVideo === 'function') playVideo();", null)
                     } else {
                         webView.evaluateJavascript("if (typeof hidePlayer === 'function') hidePlayer(); if (typeof pauseVideo === 'function') pauseVideo();", null)
                     }

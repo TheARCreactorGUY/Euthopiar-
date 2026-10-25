@@ -265,7 +265,9 @@ class DownloadRepository private constructor(private val context: Context) {
             source = stream.sourceName ?: stream.addonName,
             provider = stream.addonName,
             headers = stream.headers,
-            isM3u8 = downloadUrl.contains(".m3u8", ignoreCase = true)
+            isM3u8 = downloadUrl.contains(".m3u8", ignoreCase = true),
+            container = stream.container,
+            trackers = stream.trackers
         )
 
         startDownload(detail, episode, option)

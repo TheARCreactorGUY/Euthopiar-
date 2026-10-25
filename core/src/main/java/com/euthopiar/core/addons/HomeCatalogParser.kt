@@ -80,7 +80,7 @@ object HomeCatalogParser {
                         MediaItem(
                             id = id,
                             title = name,
-                            url = "",
+                            url = "stremio_type:$typeStr",
                             posterUrl = poster,
                             backdropUrl = backdrop,
                             type = mediaType,

@@ -7,7 +7,9 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
@@ -22,6 +24,9 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -35,6 +40,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
@@ -66,9 +72,11 @@ import androidx.compose.material3.SheetState
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -84,7 +92,11 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -105,6 +117,7 @@ import com.euthopiar.data.repository.PlaylistRepository
 import com.euthopiar.ui.library.LibraryColors
 import com.euthopiar.ui.library.LibraryDimens
 import com.euthopiar.ui.library.sanitizeTitle
+import com.euthopiar.ui.navigation.LocalNavbarVisible
 import com.euthopiar.ui.theme.AppFontFamily
 import com.euthopiar.ui.theme.LocalAmoledMode
 import com.euthopiar.ui.theme.LocalReduceMotion
@@ -129,7 +142,6 @@ enum class SheetScreen {
  *
  * Implements smooth 60fps in-sheet transitions with back stack preservation.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MediaDetailsActionSheet(
     mediaId: String,
@@ -148,15 +160,57 @@ fun MediaDetailsActionSheet(
     onSelectWatchlistCategory: ((categoryKey: String, categoryLabel: String) -> Unit)? = null,
     onRemoveFromWatchlist: (() -> Unit)? = null,
     onPlaylistAction: ((message: String) -> Unit)? = null,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+    hazeState: HazeState? = null
 ) {
     val context = LocalContext.current
     val playlistRepository = remember { PlaylistRepository.getInstance(context) }
     val userPlaylists by playlistRepository.userPlaylists.collectAsState()
     val scope = rememberCoroutineScope()
     val reduceMotion = LocalReduceMotion.current
+    val configuration = LocalConfiguration.current
+    val density = LocalDensity.current
+    val navbarVisible = LocalNavbarVisible.current
 
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    DisposableEffect(Unit) {
+        navbarVisible.value = false
+        onDispose {
+            navbarVisible.value = true
+        }
+    }
+
+    val sheetProgress = remember { Animatable(0f) }
+    var dragOffsetY by remember { mutableFloatStateOf(0f) }
+    var isDismissing by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        if (reduceMotion) {
+            sheetProgress.snapTo(1f)
+        } else {
+            sheetProgress.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(durationMillis = 340, easing = FastOutSlowInEasing)
+            )
+        }
+    }
+
+    val dismissWithAnim: () -> Unit = {
+        if (!isDismissing) {
+            isDismissing = true
+            scope.launch {
+                if (reduceMotion) {
+                    onDismiss()
+                } else {
+                    sheetProgress.animateTo(
+                        targetValue = 0f,
+                        animationSpec = tween(durationMillis = 160, easing = LinearOutSlowInEasing)
+                    )
+                    onDismiss()
+                }
+            }
+        }
+    }
 
     val cleanTitle = remember(title) { sanitizeTitle(title) }
 
@@ -188,123 +242,204 @@ fun MediaDetailsActionSheet(
                 if (navigatedFromWatchlist && initialScreen == SheetScreen.WATCHLIST_CATEGORY) {
                     currentScreen = SheetScreen.WATCHLIST_CATEGORY
                 } else {
-                    onDismiss()
+                    dismissWithAnim()
                 }
             }
-            SheetScreen.WATCHLIST_CATEGORY -> onDismiss()
+            SheetScreen.WATCHLIST_CATEGORY -> dismissWithAnim()
         }
     }
 
     val isAmoled = LocalAmoledMode.current
+    val animValue = sheetProgress.value
+    val maxSheetHeight = (configuration.screenHeightDp * 0.85f).dp
+    var sheetHeightPx by remember { mutableFloatStateOf(0f) }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp, bottomStart = 0.dp, bottomEnd = 0.dp),
-        containerColor = if (isAmoled) Color.Black.copy(alpha = 0.88f) else Color(0xFF0F101A).copy(alpha = 0.72f),
-        scrimColor = Color.Black.copy(alpha = 0.58f),
-        dragHandle = {
-            Box(
+    val sheetShape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
+    val sheetFill = if (isAmoled) Color.Black.copy(alpha = 0.88f) else Color(0xFF0F101A).copy(alpha = 0.70f)
+    val fallbackFill = if (isAmoled) Color.Black.copy(alpha = 0.94f) else Color(0xFF0F101A).copy(alpha = 0.94f)
+    val scrimAlpha = if (reduceMotion) 0.60f else (0.60f * (animValue / (250f / 340f))).coerceIn(0f, 0.60f)
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .zIndex(100f)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = dismissWithAnim
+            )
+    ) {
+        // Scrim: 60% black fade
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = scrimAlpha))
+        )
+
+        // Sheet Container: slides up from bottom
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .heightIn(max = maxSheetHeight)
+                .onGloballyPositioned { coordinates ->
+                    sheetHeightPx = coordinates.size.height.toFloat()
+                }
+                .offset {
+                    val slideDistance = if (sheetHeightPx > 0f) sheetHeightPx else with(density) { maxSheetHeight.toPx() }
+                    val currentY = (1f - animValue) * slideDistance + dragOffsetY
+                    IntOffset(0, currentY.roundToInt())
+                }
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = { /* prevent click through */ }
+                )
+                .draggable(
+                    state = rememberDraggableState { delta ->
+                        if (delta > 0 || dragOffsetY > 0) {
+                            dragOffsetY = (dragOffsetY + delta).coerceAtLeast(0f)
+                        }
+                    },
+                    orientation = Orientation.Vertical,
+                    onDragStopped = {
+                        if (dragOffsetY > 120f) {
+                            dismissWithAnim()
+                        } else {
+                            scope.launch {
+                                Animatable(dragOffsetY).animateTo(
+                                    targetValue = 0f,
+                                    animationSpec = spring(
+                                        dampingRatio = Spring.DampingRatioLowBouncy,
+                                        stiffness = Spring.StiffnessMedium
+                                    )
+                                ) {
+                                    dragOffsetY = value
+                                }
+                            }
+                        }
+                    }
+                )
+                .clip(sheetShape)
+                .then(
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hazeState != null) {
+                        Modifier.hazeEffect(state = hazeState) {
+                            blurRadius = 24.dp
+                            tints = listOf(HazeTint(sheetFill))
+                            fallbackTint = HazeTint(fallbackFill)
+                        }
+                    } else {
+                        Modifier.background(fallbackFill)
+                    }
+                )
+                .border(
+                    width = 0.5.dp,
+                    color = Color.White.copy(alpha = 0.18f),
+                    shape = sheetShape
+                )
+        ) {
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 10.dp, bottom = 6.dp),
-                contentAlignment = Alignment.Center
+                    .navigationBarsPadding()
+                    .imePadding()
+                    .padding(bottom = 16.dp)
             ) {
-                // 36 px wide, 4 px tall, fully rounded, white at 28% opacity
+                // Drag handle: 36 by 4 dp, white 28%
                 Box(
                     modifier = Modifier
-                        .size(width = 36.dp, height = 4.dp)
-                        .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.28f))
-                )
-            }
-        }
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                .padding(bottom = 16.dp)
-        ) {
-            AnimatedContent(
-                targetState = currentScreen,
-                transitionSpec = {
-                    if (reduceMotion) {
-                        fadeIn(tween(120)) togetherWith fadeOut(tween(120))
-                    } else {
-                        val isMovingForward = when {
-                            initialState == SheetScreen.WATCHLIST_CATEGORY && targetState == SheetScreen.ADD_TO_PLAYLIST -> true
-                            initialState == SheetScreen.ADD_TO_PLAYLIST && targetState == SheetScreen.NEW_PLAYLIST_NAMING -> true
-                            else -> false
-                        }
-                        if (isMovingForward) {
-                            (slideInHorizontally(tween(220, easing = FastOutSlowInEasing)) { 24 } + fadeIn(tween(200)))
-                                .togetherWith(slideOutHorizontally(tween(160, easing = FastOutSlowInEasing)) { -24 } + fadeOut(tween(150)))
+                        .fillMaxWidth()
+                        .padding(top = 10.dp, bottom = 6.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(width = 36.dp, height = 4.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.28f))
+                    )
+                }
+
+                AnimatedContent(
+                    targetState = currentScreen,
+                    transitionSpec = {
+                        if (reduceMotion) {
+                            fadeIn(tween(120)) togetherWith fadeOut(tween(120))
                         } else {
-                            (slideInHorizontally(tween(220, easing = FastOutSlowInEasing)) { -24 } + fadeIn(tween(200)))
-                                .togetherWith(slideOutHorizontally(tween(160, easing = FastOutSlowInEasing)) { 24 } + fadeOut(tween(150)))
+                            val isMovingForward = when {
+                                initialState == SheetScreen.WATCHLIST_CATEGORY && targetState == SheetScreen.ADD_TO_PLAYLIST -> true
+                                initialState == SheetScreen.ADD_TO_PLAYLIST && targetState == SheetScreen.NEW_PLAYLIST_NAMING -> true
+                                else -> false
+                            }
+                            if (isMovingForward) {
+                                (slideInHorizontally(tween(220, easing = FastOutSlowInEasing)) { 24 } + fadeIn(tween(200)))
+                                    .togetherWith(slideOutHorizontally(tween(160, easing = FastOutSlowInEasing)) { -24 } + fadeOut(tween(150)))
+                            } else {
+                                (slideInHorizontally(tween(220, easing = FastOutSlowInEasing)) { -24 } + fadeIn(tween(200)))
+                                    .togetherWith(slideOutHorizontally(tween(160, easing = FastOutSlowInEasing)) { 24 } + fadeOut(tween(150)))
+                            }
                         }
-                    }
-                },
-                label = "sheetContentTransition"
-            ) { screen ->
-                when (screen) {
-                    SheetScreen.WATCHLIST_CATEGORY -> {
-                        WatchlistCategoryContent(
-                            title = cleanTitle,
-                            currentStatus = watchlistStatus,
-                            onSelectCategory = { statusKey, label ->
-                                onSelectWatchlistCategory?.invoke(statusKey, label)
-                                scope.launch {
-                                    delay(250)
-                                    onDismiss()
+                    },
+                    label = "sheetContentTransition"
+                ) { screen ->
+                    when (screen) {
+                        SheetScreen.WATCHLIST_CATEGORY -> {
+                            WatchlistCategoryContent(
+                                title = cleanTitle,
+                                currentStatus = watchlistStatus,
+                                onSelectCategory = { statusKey, label ->
+                                    onSelectWatchlistCategory?.invoke(statusKey, label)
+                                    scope.launch {
+                                        delay(250)
+                                        dismissWithAnim()
+                                    }
+                                },
+                                onNavigateToPlaylist = {
+                                    navigatedFromWatchlist = true
+                                    currentScreen = SheetScreen.ADD_TO_PLAYLIST
+                                },
+                                onRemoveFromWatchlist = {
+                                    onRemoveFromWatchlist?.invoke()
+                                    scope.launch {
+                                        delay(150)
+                                        dismissWithAnim()
+                                    }
                                 }
-                            },
-                            onNavigateToPlaylist = {
-                                navigatedFromWatchlist = true
-                                currentScreen = SheetScreen.ADD_TO_PLAYLIST
-                            },
-                            onRemoveFromWatchlist = {
-                                onRemoveFromWatchlist?.invoke()
-                                scope.launch {
-                                    delay(150)
-                                    onDismiss()
-                                }
-                            }
-                        )
-                    }
+                            )
+                        }
 
-                    SheetScreen.ADD_TO_PLAYLIST -> {
-                        AddToPlaylistContent(
-                            title = cleanTitle,
-                            playlists = userPlaylists,
-                            playlistItem = playlistItem,
-                            hasBackButton = navigatedFromWatchlist && initialScreen == SheetScreen.WATCHLIST_CATEGORY,
-                            onBack = { currentScreen = SheetScreen.WATCHLIST_CATEGORY },
-                            onNewPlaylistClick = { currentScreen = SheetScreen.NEW_PLAYLIST_NAMING },
-                            onTogglePlaylist = { pl, isAlreadyIn ->
-                                if (isAlreadyIn) {
-                                    playlistRepository.removeItemFromPlaylist(pl.id, playlistItem.uniqueKey)
-                                    onPlaylistAction?.invoke("Removed from ${pl.title}")
-                                } else {
-                                    playlistRepository.addItemToPlaylist(pl.id, playlistItem)
-                                    onPlaylistAction?.invoke("Added to ${pl.title}")
+                        SheetScreen.ADD_TO_PLAYLIST -> {
+                            AddToPlaylistContent(
+                                title = cleanTitle,
+                                playlists = userPlaylists,
+                                playlistItem = playlistItem,
+                                hasBackButton = navigatedFromWatchlist && initialScreen == SheetScreen.WATCHLIST_CATEGORY,
+                                onBack = { currentScreen = SheetScreen.WATCHLIST_CATEGORY },
+                                onNewPlaylistClick = { currentScreen = SheetScreen.NEW_PLAYLIST_NAMING },
+                                onTogglePlaylist = { pl, isAlreadyIn ->
+                                    if (isAlreadyIn) {
+                                        playlistRepository.removeItemFromPlaylist(pl.id, playlistItem.uniqueKey)
+                                        onPlaylistAction?.invoke("Removed from ${pl.title}")
+                                    } else {
+                                        playlistRepository.addItemToPlaylist(pl.id, playlistItem)
+                                        onPlaylistAction?.invoke("Added to ${pl.title}")
+                                    }
                                 }
-                            }
-                        )
-                    }
+                            )
+                        }
 
-                    SheetScreen.NEW_PLAYLIST_NAMING -> {
-                        NewPlaylistNamingContent(
-                            existingPlaylists = userPlaylists,
-                            onBack = { currentScreen = SheetScreen.ADD_TO_PLAYLIST },
-                            onConfirm = { newName ->
-                                val created = playlistRepository.createPlaylist(newName)
-                                playlistRepository.addItemToPlaylist(created.id, playlistItem)
-                                onPlaylistAction?.invoke("Added to ${created.title}")
-                                onDismiss()
-                            }
-                        )
+                        SheetScreen.NEW_PLAYLIST_NAMING -> {
+                            NewPlaylistNamingContent(
+                                existingPlaylists = userPlaylists,
+                                onBack = { currentScreen = SheetScreen.ADD_TO_PLAYLIST },
+                                onConfirm = { newName ->
+                                    val created = playlistRepository.createPlaylist(newName)
+                                    playlistRepository.addItemToPlaylist(created.id, playlistItem)
+                                    onPlaylistAction?.invoke("Added to ${created.title}")
+                                    dismissWithAnim()
+                                }
+                            )
+                        }
                     }
                 }
             }

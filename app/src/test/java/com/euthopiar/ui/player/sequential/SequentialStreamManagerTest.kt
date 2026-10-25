@@ -135,4 +135,28 @@ class SequentialStreamManagerTest {
             session.release()
         }
     }
+
+    @Test
+    fun preResolveAndPinUrl_returnsCachedPinnedUrl() = kotlinx.coroutines.runBlocking {
+        SequentialStreamManager.clearPinnedUrls()
+        val orig = "https://gateway.example.com/stream/redirect"
+        val cdn = "https://cdn.example.com/video.mp4"
+        SequentialStreamManager.pinResolvedUrl(orig, cdn)
+
+        val resolved = SequentialStreamManager.preResolveAndPinUrl(
+            okHttpClient = okhttp3.OkHttpClient(),
+            url = orig
+        )
+        assertEquals(cdn, resolved)
+    }
+
+    @Test
+    fun preResolveAndPinUrl_ignoresLoopback() = kotlinx.coroutines.runBlocking {
+        val loopback = "http://127.0.0.1:8080/stream.mp4"
+        val resolved = SequentialStreamManager.preResolveAndPinUrl(
+            okHttpClient = okhttp3.OkHttpClient(),
+            url = loopback
+        )
+        assertEquals(loopback, resolved)
+    }
 }

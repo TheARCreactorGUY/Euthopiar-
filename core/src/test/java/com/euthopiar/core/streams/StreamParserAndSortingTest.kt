@@ -498,4 +498,125 @@ class StreamParserAndSortingTest {
         assertNotEquals(id1, idDiff)
         assertEquals("local", com.euthopiar.core.js.computeCanonicalRepoId("local"))
     }
+
+    @Test
+    fun testStreamParserExtractsContainerTrackersAndSubtitles() {
+        val streamJson = """
+            {
+                "streams": [
+                    {
+                        "name": "Torrentio\n4K HDR",
+                        "title": "Inception.2010.UHD.BluRay.2160p.TrueHD.Atmos.7.1.DV.HEVC-REMUX.mkv\n👤 45 💾 55.4 GB ⚙️ RD",
+                        "url": "https://debrid.example.com/stream/file.mkv",
+                        "behaviorHints": {
+                            "filename": "Inception.2010.mkv"
+                        },
+                        "sources": [
+                            "tracker:udp://tracker.opentrackr.org:1337/announce",
+                            "tracker:udp://open.demonii.com:1337/announce"
+                        ],
+                        "subtitles": [
+                            {
+                                "id": "eng_1",
+                                "lang": "eng",
+                                "url": "https://example.com/subs/eng.srt"
+                            }
+                        ]
+                    },
+                    {
+                        "name": "LiveStream",
+                        "title": "Live 1080p Channel",
+                        "url": "https://live.example.com/stream/index.m3u8"
+                    }
+                ]
+            }
+        """.trimIndent()
+
+        val parsed = StreamParser.parse(streamJson, "torrentio", "Torrentio")
+        assertEquals(2, parsed.size)
+
+        val s1 = parsed[0]
+        assertEquals("Inception.2010.mkv", s1.filename)
+        assertEquals(com.euthopiar.core.model.StreamContainer.MKV, s1.container)
+        assertEquals(2, s1.trackers.size)
+        assertTrue(s1.trackers.contains("udp://tracker.opentrackr.org:1337/announce"))
+        assertEquals(1, s1.subtitles.size)
+        assertEquals("eng", s1.subtitles.first().language)
+        assertEquals("https://example.com/subs/eng.srt", s1.subtitles.first().url)
+
+        val s2 = parsed[1]
+        assertEquals(com.euthopiar.core.model.StreamContainer.HLS, s2.container)
+    }
+
+    @Test
+    fun testAnimeAndChannelSupportsResource() {
+        val manifest = com.euthopiar.core.addons.AddonManifest(
+            id = "torrentio",
+            name = "Torrentio",
+            resources = listOf(
+                com.euthopiar.core.addons.AddonResource(
+                    name = "stream",
+                    types = listOf("movie", "series"),
+                    idPrefixes = listOf("tt", "kitsu")
+                )
+            ),
+            types = listOf("movie", "series")
+        )
+
+        // Addons declaring movie/series should support "anime" streams
+        assertTrue(manifest.supportsStream("anime", "tt1234567"))
+        assertTrue(manifest.supportsStream("anime", "kitsu:123:1"))
+
+        // Channel / Live TV matching
+        val iptvManifest = com.euthopiar.core.addons.AddonManifest(
+            id = "usatv",
+            name = "USA TV",
+            resources = listOf(
+                com.euthopiar.core.addons.AddonResource(
+                    name = "stream",
+                    types = listOf("channel"),
+                    idPrefixes = listOf("ustv")
+                )
+            ),
+            types = listOf("channel")
+        )
+        assertTrue(iptvManifest.supportsStream("channel", "ustv:fox"))
+        assertTrue(iptvManifest.supportsStream("tv", "ustv:fox"))
+    }
+
+    @Test
+    fun testBuildSearchCatalogDefinitionsFiltersSearchableCatalogs() {
+        val nonSearchCatalog = com.euthopiar.core.addons.AddonCatalog(
+            type = "movie",
+            id = "top_movies",
+            name = "Top Movies",
+            extra = emptyList()
+        )
+        val searchCatalog = com.euthopiar.core.addons.AddonCatalog(
+            type = "series",
+            id = "search_series",
+            name = "Series Search",
+            extra = listOf(
+                com.euthopiar.core.addons.AddonExtraProperty(
+                    name = "search",
+                    isRequired = true
+                )
+            )
+        )
+        val manifest = com.euthopiar.core.addons.AddonManifest(
+            id = "test_addon",
+            name = "Test Addon",
+            catalogs = listOf(nonSearchCatalog, searchCatalog)
+        )
+        val managed = com.euthopiar.core.addons.ManagedAddon(
+            manifestUrl = "https://example.com/manifest.json",
+            manifest = manifest,
+            enabled = true
+        )
+
+        val searchDefs = com.euthopiar.core.addons.buildSearchCatalogDefinitions(listOf(managed))
+        assertEquals(1, searchDefs.size)
+        assertEquals("search_series", searchDefs.first().catalogId)
+        assertEquals("Test Addon", searchDefs.first().addonName)
+    }
 }

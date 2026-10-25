@@ -85,9 +85,6 @@ class AddonRepository private constructor(private val context: Context) {
 
     suspend fun installAddon(rawUrl: String): Result<ManagedAddon> = withContext(Dispatchers.IO) {
         val manifestUrl = normalizeAddonUrl(rawUrl)
-        if (_uiState.value.addons.any { it.manifestUrl == manifestUrl }) {
-            return@withContext Result.failure(IllegalStateException("Addon already installed"))
-        }
 
         runCatching {
             val response = httpRequestRaw("GET", manifestUrl, emptyMap(), "", followRedirects = true)
@@ -105,7 +102,26 @@ class AddonRepository private constructor(private val context: Context) {
 
             mutex.withLock {
                 _uiState.update { state ->
-                    state.copy(addons = state.addons.filterNot { it.manifestUrl == manifestUrl } + managed)
+                    val existingIndex = state.addons.indexOfFirst {
+                        (manifest.id.isNotBlank() && it.manifest?.id == manifest.id) ||
+                        it.manifestUrl == manifestUrl
+                    }
+                    if (existingIndex >= 0) {
+                        val updatedList = state.addons.toMutableList()
+                        val old = updatedList[existingIndex]
+                        val preservedUserSetName = if (!old.userSetName.isNullOrBlank() && old.userSetName != old.manifest?.name) {
+                            old.userSetName
+                        } else {
+                            manifest.name
+                        }
+                        updatedList[existingIndex] = managed.copy(
+                            userSetName = preservedUserSetName,
+                            enabled = old.enabled
+                        )
+                        state.copy(addons = updatedList)
+                    } else {
+                        state.copy(addons = state.addons + managed)
+                    }
                 }
                 persist()
             }

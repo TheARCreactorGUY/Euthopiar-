@@ -1,5 +1,6 @@
 package com.euthopiar.core.streams
 
+import com.euthopiar.core.model.StreamContainer
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -31,7 +32,11 @@ data class StreamItem(
     val peers: Int? = null,
     val isCached: Boolean = false,
     val audioLanguages: List<String> = emptyList(),
-    val matchScore: Double = 0.0
+    val matchScore: Double = 0.0,
+    val filename: String? = null,
+    val container: StreamContainer = StreamContainer.AUTO,
+    val trackers: List<String> = emptyList(),
+    val subtitles: List<StreamSubtitle> = emptyList()
 ) {
     val effectiveInfoHash: String?
         get() = infoHash ?: url?.let { u ->

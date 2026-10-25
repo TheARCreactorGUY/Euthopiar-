@@ -280,20 +280,49 @@ object StreamsRepository {
             }
 
             // Concurrently query each enabled Stremio addon
-            val stremioType = if (normType == "tv") "series" else normType
             val stremioAddonStreamId = if (!effectiveImdbId.isNullOrBlank() && effectiveImdbId.startsWith("tt")) {
                 if (season != null && episode != null) "$effectiveImdbId:$season:$episode" else effectiveImdbId
+            } else if (effectiveImdbId == null && (
+                videoId.startsWith("kitsu:", ignoreCase = true) ||
+                videoId.startsWith("ustv:", ignoreCase = true) ||
+                videoId.startsWith("yt_id:", ignoreCase = true) ||
+                videoId.contains(":") ||
+                !videoId.all { it.isDigit() }
+            )) {
+                videoId
             } else {
                 addonStreamId
             }
+
             addons.forEach { addon ->
                 val addonId = addon.streamAddonInstanceId(addon.manifest?.id ?: addon.displayTitle)
+                val streamResource = addon.manifest?.resources?.firstOrNull { it.name.equals("stream", ignoreCase = true) }
+                val streamTypes = streamResource?.types ?: addon.manifest?.types.orEmpty()
+                val exclusivelyAnime = streamTypes.isNotEmpty() && streamTypes.all { it.equals("anime", ignoreCase = true) }
+
+                val targetType = if (stremioAddonStreamId.startsWith("tt", ignoreCase = true)) {
+                    if (exclusivelyAnime) {
+                        "anime"
+                    } else {
+                        if (season != null && episode != null) "series" else "movie"
+                    }
+                } else if (effectiveImdbId == null) {
+                    val supportedMatchingType = streamTypes.firstOrNull { st ->
+                        st.equals(normType, ignoreCase = true) ||
+                        (normType == "tv" && st.equals("series", ignoreCase = true)) ||
+                        (normType == "anime" && (st.equals("anime", ignoreCase = true) || st.equals("series", ignoreCase = true)))
+                    }
+                    supportedMatchingType ?: if (normType == "tv") "series" else normType
+                } else {
+                    if (normType == "tv") "series" else normType
+                }
+
                 launch(Dispatchers.IO) {
                     try {
                         val url = com.euthopiar.core.addons.buildAddonResourceUrl(
                             manifestUrl = addon.manifestUrl,
                             resource = "stream",
-                            type = stremioType,
+                            type = targetType,
                             id = stremioAddonStreamId,
                             extraPathSegment = null
                         )

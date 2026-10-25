@@ -294,6 +294,8 @@ class PlayerViewModel(
 
     private var pre2xSpeed: Float = 1.0f
     private var videoFrameRendered: Boolean = false
+    @Volatile
+    private var pendingDeferredSeekMs: Long? = null
     private var activeSubtitleCues: List<SubtitleCue> = emptyList()
     private val _currentSubtitleCue = MutableStateFlow<SubtitleCue?>(null)
     val currentSubtitleCue: StateFlow<SubtitleCue?> = _currentSubtitleCue.asStateFlow()
@@ -402,10 +404,22 @@ class PlayerViewModel(
         return active
     }
 
+    /** User's preferred quality height, used to rank sources by "best for the user". */
+    @Volatile private var sortPrefHeight: Int = 1080
+
     init {
         initExoPlayer()
         observeUserPreferences()
         registerNetworkCallback()
+        viewModelScope.launch {
+            preferencesRepository.defaultQuality.collect { q ->
+                sortPrefHeight = when {
+                    q.contains("4K", ignoreCase = true) || q.contains("2160", ignoreCase = true) -> 2160
+                    q.contains("720", ignoreCase = true) -> 720
+                    else -> 1080
+                }
+            }
+        }
     }
 
     private fun registerNetworkCallback() {
@@ -845,6 +859,14 @@ class PlayerViewModel(
                         _uiState.update { it.copy(isBuffering = true) }
                     }
                     Player.STATE_READY -> {
+                        val deferredSeek = pendingDeferredSeekMs
+                        if (deferredSeek != null && deferredSeek > 0L) {
+                            pendingDeferredSeekMs = null
+                            player.seekTo(deferredSeek)
+                            _uiState.update { it.copy(isBuffering = true, currentPositionMs = deferredSeek) }
+                            return
+                        }
+
                         starvationConsecutiveSeconds = 0
                         val duration = player.duration.takeIf { it > 0 } ?: _uiState.value.durationMs
 
@@ -1320,7 +1342,9 @@ class PlayerViewModel(
         if (currentServer != null) {
             failedServerIds.add(currentServer.id)
         }
-        val otherServers = _uiState.value.availableServers.filter { it.id !in failedServerIds }
+        val otherServers = _uiState.value.availableServers
+            .filter { it.id !in failedServerIds }
+            .sortedBy { if (it.healthCategory == ServerHealthCategory.UNWATCHABLE) 1 else 0 }
         if (otherServers.isNotEmpty()) {
             val fallback = otherServers.first()
             val name = currentServer?.serverName ?: "Server"
@@ -2291,6 +2315,21 @@ class PlayerViewModel(
         fastStartJob = null
         _uiState.update { it.copy(userError = null, errorMessage = null) }
 
+        val activeScraper = com.euthopiar.core.js.JsPluginStorage.getInstanceOrNull()?.scrapersFlow?.value?.find {
+            it.name.equals(currentProvider, ignoreCase = true) || it.id.equals(currentProvider, ignoreCase = true)
+        }
+        currentCanonicalStream = com.euthopiar.core.model.CanonicalStream(
+            mediaId = currentMediaId.orEmpty(),
+            title = _uiState.value.mediaTitle,
+            uri = source.url,
+            headers = source.headers,
+            responseHeaders = source.responseHeaders,
+            quality = source.resolutionLabel.ifBlank { source.quality }.ifBlank { "Auto" },
+            isM3u8 = source.isM3u8,
+            repoId = activeScraper?.canonicalRepoId,
+            pluginId = activeScraper?.id ?: currentProvider
+        )
+
         val cleanUrl = source.url.trim()
         val isHttp = cleanUrl.startsWith("http://", ignoreCase = true) || cleanUrl.startsWith("https://", ignoreCase = true)
         val isTorrent = cleanUrl.startsWith("magnet:", ignoreCase = true) ||
@@ -2326,8 +2365,10 @@ class PlayerViewModel(
                 !urlLower.contains(".mp4") &&
                 !urlLower.contains(".mkv") &&
                 !urlLower.contains(".webm")
+        val isSequential = com.euthopiar.ui.player.sequential.SequentialStreamManager.isSequentialStream(source.url, source.container)
+        val isAddonStream = (!source.addonId.isNullOrBlank() || !source.addonName.isNullOrBlank() || isSequential || isTorrent) && !isLoopback
 
-        if (isTorrent || isAmbiguousHttp) {
+        if (isTorrent || isAmbiguousHttp || isAddonStream) {
             sourcePrepJob = viewModelScope.launch {
                 ensureActive()
                 var currentSource = source
@@ -2412,7 +2453,12 @@ class PlayerViewModel(
                         ensureActive()
 
                         if (resolveResult.isSuccess) {
-                            currentSource = resolveResult.getOrThrow()
+                            val resolved = resolveResult.getOrThrow()
+                            currentSource = resolved.copy(
+                                addonId = currentSource.addonId,
+                                addonName = currentSource.addonName,
+                                container = if (currentSource.container != com.euthopiar.core.model.StreamContainer.AUTO) currentSource.container else resolved.container
+                            )
                         } else {
                             // If Debrid resolution fails, attempt fallback to native P2P engine
                             val p2pRequest = extractP2pStreamRequest(
@@ -2631,6 +2677,19 @@ class PlayerViewModel(
                     }
                 }
 
+                val isCurrentHttp = currentSource.url.startsWith("http://", ignoreCase = true) || currentSource.url.startsWith("https://", ignoreCase = true)
+                val isCurrentLoopback = currentSource.url.contains("://127.0.0.1") || currentSource.url.contains("://localhost") || currentSource.url.contains("://[::1]")
+                if (isCurrentHttp && !isCurrentLoopback && (isAddonStream || currentSource.addonId != null || currentSource.addonName != null || com.euthopiar.ui.player.sequential.SequentialStreamManager.isSequentialStream(currentSource.url, currentSource.container))) {
+                    val resolved = com.euthopiar.ui.player.sequential.SequentialStreamManager.preResolveAndPinUrl(
+                        streamingHttpClient,
+                        currentSource.url,
+                        currentSource.headers
+                    )
+                    if (resolved != currentSource.url) {
+                        currentSource = currentSource.copy(url = resolved)
+                    }
+                }
+
                 ensureActive()
                 playStreamSourceInternal(currentSource, subtitles, seekToPosition, isOffline)
             }
@@ -2744,9 +2803,24 @@ class PlayerViewModel(
             .setPreferredVideoMimeType(null)
             .build()
 
+        val isLoopback = source.url.contains("://127.0.0.1") || source.url.contains("://localhost") || source.url.contains("://[::1]")
+        val isRemoteNonHls = !source.isM3u8 && source.container != com.euthopiar.core.model.StreamContainer.HLS && !isLoopback &&
+                (source.url.startsWith("http://", ignoreCase = true) || source.url.startsWith("https://", ignoreCase = true))
+        val isAddonOrProgressive = (!source.addonId.isNullOrBlank() || !source.addonName.isNullOrBlank() ||
+                com.euthopiar.ui.player.sequential.SequentialStreamManager.isSequentialStream(source.url, source.container) ||
+                isRemoteNonHls) && !isLoopback
+
         if (seekToPosition != null && seekToPosition > 0L) {
-            player.setMediaSource(mediaSource, seekToPosition)
+            if (isAddonOrProgressive) {
+                pendingDeferredSeekMs = seekToPosition
+                _uiState.update { it.copy(currentPositionMs = seekToPosition) }
+                player.setMediaSource(mediaSource, /* resetPosition = */ true)
+            } else {
+                pendingDeferredSeekMs = null
+                player.setMediaSource(mediaSource, seekToPosition)
+            }
         } else {
+            pendingDeferredSeekMs = null
             player.setMediaSource(mediaSource, /* resetPosition = */ true)
         }
         player.prepare()
@@ -3735,6 +3809,8 @@ class PlayerViewModel(
         failedServerIds.remove(serverOption.id)
         failedAudioTrackIds.clear()
 
+        val currentPos = (pendingDeferredSeekMs ?: exoPlayer?.currentPosition?.takeIf { it > 0L } ?: _uiState.value.currentPositionMs).coerceAtLeast(0L)
+
         // 1. Immediately stop playback & clear media items to prevent old audio/video bleed
         exoPlayer?.stop()
         exoPlayer?.clearMediaItems()
@@ -3757,7 +3833,6 @@ class PlayerViewModel(
             }
         }
 
-        val currentPos = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: _uiState.value.currentPositionMs.coerceAtLeast(0L)
         val defaultAutoQuality = VideoQualityOption(
             id = "auto",
             label = "Auto (Adaptive)",
@@ -4238,6 +4313,7 @@ class PlayerViewModel(
         val player = exoPlayer ?: return
         seekDebounceJob?.cancel()
         pendingSeekTargetMs = null
+        pendingDeferredSeekMs = null
         val effectiveDuration = player.duration.takeIf { it > 0 } ?: _uiState.value.durationMs
         val clamped = if (effectiveDuration > 0) positionMs.coerceIn(0L, effectiveDuration) else positionMs.coerceAtLeast(0L)
         android.util.Log.d("PlayerViewModel", "seekTo: target=$positionMs, clamped=$clamped, duration=$effectiveDuration, isSeekable=${player.isCurrentMediaItemSeekable}")
@@ -4607,8 +4683,12 @@ class PlayerViewModel(
                         val urlLower = curServer?.streamSource?.url?.lowercase().orEmpty()
                         val isP2p = _uiState.value.isP2pStream || urlLower.startsWith("magnet:") || urlLower.contains("127.0.0.1") || urlLower.contains("localhost") || com.euthopiar.core.p2p.extractP2pStreamRequest(urlLower) != null
                         val is4k = curServer?.resolutionLabel?.contains("2160") == true || curServer?.resolutionLabel?.contains("4k", ignoreCase = true) == true
+                        // Startup = no video frame rendered yet for this source; give it far more time than a mid-playback rebuffer.
+                        val isStartup = !videoFrameRendered
                         val maxGraceMs = when {
                             isP2p -> 40_000L
+                            isStartup && is4k -> 40_000L
+                            isStartup -> 30_000L
                             is4k -> 20_000L
                             else -> 12_000L
                         }
@@ -4621,7 +4701,12 @@ class PlayerViewModel(
                             lastBufferedPositionMs = player.bufferedPosition.coerceAtLeast(0L)
                             lastP2pBufferProgress = _uiState.value.p2pBufferProgress
                             lastPeerCount = _uiState.value.p2pPeers
-                            currentGracePeriodMs = if (isP2p) 14_000L else 5000L
+                            currentGracePeriodMs = when {
+                                isP2p -> 14_000L
+                                isStartup && is4k -> 25_000L
+                                isStartup -> 15_000L
+                                else -> 5000L
+                            }
                         } else {
                             val elapsedMs = nowMs - startTime
 
@@ -4657,7 +4742,9 @@ class PlayerViewModel(
                                     lastP2pBufferProgress = p2pBuf
                                     lastPeerCount = p2pPeers
                                 } else {
-                                    if (speedBps > 150 * 1024L && bufferGrowing) {
+                                    // At startup, any sign of progress (bytes arriving or buffer growing) counts as healthy.
+                                    val progressing = if (isStartup) (bytesDelta > 0L || bufferGrowing) else (speedBps > 150 * 1024L && bufferGrowing)
+                                    if (progressing) {
                                         currentGracePeriodMs = (currentGracePeriodMs + 3000L).coerceAtMost(maxGraceMs)
                                         android.util.Log.d("PlayerViewModel", "Velocity ramp-up: ${speedBps / 1024} KB/s, buffer growing. Extended grace to ${currentGracePeriodMs}ms (max ${maxGraceMs}ms)")
                                     }
@@ -4746,22 +4833,25 @@ class PlayerViewModel(
                         }
                     }
 
-                    if (!_uiState.value.isScrubbing && pendingSeekTargetMs == null && (player.playbackState == Player.STATE_READY || player.isPlaying)) {
+                    val deferred = pendingDeferredSeekMs
+                    if (!_uiState.value.isScrubbing && pendingSeekTargetMs == null && (player.playbackState == Player.STATE_READY || player.isPlaying || deferred != null)) {
+                        val effectivePos = deferred ?: pos
                         _uiState.update {
                             it.copy(
-                                currentPositionMs = pos,
-                                bufferedPositionMs = player.bufferedPosition.coerceAtLeast(0L),
+                                currentPositionMs = effectivePos,
+                                bufferedPositionMs = if (deferred != null) it.bufferedPositionMs else player.bufferedPosition.coerceAtLeast(0L),
                                 durationMs = if (player.duration > 0) player.duration else it.durationMs
                             )
                         }
                         val effectiveDur = if (player.duration > 0) player.duration else _uiState.value.durationMs
-                        checkAndTriggerUpNext(pos, effectiveDur)
-                        checkSkipIntroAndOutro(pos, effectiveDur)
+                        checkAndTriggerUpNext(effectivePos, effectiveDur)
+                        checkSkipIntroAndOutro(effectivePos, effectiveDur)
                     }
-                    updateSubtitleForPosition(pos)
+                    val subtitlePos = deferred ?: pos
+                    updateSubtitleForPosition(subtitlePos)
 
                     val now = System.currentTimeMillis()
-                    if (now - lastProgressSaveTimestamp >= 5000L && player.isPlaying && pos > 0L) {
+                    if (now - lastProgressSaveTimestamp >= 5000L && player.isPlaying && pos > 0L && deferred == null) {
                         lastProgressSaveTimestamp = now
                         savePlaybackProgress()
                     }
@@ -4785,7 +4875,9 @@ class PlayerViewModel(
         if (currentServer != null) {
             failedServerIds.add(currentServer.id)
         }
-        val otherServers = _uiState.value.availableServers.filter { it.id !in failedServerIds }
+        val otherServers = _uiState.value.availableServers
+            .filter { it.id !in failedServerIds }
+            .sortedBy { if (it.healthCategory == ServerHealthCategory.UNWATCHABLE) 1 else 0 }
         if (otherServers.isNotEmpty()) {
             val fallback = otherServers.first()
             showToast("$reason. Switching to ${fallback.serverName}…")
@@ -5287,6 +5379,7 @@ class PlayerViewModel(
 
     fun savePlaybackProgress() {
         val mediaId = currentMediaId ?: return
+        if (pendingDeferredSeekMs != null) return
         val pos = exoPlayer?.currentPosition ?: _uiState.value.currentPositionMs
         val duration = exoPlayer?.duration?.coerceAtLeast(0L) ?: _uiState.value.durationMs
         if (pos <= 0L) return
@@ -5334,6 +5427,7 @@ class PlayerViewModel(
         savePlaybackProgress()
         seekDebounceJob?.cancel()
         pendingSeekTargetMs = null
+        pendingDeferredSeekMs = null
         unregisterNetworkCallback()
         sourcePrepJob?.cancel()
         fastStartJob?.cancel()
@@ -5438,9 +5532,23 @@ class PlayerViewModel(
         // Tier 2: Preserve Distinct Release Variants
         // Distinct release variants (4K vs 1080p, REMUX vs WEB-DL, HDR/DV vs SDR, TrueHD vs AAC)
         // have different torrent hashes or direct stream URLs, and are therefore preserved.
-        // Sort for optimal hierarchy: Resolution Tier -> Verified Stream (matchScore >= 0.80) -> matchScore -> Release Type (REMUX/DV/HDR) -> Seeders -> Name
+        // Sort hierarchy: Match confidence tier (verified >= 0.80, likely >= 0.65, rest)
+        //   -> "Best for the user" score (health/seeders, match, preferred resolution, cached debrid)
+        //   -> raw matchScore -> Release type (REMUX/DV/HDR) -> Seeders -> Name
+        // A wrong-title release can therefore never outrank a verified one just for being 4K.
+        val userScores: Map<String, Double> = tier1Deduped.associate { opt ->
+            val cachedBonus = if (hasDebrid && (opt.isCached || opt.streamSource.isCached)) 150.0 else 0.0
+            opt.id to (scoreServerForInitialAutoPlay(opt, hasDebrid, sortPrefHeight) + cachedBonus)
+        }
         return tier1Deduped.sortedWith(
             compareBy<ServerSourceOption> { opt ->
+                val m = opt.streamSource.matchScore
+                when {
+                    m >= 0.80 -> 0
+                    m >= 0.65 -> 1
+                    else -> 2
+                }
+            }.thenBy { opt ->
                 val res = opt.resolutionLabel.lowercase()
                 when {
                     res.contains("4k") || res.contains("2160") -> 0
@@ -5451,12 +5559,6 @@ class PlayerViewModel(
                     res.contains("480") || res.contains("sd") -> 5
                     else -> 6
                 }
-            }.thenByDescending { opt ->
-                if (hasDebrid && (opt.isCached || opt.streamSource.isCached)) 1 else 0
-            }.thenByDescending { opt ->
-                opt.streamSource.matchScore >= 0.80
-            }.thenByDescending { opt ->
-                opt.streamSource.matchScore
             }.thenBy { opt ->
                 val combined = "${opt.serverName} ${opt.label}".lowercase()
                 when {
@@ -5467,6 +5569,10 @@ class PlayerViewModel(
                     combined.contains("bluray") || combined.contains("bdrip") -> 4
                     else -> 5
                 }
+            }.thenByDescending { opt ->
+                userScores[opt.id] ?: 0.0
+            }.thenByDescending { opt ->
+                opt.streamSource.matchScore
             }.thenByDescending { opt ->
                 opt.seeders ?: opt.streamSource.seeders ?: 0
             }.thenBy { opt ->

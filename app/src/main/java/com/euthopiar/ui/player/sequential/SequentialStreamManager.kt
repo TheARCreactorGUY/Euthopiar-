@@ -4,7 +4,10 @@ import android.content.Context
 import android.net.Uri
 import androidx.media3.common.util.UnstableApi
 import com.euthopiar.core.model.StreamContainer
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
+import okhttp3.Request
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
@@ -105,6 +108,48 @@ object SequentialStreamManager {
 
     fun clearPinnedUrls() {
         pinnedUrls.clear()
+    }
+
+    /**
+     * Proactively resolves any 301/302/307/308 redirects for an addon or progressive cloud stream URL
+     * and pins the target CDN URL so ExoPlayer range requests don't hit redirect gateways repeatedly.
+     */
+    suspend fun preResolveAndPinUrl(
+        okHttpClient: OkHttpClient,
+        url: String,
+        headers: Map<String, String> = emptyMap()
+    ): String = withContext(Dispatchers.IO) {
+        val pinned = getPinnedUrl(url)
+        if (pinned != null) return@withContext pinned
+
+        if (url.startsWith("http://127.0.0.1") || url.startsWith("http://localhost") || url.startsWith("http://[::1]")) {
+            return@withContext url
+        }
+
+        try {
+            val reqBuilder = Request.Builder()
+                .url(url)
+                .header("Range", "bytes=0-0")
+            headers.forEach { (k, v) -> reqBuilder.header(k, v) }
+            val req = reqBuilder.build()
+
+            okHttpClient.newCall(req).execute().use { resp ->
+                val redirectLoc = if (resp.isRedirect || resp.code in 300..399) {
+                    resp.header("Location")?.let { loc ->
+                        resp.request.url.resolve(loc)?.toString() ?: loc
+                    }
+                } else null
+
+                val finalUrl = redirectLoc ?: resp.request.url.toString()
+                if (finalUrl.isNotBlank() && finalUrl != url) {
+                    pinResolvedUrl(url, finalUrl)
+                    return@withContext finalUrl
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("SequentialStreamManager", "Failed to pre-resolve redirect for $url: ${e.message}")
+        }
+        url
     }
 
     @Synchronized

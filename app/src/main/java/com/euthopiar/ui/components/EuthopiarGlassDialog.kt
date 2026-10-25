@@ -1,5 +1,7 @@
 package com.euthopiar.ui.components
 
+import android.os.Build
+import android.view.WindowManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -24,6 +26,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -35,6 +38,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -43,8 +47,12 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import com.euthopiar.ui.settings.plugins.pluginsGlassSurface
+import androidx.compose.ui.window.DialogWindowProvider
 import com.euthopiar.ui.settings.plugins.pluginsPressable
+import com.euthopiar.ui.theme.LocalAmoledMode
+import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.HazeTint
+import dev.chrisbanes.haze.hazeEffect
 
 /**
  * Universal Frosted-Glass Alert & Confirmation Dialog for Euthopiar.
@@ -72,12 +80,15 @@ fun EuthopiarGlassDialog(
     icon: ImageVector? = null,
     isDestructive: Boolean = false,
     itemPreview: (@Composable () -> Unit)? = null,
+    modifier: Modifier = Modifier,
+    hazeState: HazeState? = null,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit = {},
     onDismissRequest: () -> Unit = onDismiss,
 ) {
     val haptic = LocalHapticFeedback.current
     val cancelFocusRequester = remember { FocusRequester() }
+    val isAmoled = LocalAmoledMode.current
 
     LaunchedEffect(Unit) {
         try {
@@ -93,6 +104,25 @@ fun EuthopiarGlassDialog(
             usePlatformDefaultWidth = false
         )
     ) {
+        val view = LocalView.current
+        SideEffect {
+            val window = (view.parent as? DialogWindowProvider)?.window
+                ?: generateSequence(view.parent) { it.parent }
+                    .filterIsInstance<DialogWindowProvider>()
+                    .firstOrNull()?.window
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && window != null) {
+                window.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
+                window.setDimAmount(0f)
+                val lp = window.attributes
+                lp.blurBehindRadius = 45
+                window.attributes = lp
+            }
+        }
+
+        val cardShape = RoundedCornerShape(28.dp)
+        val cardFill = if (isAmoled) Color.Black.copy(alpha = 0.88f) else Color(0xFF0E1118).copy(alpha = 0.74f)
+        val fallbackFill = if (isAmoled) Color.Black.copy(alpha = 0.94f) else Color(0xFF0E1118).copy(alpha = 0.94f)
+
         // Scrim: 60% full-screen black overlay
         Box(
             modifier = Modifier
@@ -107,7 +137,7 @@ fun EuthopiarGlassDialog(
         ) {
             // Dialog card: max 360dp, 16dp horizontal margin, 28dp radius, 24dp inner padding
             Box(
-                modifier = Modifier
+                modifier = modifier
                     .widthIn(max = 360.dp)
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp)
@@ -116,9 +146,26 @@ fun EuthopiarGlassDialog(
                         indication = null,
                         onClick = {} // Intercept clicks inside card
                     )
-                    .pluginsGlassSurface(
-                        shape = RoundedCornerShape(28.dp),
-                        isSheetOrDialog = true
+                    .clip(cardShape)
+                    .then(
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            if (hazeState != null) {
+                                Modifier.hazeEffect(state = hazeState) {
+                                    blurRadius = 22.dp
+                                    tints = listOf(HazeTint(cardFill))
+                                    fallbackTint = HazeTint(fallbackFill)
+                                }
+                            } else {
+                                Modifier.background(cardFill)
+                            }
+                        } else {
+                            Modifier.background(fallbackFill)
+                        }
+                    )
+                    .border(
+                        width = 0.5.dp,
+                        color = Color.White.copy(alpha = 0.18f),
+                        shape = cardShape
                     )
                     .padding(24.dp)
             ) {

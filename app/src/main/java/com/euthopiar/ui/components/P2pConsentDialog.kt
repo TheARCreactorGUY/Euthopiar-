@@ -3,6 +3,8 @@ package com.euthopiar.ui.components
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import dev.chrisbanes.haze.HazeState
 
 /**
  * Frosted-glass Peer-to-Peer network and battery awareness consent dialog.
@@ -16,6 +18,8 @@ fun P2pConsentDialog(
     message: String = "Peer-to-peer torrent streaming exchanges video chunks directly with decentralized swarm peers. This utilizes network bandwidth and may increase battery consumption.",
     confirmText: String = "Proceed",
     dismissText: String = "Cancel",
+    modifier: Modifier = Modifier,
+    hazeState: HazeState? = null
 ) {
     EuthopiarGlassDialog(
         title = title,
@@ -23,6 +27,8 @@ fun P2pConsentDialog(
         confirmText = confirmText,
         dismissText = dismissText,
         icon = Icons.Outlined.Share,
+        modifier = modifier,
+        hazeState = hazeState,
         onConfirm = onConfirm,
         onDismiss = onDismiss
     )

@@ -71,7 +71,7 @@ class SimklClient(
 
     companion object {
         const val BASE_URL = "https://api.simkl.com"
-        const val DEFAULT_CLIENT_ID = "086f0aef88e0b7a8a1db56fa8a78377755f137b036578a481ec66bc62040d21a"
+        const val DEFAULT_CLIENT_ID = "YOUR_API_KEY_HERE"
 
         @Volatile
         private var instance: SimklClient? = null

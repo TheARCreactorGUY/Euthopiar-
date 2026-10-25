@@ -238,6 +238,7 @@ fun SettingsScaffold(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     hazeState: HazeState = rememberHazeState(),
+    overlay: @Composable (BoxScope.(HazeState) -> Unit)? = null,
     content: @Composable ColumnScope.(HazeState) -> Unit
 ) {
     val isAmoled = LocalAmoledMode.current
@@ -454,6 +455,9 @@ fun SettingsScaffold(
                 }
             }
         }
+
+        // Overlay slot (in-window sheets and dialogs)
+        overlay?.invoke(this, hazeState)
     }
 }
 

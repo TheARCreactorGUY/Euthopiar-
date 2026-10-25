@@ -622,6 +622,7 @@ fun HomeScreen(
             )
             OfflineBanner()
             HomeUpdateBanner(
+                hazeState = homeHazeState,
                 onOpenUpdatePopup = { _, _ -> showUpdateDialog = true },
                 onDismiss = { updateManager.dismissBannerForSession() }
             )
@@ -718,6 +719,7 @@ fun HomeScreen(
             isTvSeries = media.type == com.euthopiar.core.model.MediaType.TV_SERIES,
             year = media.year,
             provider = media.provider,
+            hazeState = homeHazeState,
             onDismiss = { addToPlaylistMedia = null },
             onPlaylistAction = { msg -> snackbarController.show(msg) }
         )
@@ -735,6 +737,7 @@ fun HomeScreen(
             provider = media.provider,
             initialScreen = SheetScreen.WATCHLIST_CATEGORY,
             watchlistStatus = currentStatus,
+            hazeState = homeHazeState,
             onSelectWatchlistCategory = { statusKey, label ->
                 val isMove = !currentStatus.isNullOrBlank() && currentStatus != statusKey
                 val toastMsg = if (isMove) "Moved to $label" else "Added to $label"

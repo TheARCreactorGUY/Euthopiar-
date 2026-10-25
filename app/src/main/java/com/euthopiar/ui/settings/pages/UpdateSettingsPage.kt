@@ -79,10 +79,29 @@ fun UpdateSettingsPage(
         } catch (_: Exception) {}
     }
 
+    val dialogRelease = activeDialogRelease ?: availableRelease ?: upToDateRelease
+
     SettingsScaffold(
         title = "Application Updates",
         onBack = onBack,
-        modifier = modifier
+        modifier = modifier,
+        overlay = { hazeState ->
+            if (showUpdateDialog && dialogRelease != null) {
+                UpdateInfoDialog(
+                    release = dialogRelease,
+                    currentVersion = currentVersion,
+                    downloadState = downloadState,
+                    hazeState = hazeState,
+                    onDismiss = { showUpdateDialog = false },
+                    onDownloadAndInstall = { rel -> updateManager.downloadAndInstallUpdate(rel) },
+                    onTriggerInstall = { file, fallbackUrl -> updateManager.triggerInstallApk(file, fallbackUrl) },
+                    onSkipVersion = { ver ->
+                        updateManager.skipVersion(ver)
+                        showUpdateDialog = false
+                    }
+                )
+            }
+        }
     ) { hazeState ->
 
         // Hero Status Block (Hairline-divided at bottom matching AboutSettingsPage)
@@ -340,23 +359,5 @@ fun UpdateSettingsPage(
                 )
             }
         )
-
-        // Update Information Popup (inside SettingsScaffold to receive hazeState)
-        val dialogRelease = activeDialogRelease ?: availableRelease ?: upToDateRelease
-        if (showUpdateDialog && dialogRelease != null) {
-            UpdateInfoDialog(
-                release = dialogRelease,
-                currentVersion = currentVersion,
-                downloadState = downloadState,
-                hazeState = hazeState,
-                onDismiss = { showUpdateDialog = false },
-                onDownloadAndInstall = { rel -> updateManager.downloadAndInstallUpdate(rel) },
-                onTriggerInstall = { file, fallbackUrl -> updateManager.triggerInstallApk(file, fallbackUrl) },
-                onSkipVersion = { ver ->
-                    updateManager.skipVersion(ver)
-                    showUpdateDialog = false
-                }
-            )
-        }
     }
 }

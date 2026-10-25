@@ -1,5 +1,6 @@
 package com.euthopiar.ui.components
 
+import android.os.Build
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -25,6 +26,9 @@ import com.euthopiar.data.update.AppUpdateManager
 import com.euthopiar.data.update.ReleaseInfo
 import com.euthopiar.data.update.UpdateCheckState
 import com.euthopiar.ui.theme.*
+import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.HazeTint
+import dev.chrisbanes.haze.hazeEffect
 
 /**
  * Obsidian frosted glass banner notifying the user that a new version of Euthopiar is available.
@@ -34,7 +38,8 @@ import com.euthopiar.ui.theme.*
 fun HomeUpdateBanner(
     onOpenUpdatePopup: (ReleaseInfo, String) -> Unit,
     onDismiss: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    hazeState: HazeState? = null
 ) {
     val context = LocalContext.current
     val updateManager = remember(context) { AppUpdateManager.getInstance(context) }
@@ -42,6 +47,9 @@ fun HomeUpdateBanner(
     val bannerDismissed by updateManager.bannerDismissedForSession.collectAsState()
     val preferencesRepository = remember(context) { PreferencesRepository.getInstance(context) }
     val skippedVersion by preferencesRepository.skippedUpdateVersion.collectAsState(initial = "")
+    val isAmoled = LocalAmoledMode.current
+    val bannerFill = if (isAmoled) Color.Black.copy(alpha = 0.85f) else Color(0xFF14151F).copy(alpha = 0.70f)
+    val fallbackFill = if (isAmoled) Color.Black.copy(alpha = 0.92f) else Color(0xFF14151F).copy(alpha = 0.92f)
 
     val availableRelease = (updateState as? UpdateCheckState.UpdateAvailable)?.release
     val currentVersion = (updateState as? UpdateCheckState.UpdateAvailable)?.currentVersion.orEmpty()
@@ -63,9 +71,20 @@ fun HomeUpdateBanner(
                 Row(
                     modifier = Modifier
                         .clip(ShapeFull)
-                        .background(Color(0xFF14151F).copy(alpha = 0.92f))
-                        .background(Color.White.copy(alpha = 0.07f))
-                        .border(0.5.dp, Color.White.copy(alpha = 0.22f), ShapeFull)
+                        .then(
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hazeState != null) {
+                                Modifier.hazeEffect(state = hazeState) {
+                                    blurRadius = 16.dp
+                                    tints = listOf(HazeTint(bannerFill))
+                                    fallbackTint = HazeTint(fallbackFill)
+                                }
+                            } else {
+                                Modifier
+                                    .background(fallbackFill)
+                                    .background(Color.White.copy(alpha = 0.07f))
+                            }
+                        )
+                        .border(0.5.dp, GlassDefaults.BorderBrush, ShapeFull)
                         .clickable(
                             indication = null,
                             interactionSource = remember { MutableInteractionSource() }

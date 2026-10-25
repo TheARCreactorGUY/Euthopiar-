@@ -1,8 +1,10 @@
 package com.euthopiar.ui.library.components
 
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
 import com.euthopiar.ui.details.sheets.MediaDetailsActionSheet
 import com.euthopiar.ui.details.sheets.SheetScreen
+import dev.chrisbanes.haze.HazeState
 
 /**
  * Bottom sheet allowing users to add movies and shows to their custom playlists,
@@ -23,6 +25,8 @@ fun AddToPlaylistSheet(
     episodeNumber: Int? = null,
     episodeTitle: String? = null,
     episodeData: String? = null,
+    modifier: Modifier = Modifier,
+    hazeState: HazeState? = null,
     onDismiss: () -> Unit,
     onPlaylistAction: ((message: String) -> Unit)? = null
 ) {
@@ -40,6 +44,8 @@ fun AddToPlaylistSheet(
         episodeData = episodeData,
         initialScreen = SheetScreen.ADD_TO_PLAYLIST,
         onPlaylistAction = onPlaylistAction,
-        onDismiss = onDismiss
+        onDismiss = onDismiss,
+        modifier = modifier,
+        hazeState = hazeState
     )
 }

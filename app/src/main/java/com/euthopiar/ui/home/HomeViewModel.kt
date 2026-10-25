@@ -141,7 +141,13 @@ class HomeViewModel(
             _pendingRemovalContinueWatchingIds,
             _pendingClearContinueWatching
         ) { items, pendingIds, pendingClear ->
-            if (pendingClear) emptyList() else items.filter { it.id !in pendingIds }
+            if (pendingClear) {
+                emptyList()
+            } else {
+                items
+                    .filter { it.id !in pendingIds }
+                    .distinctBy { it.mediaId }
+            }
         }.stateIn(
             viewModelScope,
             SharingStarted.WhileSubscribed(5000),
@@ -167,7 +173,7 @@ class HomeViewModel(
                 map.putIfAbsent(item.mediaId, item)
             }
             cwList.forEach { item ->
-                map[item.mediaId] = item
+                map.putIfAbsent(item.mediaId, item)
             }
             map
         }.stateIn(
@@ -213,6 +219,14 @@ class HomeViewModel(
     private var rawCatalogRows: List<CatalogRow> = emptyList()
     private var rawHeroItems: List<MediaItem> = emptyList()
     private var computedTabs: List<HomeFilterTab> = listOf(HomeFilterTab.ALL)
+
+    private fun deduplicateCatalogRows(rows: List<CatalogRow>): List<CatalogRow> {
+        val seen = mutableSetOf<String>()
+        return rows.filter { row ->
+            val key = "${row.title.trim().lowercase()}|${row.subtitle?.trim()?.lowercase().orEmpty()}"
+            seen.add(key)
+        }
+    }
 
     fun selectTab(tab: HomeFilterTab) {
         _selectedTab.value = tab
@@ -370,10 +384,11 @@ class HomeViewModel(
         viewModelScope.launch {
             _isProgressiveLoading.value = true
             try {
-                val newRails = repository.getProgressiveHomeRails(progressiveOffset, 4)
+                val limit = 4
+                val newRails = repository.getProgressiveHomeRails(progressiveOffset, limit)
                 if (newRails.isNotEmpty()) {
-                    progressiveOffset += newRails.size
-                    rawCatalogRows = rawCatalogRows + newRails
+                    progressiveOffset += limit
+                    rawCatalogRows = deduplicateCatalogRows(rawCatalogRows + newRails)
                     updateSuccessState()
                 } else {
                     hasMoreRails = false
@@ -490,7 +505,7 @@ class HomeViewModel(
                     }
                 }
 
-                rawCatalogRows = enrichedRows
+                rawCatalogRows = deduplicateCatalogRows(enrichedRows)
                 rawHeroItems = heroItems
 
                 // Compute bulletproof self-pruning tabs

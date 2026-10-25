@@ -1,7 +1,9 @@
 package com.euthopiar.ui.components
 
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import dev.chrisbanes.haze.HazeState
 
 /**
  * Modern Confirmation Dialog delegates seamlessly to [EuthopiarGlassDialog],
@@ -17,6 +19,8 @@ fun VelvetAlertDialog(
     isDestructive: Boolean = false,
     icon: ImageVector? = null,
     itemPreview: (@Composable () -> Unit)? = null,
+    modifier: Modifier = Modifier,
+    hazeState: HazeState? = null,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit = onDismissRequest
 ) {
@@ -28,6 +32,8 @@ fun VelvetAlertDialog(
         icon = icon,
         isDestructive = isDestructive,
         itemPreview = itemPreview,
+        modifier = modifier,
+        hazeState = hazeState,
         onConfirm = onConfirm,
         onDismiss = onDismiss,
         onDismissRequest = onDismissRequest

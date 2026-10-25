@@ -238,11 +238,12 @@ fun LibraryScreen(
         }
     }
 
-    LibraryAmbientHazeBackground(
-        tabIndex = pagerState.currentPage,
-        hazeState = hazeState,
-        modifier = modifier
-    ) {
+    Box(modifier = modifier.fillMaxSize()) {
+        LibraryAmbientHazeBackground(
+            tabIndex = pagerState.currentPage,
+            hazeState = hazeState,
+            modifier = Modifier.fillMaxSize()
+        ) {
         AnimatedContent(
             targetState = selectedPlaylistForDetail,
             transitionSpec = {
@@ -751,102 +752,104 @@ fun LibraryScreen(
                 }
             }
         }
-
-        // 5. Destructive Action Confirmation Dialog
-        if (showConfirmDeleteDialog) {
-            val isDownloadsTab = pagerState.currentPage == 0
-            val count = selectedItemIds.size
-            val previewItems: List<Triple<String, String, String?>> = if (isDownloadsTab) {
-                downloads.filter { it.id in selectedItemIds }.map { dl ->
-                    val meta = if (!dl.subtitle.isNullOrBlank()) {
-                        dl.subtitle
-                    } else if (dl.seasonNumber != null && dl.episodeNumber != null) {
-                        "Season ${dl.seasonNumber}, Episode ${dl.episodeNumber}"
-                    } else if (dl.isTvSeries) {
-                        "TV Series"
-                    } else {
-                        "Movie"
-                    }
-                    Triple(dl.title, meta, dl.posterUrl)
-                }
-            } else {
-                items.filter { it.id in selectedItemIds }.map { item ->
-                    val meta = if (item.seasonNumber != null && item.episodeNumber != null) {
-                        "Season ${item.seasonNumber}, Episode ${item.episodeNumber}"
-                    } else if (item.mediaType == MediaType.TV_SERIES) {
-                        "TV Series"
-                    } else {
-                        "Movie"
-                    }
-                    Triple(item.title, meta, item.posterUrl)
-                }
-            }
-
-            EuthopiarGlassDialog(
-                onDismissRequest = { showConfirmDeleteDialog = false },
-                title = if (isDownloadsTab) "Delete Selected Downloads?" else "Remove from Saved?",
-                message = if (isDownloadsTab) {
-                    "Are you sure you want to permanently delete $count downloaded item${if (count != 1) "s" else ""} from local device storage?"
-                } else {
-                    "Are you sure you want to remove $count selected title${if (count != 1) "s" else ""} from your saved library?"
-                },
-                confirmText = if (isDownloadsTab) "Delete" else "Remove",
-                dismissText = "Cancel",
-                icon = Icons.Outlined.DeleteOutline,
-                isDestructive = true,
-                itemPreview = if (previewItems.isNotEmpty()) {
-                    {
-                        if (previewItems.size == 1) {
-                            val (itemTitle, itemMeta, itemPoster) = previewItems.first()
-                            EuthopiarDialogSingleItemRow(
-                                title = itemTitle,
-                                metadata = itemMeta,
-                                posterUrl = itemPoster
-                            )
-                        } else {
-                            val posters = previewItems.mapNotNull { it.third }
-                            val label = "${previewItems.first().first}, +${previewItems.size - 1} more"
-                            EuthopiarDialogMultiItemRow(
-                                posterUrls = posters,
-                                label = label
-                            )
-                        }
-                    }
-                } else null,
-                onConfirm = {
-                    showConfirmDeleteDialog = false
-                    if (isDownloadsTab) {
-                        viewModel.deleteSelectedDownloads()
-                        snackbarController.show("Deleted $count download${if (count != 1) "s" else ""}")
-                    } else {
-                        val toRemove = items.filter { it.id in selectedItemIds }
-                        viewModel.removeFromCurrentFilterWithUndo(toRemove) { undoAction ->
-                            snackbarController.show(
-                                message = "Removed $count title${if (count != 1) "s" else ""}",
-                                actionLabel = "Undo",
-                                durationMillis = 4500L
-                            ) {
-                                undoAction()
-                            }
-                        }
-                        viewModel.exitSelectionMode()
-                    }
-                },
-                onDismiss = { showConfirmDeleteDialog = false }
-            )
-        }
-
-        // 6. Create Playlist Dialog
-        if (showCreatePlaylistDialog) {
-            CreatePlaylistDialog(
-                onDismiss = { showCreatePlaylistDialog = false },
-                onConfirm = { name ->
-                    showCreatePlaylistDialog = false
-                    viewModel.createPlaylist(name)
-                    snackbarController.show("Created playlist \"$name\"")
-                },
-                existingPlaylists = playlists
-            )
-        }
     }
+
+    // 5. Destructive Action Confirmation Dialog
+    if (showConfirmDeleteDialog) {
+        val isDownloadsTab = pagerState.currentPage == 0
+        val count = selectedItemIds.size
+        val previewItems: List<Triple<String, String, String?>> = if (isDownloadsTab) {
+            downloads.filter { it.id in selectedItemIds }.map { dl ->
+                val meta = if (!dl.subtitle.isNullOrBlank()) {
+                    dl.subtitle
+                } else if (dl.seasonNumber != null && dl.episodeNumber != null) {
+                    "Season ${dl.seasonNumber}, Episode ${dl.episodeNumber}"
+                } else if (dl.isTvSeries) {
+                    "TV Series"
+                } else {
+                    "Movie"
+                }
+                Triple(dl.title, meta, dl.posterUrl)
+            }
+        } else {
+            items.filter { it.id in selectedItemIds }.map { item ->
+                val meta = if (item.seasonNumber != null && item.episodeNumber != null) {
+                    "Season ${item.seasonNumber}, Episode ${item.episodeNumber}"
+                } else if (item.mediaType == MediaType.TV_SERIES) {
+                    "TV Series"
+                } else {
+                    "Movie"
+                }
+                Triple(item.title, meta, item.posterUrl)
+            }
+        }
+
+        EuthopiarGlassDialog(
+            onDismissRequest = { showConfirmDeleteDialog = false },
+            title = if (isDownloadsTab) "Delete Selected Downloads?" else "Remove from Saved?",
+            message = if (isDownloadsTab) {
+                "Are you sure you want to permanently delete $count downloaded item${if (count != 1) "s" else ""} from local device storage?"
+            } else {
+                "Are you sure you want to remove $count selected title${if (count != 1) "s" else ""} from your saved library?"
+            },
+            confirmText = if (isDownloadsTab) "Delete" else "Remove",
+            dismissText = "Cancel",
+            icon = Icons.Outlined.DeleteOutline,
+            isDestructive = true,
+            hazeState = hazeState,
+            itemPreview = if (previewItems.isNotEmpty()) {
+                {
+                    if (previewItems.size == 1) {
+                        val (itemTitle, itemMeta, itemPoster) = previewItems.first()
+                        EuthopiarDialogSingleItemRow(
+                            title = itemTitle,
+                            metadata = itemMeta,
+                            posterUrl = itemPoster
+                        )
+                    } else {
+                        val posters = previewItems.mapNotNull { it.third }
+                        val label = "${previewItems.first().first}, +${previewItems.size - 1} more"
+                        EuthopiarDialogMultiItemRow(
+                            posterUrls = posters,
+                            label = label
+                        )
+                    }
+                }
+            } else null,
+            onConfirm = {
+                showConfirmDeleteDialog = false
+                if (isDownloadsTab) {
+                    viewModel.deleteSelectedDownloads()
+                    snackbarController.show("Deleted $count download${if (count != 1) "s" else ""}")
+                } else {
+                    val toRemove = items.filter { it.id in selectedItemIds }
+                    viewModel.removeFromCurrentFilterWithUndo(toRemove) { undoAction ->
+                        snackbarController.show(
+                            message = "Removed $count title${if (count != 1) "s" else ""}",
+                            actionLabel = "Undo",
+                            durationMillis = 4500L
+                        ) {
+                            undoAction()
+                        }
+                    }
+                    viewModel.exitSelectionMode()
+                }
+            },
+            onDismiss = { showConfirmDeleteDialog = false }
+        )
+    }
+
+    // 6. Create Playlist Dialog
+    if (showCreatePlaylistDialog) {
+        CreatePlaylistDialog(
+            onDismiss = { showCreatePlaylistDialog = false },
+            onConfirm = { name ->
+                viewModel.createPlaylist(name)
+                snackbarController.show("Created playlist \"$name\"")
+            },
+            existingPlaylists = playlists,
+            hazeState = hazeState
+        )
+    }
+}
 }

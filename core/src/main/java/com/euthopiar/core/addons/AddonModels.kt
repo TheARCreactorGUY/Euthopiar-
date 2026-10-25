@@ -19,14 +19,23 @@ data class AddonManifest(
 
 fun AddonManifest.supportsResource(name: String, type: String, id: String): Boolean =
     resources.any { resource ->
-        val canonical = if (type.equals("tv", ignoreCase = true)) "series" else type.lowercase()
+        val canonical = type.lowercase()
         val typeMatches = resource.types.isEmpty() ||
             resource.types.any {
                 it.equals(canonical, ignoreCase = true) ||
-                (canonical == "series" && it.equals("tv", ignoreCase = true)) ||
-                (canonical == "tv" && it.equals("series", ignoreCase = true)) ||
+                ((canonical == "series" || canonical == "tv") && (it.equals("series", ignoreCase = true) || it.equals("tv", ignoreCase = true))) ||
                 (canonical == "movie" && it.equals("movies", ignoreCase = true)) ||
-                (canonical == "movies" && it.equals("movie", ignoreCase = true))
+                (canonical == "movies" && it.equals("movie", ignoreCase = true)) ||
+                (canonical == "anime" && (
+                    it.equals("anime", ignoreCase = true) ||
+                    it.equals("series", ignoreCase = true) ||
+                    it.equals("tv", ignoreCase = true) ||
+                    it.equals("movie", ignoreCase = true)
+                )) ||
+                ((canonical == "channel" || canonical == "tv") && (
+                    it.equals("channel", ignoreCase = true) ||
+                    it.equals("tv", ignoreCase = true)
+                ))
             }
         val cleanId = id.trim().removePrefix("tmdb:").removePrefix("tmdb/")
         val baseId = cleanId.substringBefore(':').trim()

@@ -8,10 +8,40 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface PlaybackHistoryDao {
-    @Query("SELECT * FROM playback_history WHERE profileId = :profileId AND isCompleted = 0 AND currentPositionMs > 1000 AND isDismissedFromContinueWatching = 0 AND (:provider IS NULL OR LOWER(provider) = LOWER(:provider)) ORDER BY lastWatchedTimestamp DESC")
+    @Query("""
+        SELECT p1.* FROM playback_history p1
+        INNER JOIN (
+            SELECT mediaId, MAX(lastWatchedTimestamp) AS maxWatched
+            FROM playback_history
+            WHERE profileId = :profileId
+              AND (:provider IS NULL OR LOWER(provider) = LOWER(:provider))
+            GROUP BY mediaId
+        ) p2 ON p1.mediaId = p2.mediaId AND p1.lastWatchedTimestamp = p2.maxWatched
+        WHERE p1.profileId = :profileId
+          AND p1.isCompleted = 0
+          AND p1.currentPositionMs > 1000
+          AND p1.isDismissedFromContinueWatching = 0
+          AND (:provider IS NULL OR LOWER(p1.provider) = LOWER(:provider))
+        GROUP BY p1.mediaId
+        ORDER BY p1.lastWatchedTimestamp DESC
+    """)
     fun observeContinueWatching(provider: String?, profileId: String = "default_user"): Flow<List<PlaybackHistoryEntity>>
 
-    @Query("SELECT * FROM playback_history WHERE profileId = :profileId AND isCompleted = 0 AND currentPositionMs > 1000 AND isDismissedFromContinueWatching = 0 ORDER BY lastWatchedTimestamp DESC")
+    @Query("""
+        SELECT p1.* FROM playback_history p1
+        INNER JOIN (
+            SELECT mediaId, MAX(lastWatchedTimestamp) AS maxWatched
+            FROM playback_history
+            WHERE profileId = :profileId
+            GROUP BY mediaId
+        ) p2 ON p1.mediaId = p2.mediaId AND p1.lastWatchedTimestamp = p2.maxWatched
+        WHERE p1.profileId = :profileId
+          AND p1.isCompleted = 0
+          AND p1.currentPositionMs > 1000
+          AND p1.isDismissedFromContinueWatching = 0
+        GROUP BY p1.mediaId
+        ORDER BY p1.lastWatchedTimestamp DESC
+    """)
     fun observeAllContinueWatching(profileId: String = "default_user"): Flow<List<PlaybackHistoryEntity>>
 
     @Query("SELECT * FROM playback_history WHERE profileId = :profileId AND (:provider IS NULL OR LOWER(provider) = LOWER(:provider)) ORDER BY lastWatchedTimestamp DESC")

@@ -33,6 +33,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
@@ -70,8 +71,10 @@ import android.net.ConnectivityManager
 import android.os.PowerManager
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.VolumeMute
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
@@ -176,6 +179,7 @@ import com.euthopiar.ui.theme.AppTypography
 import com.euthopiar.ui.theme.Background
 import com.euthopiar.ui.theme.Dimens
 import com.euthopiar.ui.theme.Error
+import com.euthopiar.ui.theme.GlassDefaults
 import com.euthopiar.ui.theme.HairlineWidth
 import com.euthopiar.ui.theme.Motion
 import com.euthopiar.ui.theme.Outline
@@ -204,6 +208,7 @@ import dev.chrisbanes.haze.rememberHazeState
 import com.euthopiar.ui.longpress.LocalLongPressHazeState
 import android.os.Build
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -301,11 +306,15 @@ fun MediaDetailsScreen(
     var isAmbientMuted by remember { mutableStateOf(true) }
     var isTrailerPlaybackActive by remember { mutableStateOf(false) }
     var isBackdropTrailerEnabled by remember(mediaId) { mutableStateOf(true) }
+    var hasTrailerFailed by remember(mediaId) { mutableStateOf(false) }
 
     LaunchedEffect(mediaId) {
         isTrailerPlaybackActive = false
         isBackdropTrailerEnabled = true
+        hasTrailerFailed = false
     }
+
+    val coroutineScope = rememberCoroutineScope()
 
     val isAmoled = LocalAmoledMode.current
     val screenBg = if (isAmoled) Color.Black else Background
@@ -316,12 +325,7 @@ fun MediaDetailsScreen(
                 .fillMaxSize()
                 .background(screenBg)
         ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .hazeSource(state = detailsHazeState)
-            ) {
-                Crossfade(
+            Crossfade(
                 targetState = uiState,
                 animationSpec = tween(durationMillis = Motion.DurationEmphasized),
                 label = "MediaDetailsTransition"
@@ -367,9 +371,28 @@ fun MediaDetailsScreen(
                         )
                     }
 
+                    // Episode pagination / chunking (max 20 episodes displayed at a time)
+                    val lazySeasonEpisodes = remember(detail.episodes, selectedSeason) {
+                        detail.episodes.filter { it.seasonNumber == (selectedSeason ?: 1) }
+                    }
+                    val chunkSize = 20
+                    val totalEpisodes = lazySeasonEpisodes.size
+                    val isChunked = totalEpisodes > chunkSize
+                    val chunkCount = if (isChunked) (totalEpisodes + chunkSize - 1) / chunkSize else 1
+                    var selectedChunkIndex by remember(detail.id, selectedSeason) { mutableIntStateOf(0) }
+                    val safeChunkIndex = selectedChunkIndex.coerceIn(0, (chunkCount - 1).coerceAtLeast(0))
+                    val displayedEpisodes = remember(lazySeasonEpisodes, safeChunkIndex, isChunked) {
+                        if (!isChunked) lazySeasonEpisodes
+                        else {
+                            val s = safeChunkIndex * chunkSize
+                            lazySeasonEpisodes.subList(s, minOf(s + chunkSize, totalEpisodes))
+                        }
+                    }
+
                     if (windowDims.isTablet) {
                         // Tablet / TV: Adaptive Two-Column Layout
-                        val canPlayAmbientTrailer = isBackdropTrailerEnabled &&
+                        val canPlayAmbientTrailer = !hasTrailerFailed &&
+                            isBackdropTrailerEnabled &&
                             !detail.trailerUrl.isNullOrBlank() &&
                             !isMetered &&
                             !isPowerSaver &&
@@ -377,7 +400,11 @@ fun MediaDetailsScreen(
                             !isNavigatingAway
 
                         Box(modifier = Modifier.fillMaxSize()) {
-                            Row(modifier = Modifier.fillMaxSize()) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .hazeSource(state = detailsHazeState)
+                            ) {
                                 // Left Column: Artwork, Header, Play, Overview
                                 val leftScrollState = rememberScrollState()
                                 Column(
@@ -395,12 +422,17 @@ fun MediaDetailsScreen(
                                         canPlayTrailer = canPlayAmbientTrailer,
                                         isMuted = isAmbientMuted,
                                         onPlaybackActive = { isTrailerPlaybackActive = it },
+                                        onPlaybackError = {
+                                            hasTrailerFailed = true
+                                            isTrailerPlaybackActive = false
+                                        },
                                         mediaId = detail.id,
-                                        onHeroClick = if (!detail.trailerUrl.isNullOrBlank()) {
+                                        onHeroClick = if (!detail.trailerUrl.isNullOrBlank() && !hasTrailerFailed) {
                                             { isBackdropTrailerEnabled = !isBackdropTrailerEnabled }
                                         } else null,
-                                        showMuteButton = isBackdropTrailerEnabled && isTrailerPlaybackActive,
-                                        onToggleMute = { isAmbientMuted = !isAmbientMuted }
+                                        showMuteButton = !hasTrailerFailed && isBackdropTrailerEnabled && isTrailerPlaybackActive,
+                                        onToggleMute = { isAmbientMuted = !isAmbientMuted },
+                                        hasFailed = hasTrailerFailed
                                     )
 
                                     Spacer(modifier = Modifier.height(Dimens.spacing16))
@@ -487,7 +519,19 @@ fun MediaDetailsScreen(
                                         selectedTabIndex = selectedTabIndex,
                                         onTabSelected = { selectedTabIndex = it },
                                         hazeState = detailsHazeState,
-                                        isTabRowVisible = true
+                                        isTabRowVisible = true,
+                                        displayedEpisodes = displayedEpisodes,
+                                        totalEpisodesCount = totalEpisodes,
+                                        chunkCount = chunkCount,
+                                        selectedChunkIndex = safeChunkIndex,
+                                        chunkSize = chunkSize,
+                                        onSelectChunk = { selectedChunkIndex = it },
+                                        onScrollToEpisodesHeader = {
+                                            coroutineScope.launch {
+                                                rightScrollState.animateScrollTo(0)
+                                            }
+                                        },
+                                        renderEpisodes = true
                                     )
                                 }
                             }
@@ -605,7 +649,7 @@ fun MediaDetailsScreen(
                             label = "backButtonIconSize"
                         )
                         val backButtonOffsetY by animateDpAsState(
-                            targetValue = if (isScrolled) 10.dp else 8.dp,
+                            targetValue = if (isScrolled) 16.dp else 8.dp,
                             animationSpec = if (reduceMotion) tween(120) else spring(dampingRatio = 0.85f, stiffness = Spring.StiffnessMedium),
                             label = "backButtonOffsetY"
                         )
@@ -623,7 +667,8 @@ fun MediaDetailsScreen(
                             }
                         }
 
-                        val canPlayAmbientTrailer = isBackdropTrailerEnabled &&
+                        val canPlayAmbientTrailer = !hasTrailerFailed &&
+                            isBackdropTrailerEnabled &&
                             !detail.trailerUrl.isNullOrBlank() &&
                             !isMetered &&
                             !isPowerSaver &&
@@ -632,70 +677,81 @@ fun MediaDetailsScreen(
                             !isNavigatingAway
 
                         Box(modifier = Modifier.fillMaxSize()) {
-                            // Persistent pinned backdrop hero container layered behind LazyColumn
                             Box(
                                 modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(heroHeight)
-                                    .graphicsLayer {
-                                        alpha = heroScrollAlpha
-                                        val offset = if (lazyListState.firstVisibleItemIndex == 0) {
-                                            lazyListState.firstVisibleItemScrollOffset.toFloat()
-                                        } else {
-                                            1000f
-                                        }
-                                        translationY = -offset * 0.4f
-                                    }
+                                    .fillMaxSize()
+                                    .hazeSource(state = detailsHazeState)
                             ) {
-                                DetailsBackdropHero(
-                                    backdropUrl = detail.backdropUrl ?: detail.posterUrl,
-                                    logoUrl = detail.logoUrl,
-                                    title = detail.title,
-                                    trailerUrl = detail.trailerUrl,
-                                    canPlayTrailer = canPlayAmbientTrailer,
-                                    isMuted = isAmbientMuted,
-                                    onPlaybackActive = { isTrailerPlaybackActive = it },
-                                    mediaId = detail.id,
-                                    onHeroClick = null
-                                )
-                            }
-
-                            LazyColumn(
-                                state = lazyListState,
-                                modifier = Modifier.fillMaxSize()
-                            ) {
-                                // 1. Transparent Hero Spacer (tapping toggles ambient trailer between video and poster; mute button overlay)
-                                item(key = "hero_spacer") {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(heroHeight)
-                                            .then(
-                                                if (!detail.trailerUrl.isNullOrBlank()) {
-                                                    Modifier.clickable(
-                                                        interactionSource = remember { MutableInteractionSource() },
-                                                        indication = null
-                                                    ) {
-                                                        isBackdropTrailerEnabled = !isBackdropTrailerEnabled
-                                                    }
-                                                } else Modifier
-                                            )
-                                    ) {
-                                        AnimatedVisibility(
-                                            visible = isBackdropTrailerEnabled && isTrailerPlaybackActive && isAtTop && heroScrollAlpha > 0.5f,
-                                            enter = fadeIn(tween(300)),
-                                            exit = fadeOut(tween(300)),
-                                            modifier = Modifier
-                                                .align(Alignment.BottomEnd)
-                                                .padding(end = Dimens.spacing16, bottom = Dimens.spacing16)
-                                        ) {
-                                            FrostedMuteButton(
-                                                isMuted = isAmbientMuted,
-                                                onToggle = { isAmbientMuted = !isAmbientMuted }
-                                            )
+                                // Persistent pinned backdrop hero container layered behind LazyColumn
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(heroHeight)
+                                        .graphicsLayer {
+                                            alpha = heroScrollAlpha
+                                            val offset = if (lazyListState.firstVisibleItemIndex == 0) {
+                                                lazyListState.firstVisibleItemScrollOffset.toFloat()
+                                            } else {
+                                                1000f
+                                            }
+                                            translationY = -offset * 0.4f
                                         }
-                                    }
+                                ) {
+                                    DetailsBackdropHero(
+                                        backdropUrl = detail.backdropUrl ?: detail.posterUrl,
+                                        logoUrl = detail.logoUrl,
+                                        title = detail.title,
+                                        trailerUrl = detail.trailerUrl,
+                                        canPlayTrailer = canPlayAmbientTrailer,
+                                        isMuted = isAmbientMuted,
+                                        onPlaybackActive = { isTrailerPlaybackActive = it },
+                                        onPlaybackError = {
+                                            hasTrailerFailed = true
+                                            isTrailerPlaybackActive = false
+                                        },
+                                        mediaId = detail.id,
+                                        onHeroClick = null,
+                                        hasFailed = hasTrailerFailed
+                                    )
                                 }
+
+                                var expandedEpisodeId by remember(selectedSeason, safeChunkIndex) { mutableStateOf<String?>(null) }
+                                LazyColumn(
+                                    state = lazyListState,
+                                    modifier = Modifier.fillMaxSize()
+                                ) {
+                                    // 1. Transparent Hero Spacer (tapping toggles ambient trailer between video and poster; mute button overlay)
+                                    item(key = "hero_spacer") {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(heroHeight)
+                                                .then(
+                                                    if (!detail.trailerUrl.isNullOrBlank() && !hasTrailerFailed) {
+                                                        Modifier.clickable(
+                                                            interactionSource = remember { MutableInteractionSource() },
+                                                            indication = null
+                                                        ) {
+                                                            isBackdropTrailerEnabled = !isBackdropTrailerEnabled
+                                                        }
+                                                    } else Modifier
+                                                )
+                                        ) {
+                                            AnimatedVisibility(
+                                                visible = !hasTrailerFailed && isBackdropTrailerEnabled && isTrailerPlaybackActive && isAtTop && heroScrollAlpha > 0.5f,
+                                                enter = fadeIn(tween(300)),
+                                                exit = fadeOut(tween(300)),
+                                                modifier = Modifier
+                                                    .align(Alignment.BottomEnd)
+                                                    .padding(end = Dimens.spacing16, bottom = Dimens.spacing16)
+                                            ) {
+                                                FrostedMuteButton(
+                                                    isMuted = isAmbientMuted,
+                                                    onToggle = { isAmbientMuted = !isAmbientMuted }
+                                                )
+                                            }
+                                        }
+                                    }
 
                                 // 2. Metadata & Actions Block
                                 item(key = "meta_actions") {
@@ -795,11 +851,128 @@ fun MediaDetailsScreen(
                                     }
                                 }
 
+                                // 3b. Episodes: virtualized as real LazyColumn items so that series with
+                                // hundreds/thousands of episodes only compose the visible rows.
+                                if (isTv && selectedTabIndex == 0) {
+                                    item(key = "episodes_header") {
+                                        Box(modifier = Modifier.background(screenBg)) {
+                                            EpisodesTabContent(
+                                                selectedSeason = selectedSeason ?: 1,
+                                                episodeCount = totalEpisodes,
+                                                onSelectSeason = { showSeasonSheet = true },
+                                                hazeState = detailsHazeState,
+                                                chunkCount = chunkCount,
+                                                selectedChunkIndex = safeChunkIndex,
+                                                chunkSize = chunkSize,
+                                                onSelectChunk = { idx ->
+                                                    selectedChunkIndex = idx
+                                                }
+                                            )
+                                        }
+                                    }
+                                    if (displayedEpisodes.isEmpty()) {
+                                        item(key = "episodes_empty") {
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .background(screenBg)
+                                                    .padding(vertical = 32.dp),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    text = "No episodes available for this season",
+                                                    style = TextStyle(
+                                                        fontFamily = AppFontFamily,
+                                                        fontSize = 13.sp,
+                                                        fontWeight = FontWeight.Normal,
+                                                        color = Color.White.copy(alpha = 0.50f)
+                                                    )
+                                                )
+                                            }
+                                        }
+                                    } else {
+                                        itemsIndexed(
+                                            items = displayedEpisodes,
+                                            key = { index, ep -> "${ep.id}#${safeChunkIndex * chunkSize + index}" },
+                                            contentType = { _, _ -> "episode_row" }
+                                        ) { index, episode ->
+                                            val playback = episodePlaybackMap[episode.seasonNumber to episode.episodeNumber]
+                                            val progress = if (playback != null && playback.durationMs > 0) {
+                                                (playback.currentPositionMs.toFloat() / playback.durationMs.toFloat()).coerceIn(0f, 1f)
+                                            } else 0f
+                                            val isWatched = playback?.isCompleted == true || (playback != null && playback.durationMs > 0 && playback.currentPositionMs >= (playback.durationMs * 0.9f).toLong())
+                                            val isExpanded = expandedEpisodeId == episode.id
+                                            val epDownload = downloads.firstOrNull {
+                                                (it.episodeId != null && it.episodeId == episode.id) ||
+                                                (it.seasonNumber == episode.seasonNumber && it.episodeNumber == episode.episodeNumber &&
+                                                    (it.mediaId == detail.id || it.title.contains(detail.title, ignoreCase = true)))
+                                            }
+                                            Column(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .background(screenBg)
+                                                    .padding(horizontal = 16.dp)
+                                            ) {
+                                                EpisodeRowItem(
+                                                    episode = episode,
+                                                    detail = detail,
+                                                    progress = progress,
+                                                    isWatched = isWatched,
+                                                    isExpanded = isExpanded,
+                                                    downloadItem = epDownload,
+                                                    staggerIndex = index,
+                                                    hazeState = detailsHazeState,
+                                                    onRowClick = { expandedEpisodeId = if (isExpanded) null else episode.id },
+                                                    onPlayClick = { handlePlayRequest(detail, episode) },
+                                                    onDownloadClick = {
+                                                        episodeToDownload = episode
+                                                        showDownloadSheet = true
+                                                    },
+                                                    onToggleWatched = { viewModel.toggleEpisodeWatched(detail, episode) },
+                                                    onAddToPlaylist = { selectedEpisodeForPlaylist = episode }
+                                                )
+                                                Box(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .height(0.5.dp)
+                                                        .background(Color.White.copy(alpha = 0.14f))
+                                                )
+                                            }
+                                        }
+
+                                        if (isChunked) {
+                                            item(key = "episodes_chunk_pagination") {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .background(screenBg)
+                                                        .padding(horizontal = 16.dp)
+                                                ) {
+                                                    EpisodesPaginationButtons(
+                                                        safeChunkIndex = safeChunkIndex,
+                                                        chunkCount = chunkCount,
+                                                        chunkSize = chunkSize,
+                                                        totalEpisodes = totalEpisodes,
+                                                        hazeState = detailsHazeState,
+                                                        onSelectChunk = { selectedChunkIndex = it },
+                                                        onScrolled = {
+                                                            coroutineScope.launch {
+                                                                lazyListState.animateScrollToItem(3)
+                                                            }
+                                                        }
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
                                 // Bottom spacer
                                 item(key = "bottom_spacer") {
                                     Spacer(modifier = Modifier.height(80.dp).background(screenBg))
                                 }
                             }
+                        }
 
                             // Pinned Tab Row (docked immediately under compact top bar when scrolled)
                             // Pinned Tab Row (docked immediately under compact top bar when scrolled)
@@ -838,24 +1011,47 @@ fun MediaDetailsScreen(
                                         .then(
                                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                                                 Modifier.hazeEffect(state = detailsHazeState) {
-                                                    blurRadius = 18.dp
-                                                    tints = listOf(HazeTint(Color(0xFF0A0C10).copy(alpha = 0.60f)))
-                                                    fallbackTint = HazeTint(Color(0xFF0A0C10).copy(alpha = 0.85f))
+                                                    blurRadius = GlassDefaults.BlurRadius
+                                                    tints = listOf(
+                                                        HazeTint(screenBg.copy(alpha = 0.88f)),
+                                                        HazeTint(Color.White.copy(alpha = 0.05f))
+                                                    )
+                                                    noiseFactor = GlassDefaults.NoiseFactor
+                                                    fallbackTint = HazeTint(GlassDefaults.NavbarFallbackColor)
                                                 }
                                             } else {
-                                                Modifier.background(Color(0xFF0A0C10).copy(alpha = 0.60f * compactBarAlpha))
+                                                Modifier
+                                                    .background(screenBg.copy(alpha = 0.88f))
+                                                    .background(Color.White.copy(alpha = 0.05f))
                                             }
                                         )
-                                ) {
-                                    // 0.5px hairline along bottom edge
-                                    Box(
-                                        modifier = Modifier
-                                            .align(Alignment.BottomCenter)
-                                            .fillMaxWidth()
-                                            .height(0.5.dp)
-                                            .background(Color.White.copy(alpha = 0.14f * compactBarAlpha))
-                                    )
+                                        .drawBehind {
+                                            // Solid dark obsidian fill to ensure 100% opacity over scrolled catalog items
+                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                                drawRect(color = screenBg.copy(alpha = 0.88f))
+                                                drawRect(color = Color.White.copy(alpha = 0.05f))
+                                            }
+                                            // Ambient vertical gradient light wash
+                                            val topLightBrush = Brush.verticalGradient(
+                                                colors = listOf(
+                                                    Color.White.copy(alpha = 0.08f),
+                                                    Color.White.copy(alpha = 0.02f),
+                                                    Color.Transparent
+                                                ),
+                                                startY = 0f,
+                                                endY = size.height * 0.45f
+                                            )
+                                            drawRect(brush = topLightBrush)
 
+                                            // Hairline bottom border: specular gradient stroke matching FloatingNavbar
+                                            drawLine(
+                                                brush = GlassDefaults.BorderBrush,
+                                                start = Offset(0f, size.height),
+                                                end = Offset(size.width, size.height),
+                                                strokeWidth = HairlineWidth.toPx()
+                                            )
+                                        }
+                                ) {
                                     // Aligned to bottom of bar (below status bar inset, height 68dp)
                                     Row(
                                         modifier = Modifier
@@ -870,7 +1066,7 @@ fun MediaDetailsScreen(
 
                                         Spacer(modifier = Modifier.width(12.dp))
 
-                                        val smallLogoAlpha = ((1f - bigLogoAlpha) * compactBarAlpha).coerceIn(0f, 1f)
+                                        val smallLogoAlpha = (1f - bigLogoAlpha).coerceIn(0f, 1f)
 
                                         // Title logo art scaled down to 28-30dp tall (fallback title 15sp medium wide letter spacing)
                                         Box(
@@ -964,8 +1160,7 @@ fun MediaDetailsScreen(
                     }
                 }
             }
-        } // Close Box(hazeSource)
-    }
+        }
 
         val successDetail = (uiState as? MediaDetailsUiState.Success)?.detail
 
@@ -976,6 +1171,7 @@ fun MediaDetailsScreen(
                 message = "Euthopiar is a modular player and does not provide or host media streams. Please install a provider plugin or Stremio addon in the manager to stream content.",
                 confirmText = "Open Manager",
                 dismissText = "Cancel",
+                hazeState = detailsHazeState,
                 onConfirm = {
                     showNoPluginsDialog = false
                     onNavigateToPluginManager?.invoke()
@@ -1043,6 +1239,7 @@ fun MediaDetailsScreen(
                 episodeData = currentEp?.data,
                 initialScreen = SheetScreen.WATCHLIST_CATEGORY,
                 watchlistStatus = watchlistStatus,
+                hazeState = detailsHazeState,
                 onSelectWatchlistCategory = { statusKey, label ->
                     val isMove = !watchlistStatus.isNullOrBlank() && watchlistStatus != statusKey
                     val toastMsg = if (isMove) "Moved to $label" else "Added to $label"
@@ -1087,6 +1284,7 @@ fun MediaDetailsScreen(
                 episodeNumber = currentEp?.episodeNumber,
                 episodeTitle = currentEp?.title,
                 episodeData = currentEp?.data,
+                hazeState = detailsHazeState,
                 onDismiss = { showAddToPlaylistSheet = false },
                 onPlaylistAction = { msg -> snackbarController.show(msg) }
             )
@@ -1107,6 +1305,7 @@ fun MediaDetailsScreen(
                 episodeNumber = ep.episodeNumber,
                 episodeTitle = ep.title,
                 episodeData = ep.data ?: "${detail.id}:${ep.seasonNumber}:${ep.episodeNumber}",
+                hazeState = detailsHazeState,
                 onDismiss = { selectedEpisodeForPlaylist = null },
                 onPlaylistAction = { msg -> snackbarController.show(msg) }
             )
@@ -1122,6 +1321,7 @@ fun MediaDetailsScreen(
                 isTvSeries = related.type == MediaType.TV_SERIES,
                 year = related.year,
                 provider = related.provider,
+                hazeState = detailsHazeState,
                 onDismiss = { selectedRelatedMediaForPlaylist = null },
                 onPlaylistAction = { msg -> snackbarController.show(msg) }
             )
@@ -1604,10 +1804,12 @@ private fun DetailsBackdropHero(
     canPlayTrailer: Boolean = false,
     isMuted: Boolean = true,
     onPlaybackActive: (Boolean) -> Unit = {},
+    onPlaybackError: () -> Unit = {},
     mediaId: String? = null,
     onHeroClick: (() -> Unit)? = null,
     showMuteButton: Boolean = false,
     onToggleMute: () -> Unit = {},
+    hasFailed: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val configuration = LocalConfiguration.current
@@ -1638,12 +1840,13 @@ private fun DetailsBackdropHero(
         )
 
         // Ambient Backdrop Trailer Player
-        if (!trailerUrl.isNullOrBlank()) {
+        if (!trailerUrl.isNullOrBlank() && !hasFailed) {
             AmbientBackdropPlayer(
                 trailerUrl = trailerUrl,
                 canPlay = canPlayTrailer,
                 isMuted = isMuted,
                 onPlaybackActive = onPlaybackActive,
+                onPlaybackError = onPlaybackError,
                 modifier = Modifier.fillMaxSize()
             )
         }
@@ -2313,7 +2516,15 @@ private fun DetailsTabsContent(
     selectedTabIndex: Int,
     onTabSelected: (Int) -> Unit,
     hazeState: HazeState? = null,
-    isTabRowVisible: Boolean = true
+    isTabRowVisible: Boolean = true,
+    displayedEpisodes: List<EpisodeItem> = emptyList(),
+    totalEpisodesCount: Int = 0,
+    chunkCount: Int = 1,
+    selectedChunkIndex: Int = 0,
+    chunkSize: Int = 20,
+    onSelectChunk: (Int) -> Unit = {},
+    onScrollToEpisodesHeader: (() -> Unit)? = null,
+    renderEpisodes: Boolean = false
 ) {
     val tabTitles = remember(isTv) {
         if (isTv) listOf("Episodes", "Details & Cast", "More like this")
@@ -2337,18 +2548,98 @@ private fun DetailsTabsContent(
         val currentTitle = tabTitles.getOrNull(selectedTabIndex) ?: ""
         when (currentTitle) {
             "Episodes" -> {
-                EpisodesTabContent(
-                    detail = detail,
-                    selectedSeason = selectedSeason,
-                    episodePlaybackMap = episodePlaybackMap,
-                    downloads = downloads,
-                    onSelectSeason = onSelectSeason,
-                    onPlayEpisode = onPlayEpisode,
-                    onDownloadEpisode = onDownloadEpisode,
-                    onToggleWatched = onToggleWatched,
-                    onAddToPlaylistEpisode = onAddToPlaylistEpisode,
-                    hazeState = hazeState
-                )
+                // Rendered here for tablet two-column layout. On phone, LazyColumn virtualizes below tabs_content.
+                if (renderEpisodes || displayedEpisodes.isNotEmpty() || totalEpisodesCount > 0) {
+                    var expandedEpId by remember(selectedSeason, selectedChunkIndex) { mutableStateOf<String?>(null) }
+                    EpisodesTabContent(
+                        selectedSeason = selectedSeason,
+                        episodeCount = totalEpisodesCount,
+                        onSelectSeason = onSelectSeason,
+                        hazeState = hazeState,
+                        chunkCount = chunkCount,
+                        selectedChunkIndex = selectedChunkIndex,
+                        chunkSize = chunkSize,
+                        onSelectChunk = onSelectChunk
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    if (displayedEpisodes.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 32.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "No episodes available for this season",
+                                style = TextStyle(
+                                    fontFamily = AppFontFamily,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Normal,
+                                    color = Color.White.copy(alpha = 0.50f)
+                                )
+                            )
+                        }
+                    } else {
+                        displayedEpisodes.forEachIndexed { index, episode ->
+                            val playback = episodePlaybackMap[episode.seasonNumber to episode.episodeNumber]
+                            val progress = if (playback != null && playback.durationMs > 0) {
+                                (playback.currentPositionMs.toFloat() / playback.durationMs.toFloat()).coerceIn(0f, 1f)
+                            } else 0f
+                            val isWatched = playback?.isCompleted == true || (playback != null && playback.durationMs > 0 && playback.currentPositionMs >= (playback.durationMs * 0.9f).toLong())
+                            val isExpanded = expandedEpId == episode.id
+                            val epDownload = downloads.firstOrNull {
+                                (it.episodeId != null && it.episodeId == episode.id) ||
+                                (it.seasonNumber == episode.seasonNumber && it.episodeNumber == episode.episodeNumber &&
+                                    (it.mediaId == detail.id || it.title.contains(detail.title, ignoreCase = true)))
+                            }
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp)
+                            ) {
+                                EpisodeRowItem(
+                                    episode = episode,
+                                    detail = detail,
+                                    progress = progress,
+                                    isWatched = isWatched,
+                                    isExpanded = isExpanded,
+                                    downloadItem = epDownload,
+                                    staggerIndex = index,
+                                    hazeState = hazeState,
+                                    onRowClick = {
+                                        expandedEpId = if (isExpanded) null else episode.id
+                                    },
+                                    onPlayClick = { onPlayEpisode(episode) },
+                                    onDownloadClick = { onDownloadEpisode(episode) },
+                                    onToggleWatched = { onToggleWatched(episode) },
+                                    onAddToPlaylist = { onAddToPlaylistEpisode(episode) }
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(0.5.dp)
+                                        .background(Color.White.copy(alpha = 0.14f))
+                                )
+                            }
+                        }
+
+                        if (chunkCount > 1) {
+                            Box(modifier = Modifier.padding(horizontal = 16.dp)) {
+                                EpisodesPaginationButtons(
+                                    safeChunkIndex = selectedChunkIndex,
+                                    chunkCount = chunkCount,
+                                    chunkSize = chunkSize,
+                                    totalEpisodes = totalEpisodesCount,
+                                    hazeState = hazeState,
+                                    onSelectChunk = onSelectChunk,
+                                    onScrolled = {
+                                        onScrollToEpisodesHeader?.invoke()
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
             }
             "Details & Cast", "Details" -> {
                 DetailsMetaTabContent(
@@ -2380,21 +2671,15 @@ private fun DetailsTabsContent(
  */
 @Composable
 private fun EpisodesTabContent(
-    detail: MediaDetail,
     selectedSeason: Int,
-    episodePlaybackMap: Map<Pair<Int, Int>, PlaybackHistoryEntity>,
-    downloads: List<DownloadItem> = emptyList(),
+    episodeCount: Int,
     onSelectSeason: () -> Unit,
-    onPlayEpisode: (EpisodeItem) -> Unit,
-    onDownloadEpisode: (EpisodeItem) -> Unit,
-    onToggleWatched: (EpisodeItem) -> Unit,
-    onAddToPlaylistEpisode: (EpisodeItem) -> Unit = {},
-    hazeState: HazeState? = null
+    hazeState: HazeState? = null,
+    chunkCount: Int = 1,
+    selectedChunkIndex: Int = 0,
+    chunkSize: Int = 20,
+    onSelectChunk: (Int) -> Unit = {}
 ) {
-    val seasonEpisodes = remember(detail.episodes, selectedSeason) {
-        detail.episodes.filter { it.seasonNumber == selectedSeason }
-    }
-    var expandedEpisodeId by remember { mutableStateOf<String?>(null) }
     val reduceMotion = LocalReduceMotion.current
 
     Column(
@@ -2487,7 +2772,7 @@ private fun EpisodesTabContent(
 
             // Right: episode count for selected season in 11sp muted
             AnimatedContent(
-                targetState = seasonEpisodes.size,
+                targetState = episodeCount,
                 transitionSpec = { fadeIn(tween(120)) togetherWith fadeOut(tween(120)) },
                 label = "epCountCrossfade"
             ) { count ->
@@ -2503,6 +2788,62 @@ private fun EpisodesTabContent(
             }
         }
 
+        // Frosted range pills for seasons with > 20 episodes
+        if (chunkCount > 1) {
+            Spacer(modifier = Modifier.height(4.dp))
+            LazyRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(chunkCount) { chunkIdx ->
+                    val startEp = chunkIdx * chunkSize + 1
+                    val endEp = minOf((chunkIdx + 1) * chunkSize, episodeCount)
+                    val isSelected = chunkIdx == selectedChunkIndex
+                    val pillLabel = "Episodes $startEp–$endEp"
+
+                    Box(
+                        modifier = Modifier
+                            .mediaDetailsGlassSurface(
+                                shape = RoundedCornerShape(12.dp),
+                                hazeState = hazeState,
+                                alphaFill = if (isSelected) 0.22f else 0.08f
+                            )
+                            .then(
+                                if (isSelected) {
+                                    Modifier.border(
+                                        width = 1.dp,
+                                        brush = Brush.verticalGradient(
+                                            listOf(
+                                                Color.White.copy(alpha = 0.60f),
+                                                Color.White.copy(alpha = 0.20f)
+                                            )
+                                        ),
+                                        shape = RoundedCornerShape(12.dp)
+                                    )
+                                } else Modifier
+                            )
+                            .clickable {
+                                onSelectChunk(chunkIdx)
+                            }
+                            .padding(horizontal = 12.dp, vertical = 7.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = pillLabel,
+                            style = TextStyle(
+                                fontFamily = AppFontFamily,
+                                fontSize = 12.sp,
+                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                                color = if (isSelected) Color.White else Color.White.copy(alpha = 0.70f)
+                            )
+                        )
+                    }
+                }
+            }
+        }
+
         // Hairline under season control row (0.5px, white 14%)
         Box(
             modifier = Modifier
@@ -2513,82 +2854,122 @@ private fun EpisodesTabContent(
 
         Spacer(modifier = Modifier.height(4.dp))
 
-        // Episode rows with season switch cross-fade & stagger
-        AnimatedContent(
-            targetState = selectedSeason,
-            transitionSpec = {
-                if (reduceMotion) {
-                    fadeIn(tween(120)) togetherWith fadeOut(tween(120))
-                } else {
-                    fadeIn(tween(160, easing = FastOutSlowInEasing)) togetherWith
-                        fadeOut(tween(120, easing = FastOutSlowInEasing))
+    }
+}
+
+@Composable
+internal fun EpisodesPaginationButtons(
+    safeChunkIndex: Int,
+    chunkCount: Int,
+    chunkSize: Int,
+    totalEpisodes: Int,
+    hazeState: HazeState? = null,
+    onSelectChunk: (Int) -> Unit,
+    onScrolled: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    if (chunkCount <= 1) return
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 14.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (safeChunkIndex > 0) {
+            val prevStart = (safeChunkIndex - 1) * chunkSize + 1
+            val prevEnd = safeChunkIndex * chunkSize
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(44.dp)
+                    .mediaDetailsGlassSurface(
+                        shape = RoundedCornerShape(12.dp),
+                        hazeState = hazeState,
+                        alphaFill = 0.08f
+                    )
+                    .clickable {
+                        onSelectChunk(safeChunkIndex - 1)
+                        onScrolled()
+                    }
+                    .padding(horizontal = 12.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = "Previous: Episodes $prevStart–$prevEnd",
+                        style = TextStyle(
+                            fontFamily = AppFontFamily,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = Color.White
+                        ),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
-            },
-            label = "episodesListTransition"
-        ) { currentSeason ->
-            val episodesForCurrentSeason = remember(detail.episodes, currentSeason) {
-                detail.episodes.filter { it.seasonNumber == currentSeason }
             }
+        }
 
-            Column(modifier = Modifier.fillMaxWidth()) {
-                if (episodesForCurrentSeason.isEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 32.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "No episodes available for this season",
-                            style = TextStyle(
-                                fontFamily = AppFontFamily,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Normal,
-                                color = Color.White.copy(alpha = 0.50f)
+        if (safeChunkIndex < chunkCount - 1) {
+            val nextStart = (safeChunkIndex + 1) * chunkSize + 1
+            val nextEnd = minOf((safeChunkIndex + 2) * chunkSize, totalEpisodes)
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(44.dp)
+                    .mediaDetailsGlassSurface(
+                        shape = RoundedCornerShape(12.dp),
+                        hazeState = hazeState,
+                        alphaFill = 0.12f
+                    )
+                    .border(
+                        width = 0.5.dp,
+                        brush = Brush.verticalGradient(
+                            listOf(
+                                Color.White.copy(alpha = 0.45f),
+                                Color.White.copy(alpha = 0.15f)
                             )
-                        )
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    .clickable {
+                        onSelectChunk(safeChunkIndex + 1)
+                        onScrolled()
                     }
-                } else {
-                    episodesForCurrentSeason.forEachIndexed { index, episode ->
-                        val playback = episodePlaybackMap[episode.seasonNumber to episode.episodeNumber]
-                        val progress = if (playback != null && playback.durationMs > 0) {
-                            (playback.currentPositionMs.toFloat() / playback.durationMs.toFloat()).coerceIn(0f, 1f)
-                        } else 0f
-                        val isWatched = playback?.isCompleted == true || (playback != null && playback.durationMs > 0 && playback.currentPositionMs >= (playback.durationMs * 0.9f).toLong())
-                        val isExpanded = expandedEpisodeId == episode.id
-
-                        val epDownload = downloads.firstOrNull {
-                            (it.episodeId != null && it.episodeId == episode.id) ||
-                            (it.seasonNumber == episode.seasonNumber && it.episodeNumber == episode.episodeNumber &&
-                                (it.mediaId == detail.id || it.title.contains(detail.title, ignoreCase = true)))
-                        }
-
-                        EpisodeRowItem(
-                            episode = episode,
-                            detail = detail,
-                            progress = progress,
-                            isWatched = isWatched,
-                            isExpanded = isExpanded,
-                            downloadItem = epDownload,
-                            staggerIndex = index,
-                            hazeState = hazeState,
-                            onRowClick = {
-                                expandedEpisodeId = if (isExpanded) null else episode.id
-                            },
-                            onPlayClick = { onPlayEpisode(episode) },
-                            onDownloadClick = { onDownloadEpisode(episode) },
-                            onToggleWatched = { onToggleWatched(episode) },
-                            onAddToPlaylist = { onAddToPlaylistEpisode(episode) }
-                        )
-
-                        // Hairline between every row and after the last one
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(0.5.dp)
-                                .background(Color.White.copy(alpha = 0.14f))
-                        )
-                    }
+                    .padding(horizontal = 12.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "Episodes $nextStart–$nextEnd",
+                        style = TextStyle(
+                            fontFamily = AppFontFamily,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color.White
+                        ),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp)
+                    )
                 }
             }
         }

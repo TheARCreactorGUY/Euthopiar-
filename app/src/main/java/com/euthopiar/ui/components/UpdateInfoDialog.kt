@@ -1,6 +1,12 @@
 package com.euthopiar.ui.components
 
+import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
@@ -21,19 +27,24 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.zIndex
 import com.euthopiar.data.update.ApkDownloadState
 import com.euthopiar.data.update.AppUpdateManager
 import com.euthopiar.data.update.ReleaseInfo
@@ -43,7 +54,12 @@ import com.euthopiar.ui.settings.components.SettingsTokens
 import com.euthopiar.ui.settings.components.settingsGlass
 import com.euthopiar.ui.settings.components.settingsPressable
 import com.euthopiar.ui.theme.AppFontFamily
+import com.euthopiar.ui.theme.LocalAmoledMode
+import com.euthopiar.ui.theme.LocalReduceMotion
 import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.HazeTint
+import dev.chrisbanes.haze.hazeEffect
+import kotlinx.coroutines.launch
 import java.io.File
 import java.util.Locale
 
@@ -89,40 +105,105 @@ fun UpdateInfoDialog(
         else lines.joinToString("\n")
     }
 
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+    val coroutineScope = rememberCoroutineScope()
+    val reduceMotion = LocalReduceMotion.current
+    val isAmoled = LocalAmoledMode.current
+
+    val dialogProgress = remember { Animatable(0f) }
+    var isDismissing by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        if (reduceMotion) {
+            dialogProgress.snapTo(1f)
+        } else {
+            dialogProgress.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(durationMillis = 280, easing = FastOutSlowInEasing)
+            )
+        }
+    }
+
+    val dismissWithAnim: () -> Unit = {
+        if (!isDismissing) {
+            isDismissing = true
+            coroutineScope.launch {
+                if (reduceMotion) {
+                    onDismiss()
+                } else {
+                    dialogProgress.animateTo(
+                        targetValue = 0f,
+                        animationSpec = tween(durationMillis = 150, easing = LinearOutSlowInEasing)
+                    )
+                    onDismiss()
+                }
+            }
+        }
+    }
+
+    BackHandler { dismissWithAnim() }
+
+    val animValue = dialogProgress.value
+    val scrimAlpha = if (reduceMotion) 0.60f else (0.60f * animValue).coerceIn(0f, 0.60f)
+    val cardScale = if (reduceMotion) 1f else 0.92f + 0.08f * animValue
+    val cardAlpha = if (reduceMotion) 1f else animValue
+
+    val cardShape = RoundedCornerShape(SettingsTokens.RadiusDialog)
+    val cardFill = if (isAmoled) Color.Black.copy(alpha = 0.88f) else Color(0xFF0E1118).copy(alpha = 0.74f)
+    val fallbackColor = if (isAmoled) Color.Black.copy(alpha = 0.94f) else Color(0xFF0E1118).copy(alpha = 0.94f)
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .zIndex(100f)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = dismissWithAnim
+            ),
+        contentAlignment = Alignment.Center
     ) {
-        // Fullscreen clickable scrim
+        // Scrim
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.60f))
+                .background(Color.Black.copy(alpha = scrimAlpha))
+        )
+
+        // Dialog Card Container
+        Box(
+            modifier = Modifier
+                .graphicsLayer {
+                    scaleX = cardScale
+                    scaleY = cardScale
+                    alpha = cardAlpha
+                }
+                .widthIn(max = 380.dp)
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
-                    onClick = onDismiss
-                ),
-            contentAlignment = Alignment.Center
+                    onClick = { /* prevent dismiss when clicking dialog card */ }
+                )
+                .clip(cardShape)
+                .then(
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hazeState != null) {
+                        Modifier.hazeEffect(state = hazeState) {
+                            blurRadius = 22.dp
+                            tints = listOf(HazeTint(cardFill))
+                            fallbackTint = HazeTint(fallbackColor)
+                        }
+                    } else {
+                        Modifier.background(fallbackColor)
+                    }
+                )
+                .border(
+                    width = 0.5.dp,
+                    color = Color.White.copy(alpha = 0.18f),
+                    shape = cardShape
+                )
+                .padding(24.dp)
         ) {
-            // Dialog Card Container
-            Box(
-                modifier = modifier
-                    .widthIn(max = 380.dp)
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = { /* prevent dismiss when clicking dialog card */ }
-                    )
-                    .settingsGlass(
-                        shape = RoundedCornerShape(SettingsTokens.RadiusDialog),
-                        hazeState = hazeState,
-                        blurRadius = 22.dp
-                    )
-                    .padding(24.dp)
-            ) {
                 Column(
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -137,7 +218,6 @@ fun UpdateInfoDialog(
                                 .size(40.dp)
                                 .settingsGlass(
                                     shape = RoundedCornerShape(SettingsTokens.RadiusControl),
-                                    hazeState = hazeState,
                                     blurRadius = 14.dp
                                 ),
                             contentAlignment = Alignment.Center
@@ -186,7 +266,7 @@ fun UpdateInfoDialog(
                                 .size(32.dp)
                                 .clip(CircleShape)
                                 .background(Color.White.copy(alpha = 0.06f))
-                                .clickable(onClick = onDismiss),
+                                .clickable(onClick = dismissWithAnim),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
@@ -446,10 +526,9 @@ fun UpdateInfoDialog(
                                 .height(38.dp)
                                 .settingsGlass(
                                     shape = CircleShape,
-                                    hazeState = hazeState,
                                     blurRadius = 14.dp
                                 )
-                                .settingsPressable(onClick = onDismiss),
+                                .settingsPressable(onClick = dismissWithAnim),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
@@ -470,7 +549,6 @@ fun UpdateInfoDialog(
                                 .height(38.dp)
                                 .settingsGlass(
                                     shape = CircleShape,
-                                    hazeState = hazeState,
                                     blurRadius = 14.dp
                                 )
                                 .settingsPressable(
@@ -501,4 +579,3 @@ fun UpdateInfoDialog(
             }
         }
     }
-}

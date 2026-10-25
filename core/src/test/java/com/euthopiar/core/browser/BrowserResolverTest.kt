@@ -313,7 +313,8 @@ class BrowserResolverTest {
             if (exitCode != 0) {
                 fail("Node evaluation of freekz fallback failed with exit code $exitCode:\n$output")
             }
-            val json = kotlinx.serialization.json.Json.parseToJsonElement(output) as kotlinx.serialization.json.JsonObject
+            val jsonLine = output.lineSequence().map { it.trim() }.last { it.startsWith("{") && it.endsWith("}") }
+            val json = kotlinx.serialization.json.Json.parseToJsonElement(jsonLine) as kotlinx.serialization.json.JsonObject
             assertFalse("MiniAes should be removed from module.exports", json["hasMiniAes"].toString().toBoolean())
             assertTrue("getStreams should be exported", json["hasGetStreams"].toString().toBoolean())
             assertTrue("Browser.resolve fallback should be invoked when direct API returns 0 streams", json["resolvedFallback"].toString().toBoolean())

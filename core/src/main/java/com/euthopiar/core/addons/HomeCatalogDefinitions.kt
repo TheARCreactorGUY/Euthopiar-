@@ -62,6 +62,28 @@ fun buildHomeCatalogDefinitions(addons: List<ManagedAddon>): List<HomeCatalogDef
             }
     }.distinctBy { it.key }
 
+fun buildSearchCatalogDefinitions(addons: List<ManagedAddon>): List<HomeCatalogDefinition> =
+    addons.enabledAddons().mapNotNull { addon ->
+        val manifest = addon.manifest ?: return@mapNotNull null
+        addon to manifest
+    }.flatMap { (addon, manifest) ->
+        manifest.catalogs
+            .filter { catalog -> catalog.extra.any { it.name.equals("search", ignoreCase = true) } }
+            .map { catalog ->
+                HomeCatalogDefinition(
+                    key = "${manifest.id}:${catalog.type}:${catalog.id}",
+                    defaultTitle = formatHomeCatalogTitle(catalog.name, catalog.type),
+                    catalogName = catalog.name,
+                    addonName = addon.displayTitle,
+                    manifestUrl = addon.manifestUrl,
+                    type = catalog.type,
+                    catalogId = catalog.id,
+                    supportsPagination = catalog.supportsPagination(),
+                    descriptorSignature = buildCatalogSignature(addon, manifest, catalog)
+                )
+            }
+    }.distinctBy { it.key }
+
 fun formatHomeCatalogTitle(catalogName: String, type: String): String {
     val typeLabel = when (type.lowercase()) {
         "movie", "movies" -> "Movies"

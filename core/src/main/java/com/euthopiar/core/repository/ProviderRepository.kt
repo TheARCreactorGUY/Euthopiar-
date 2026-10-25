@@ -1,5 +1,6 @@
 package com.euthopiar.core.repository
 
+import com.euthopiar.core.addons.*
 import com.euthopiar.core.matcher.MatchScorer
 import com.euthopiar.core.model.*
 import com.euthopiar.core.network.DohDns
@@ -36,7 +37,7 @@ open class ProviderRepository(
             emptyList<CatalogRow>()
         }
 
-        val stremioRows = fetchStremioCatalogRails(offset = 0, limit = 8)
+        val stremioRows = fetchStremioCatalogRails(offset = 0, limit = 6)
         val combined = tmdbRows + stremioRows
         if (combined.isNotEmpty()) combined else tmdbRows
     }
@@ -56,7 +57,7 @@ open class ProviderRepository(
             tmdbRails
         } else {
             // Load subsequent Stremio catalog rails if TMDB rails have been exhausted
-            val stremioOffset = 8 + (offset - 38).coerceAtLeast(0)
+            val stremioOffset = 6 + (offset - 38).coerceAtLeast(0)
             fetchStremioCatalogRails(offset = stremioOffset, limit = limit)
         }
     }
@@ -130,10 +131,10 @@ open class ProviderRepository(
             }
         }
 
-        // Global search: query all registered plugins concurrently
-        val pluginResults = coroutineScope {
+        // Global search: query all three sources concurrently inside coroutineScope without blocking each other
+        coroutineScope {
             val registered = registry.plugins.value
-            val deferred = registered.map { plugin ->
+            val pluginDeferreds = registered.map { plugin ->
                 async(Dispatchers.IO) {
                     searchGate.withPermit {
                         try {
@@ -142,23 +143,57 @@ open class ProviderRepository(
                                     if (item.provider == null) item.copy(provider = plugin.name) else item
                                 }
                             } ?: emptyList()
-                        } catch (e: Exception) {
+                        } catch (_: Exception) {
                             emptyList()
                         }
                     }
                 }
             }
-            deferred.awaitAll().flatten()
-        }
 
-        if (pluginResults.isNotEmpty()) {
-            return@withContext pluginResults
-        }
+            val searchDefs = com.euthopiar.core.addons.AddonRepository.getInstanceOrNull()?.let { repo ->
+                com.euthopiar.core.addons.buildSearchCatalogDefinitions(repo.uiState.value.addons)
+            } ?: emptyList()
 
-        try {
-            TmdbBridge.searchMulti(DohDns.metadataClient, query)
-        } catch (_: Exception) {
-            emptyList()
+            val stremioDeferreds = searchDefs.map { def ->
+                async(Dispatchers.IO) {
+                    try {
+                        withTimeoutOrNull(6000L) {
+                            val url = def.buildCatalogUrl(search = query)
+                            val response = com.euthopiar.core.js.network.httpRequestRaw("GET", url, emptyMap(), "", followRedirects = true)
+                            if (response.status in 200..299 && response.body.isNotBlank()) {
+                                com.euthopiar.core.addons.HomeCatalogParser.parseCatalog(
+                                    payload = response.body,
+                                    addonName = def.addonName
+                                )
+                            } else emptyList()
+                        } ?: emptyList()
+                    } catch (_: Exception) {
+                        emptyList()
+                    }
+                }
+            }
+
+            val tmdbDeferred = async(Dispatchers.IO) {
+                try {
+                    withTimeoutOrNull(8000L) {
+                        TmdbBridge.searchMulti(DohDns.metadataClient, query)
+                    } ?: emptyList()
+                } catch (_: Exception) {
+                    emptyList()
+                }
+            }
+
+            val allResults = buildList {
+                addAll(pluginDeferreds.awaitAll().flatten())
+                addAll(stremioDeferreds.awaitAll().flatten())
+                addAll(tmdbDeferred.await())
+            }
+
+            val seen = mutableSetOf<String>()
+            allResults.filter { item ->
+                val key = "${item.type}:${item.id.lowercase().trim()}"
+                seen.add(key)
+            }
         }
     }
 
@@ -172,13 +207,91 @@ open class ProviderRepository(
         val targetName = providerName ?: mediaItem.provider
         val cleanId = mediaItem.id.removePrefix("tmdb:").removePrefix("tmdb/").trim()
         val baseId = cleanId.substringBefore(':').trim()
-        val isStremioAddon = targetName?.contains("catalog", ignoreCase = true) == true ||
+
+        val rawTypeFromUrl = if (mediaItem.url.startsWith("stremio_type:")) {
+            mediaItem.url.removePrefix("stremio_type:").trim()
+        } else null
+
+        val stremioType = rawTypeFromUrl ?: when (mediaItem.type) {
+            MediaType.TV_SERIES -> "series"
+            MediaType.ANIME -> "anime"
+            MediaType.MOVIE -> "movie"
+        }
+
+        val addonRepo = com.euthopiar.core.addons.AddonRepository.getInstanceOrNull()
+        val allAddons = addonRepo?.uiState?.value?.addons.orEmpty()
+        val enabledAddons = allAddons.filter { it.enabled && it.manifest != null }
+
+        val matchesInstalledAddon = targetName != null && allAddons.any {
+            it.displayTitle.equals(targetName, ignoreCase = true) ||
+            it.manifest?.name.equals(targetName, ignoreCase = true) ||
+            it.manifest?.id.equals(targetName, ignoreCase = true)
+        }
+
+        val metaSupportingAddons = enabledAddons.filter { addon ->
+            addon.manifest?.supportsResource("meta", stremioType, mediaItem.id) == true
+        }.sortedByDescending { addon ->
+            if (targetName != null && (
+                addon.displayTitle.equals(targetName, ignoreCase = true) ||
+                addon.manifest?.name.equals(targetName, ignoreCase = true) ||
+                addon.manifest?.id.equals(targetName, ignoreCase = true)
+            )) 1 else 0
+        }
+
+        val isStremioAddon = matchesInstalledAddon || metaSupportingAddons.isNotEmpty() ||
+            targetName?.contains("catalog", ignoreCase = true) == true ||
             targetName?.contains("stremio", ignoreCase = true) == true ||
             targetName?.contains("nuvio", ignoreCase = true) == true ||
             mediaItem.provider?.contains("catalog", ignoreCase = true) == true ||
             mediaItem.provider?.contains("stremio", ignoreCase = true) == true ||
             mediaItem.provider?.contains("nuvio", ignoreCase = true) == true
 
+        // Step 1: Direct Addon meta First
+        if (metaSupportingAddons.isNotEmpty()) {
+            for (addon in metaSupportingAddons) {
+                val metaUrl = com.euthopiar.core.addons.buildAddonResourceUrl(
+                    manifestUrl = addon.manifestUrl,
+                    resource = "meta",
+                    type = stremioType,
+                    id = mediaItem.id
+                )
+                val response = runCatching {
+                    com.euthopiar.core.js.network.httpRequestRaw("GET", metaUrl, emptyMap(), "", followRedirects = true)
+                }.getOrNull()
+
+                if (response != null && response.status in 200..299 && response.body.isNotBlank()) {
+                    val parsed = com.euthopiar.core.addons.AddonMetaParser.parseMeta(
+                        payload = response.body,
+                        addonName = addon.displayTitle
+                    )
+                    if (parsed != null) {
+                        val effectiveImdb = parsed.imdbId?.takeIf { it.startsWith("tt") }
+                            ?: baseId.takeIf { it.startsWith("tt") }
+
+                        if (!effectiveImdb.isNullOrBlank()) {
+                            val isTv = parsed.type == MediaType.TV_SERIES || parsed.type == MediaType.ANIME
+                            runCatching {
+                                val tmdbId = TmdbBridge.findTmdbIdByImdb(DohDns.metadataClient, effectiveImdb, isTv) ?: effectiveImdb
+                                val enriched = TmdbBridge.fetchEnrichedDetails(DohDns.metadataClient, tmdbId, isTv, "tmdb")
+                                if (enriched != null) {
+                                    return@withContext parsed.copy(
+                                        cast = if (parsed.cast.isNotEmpty()) parsed.cast else enriched.cast,
+                                        recommendations = if (parsed.recommendations.isNotEmpty()) parsed.recommendations else enriched.recommendations,
+                                        trailerUrl = parsed.trailerUrl ?: enriched.trailerUrl,
+                                        logoUrl = parsed.logoUrl ?: enriched.logoUrl,
+                                        genres = if (parsed.genres.isNotEmpty()) parsed.genres else enriched.genres,
+                                        directors = if (parsed.directors.isNotEmpty()) parsed.directors else enriched.directors
+                                    )
+                                }
+                            }
+                        }
+                        return@withContext parsed
+                    }
+                }
+            }
+        }
+
+        // Step 2: Fallback for Catalog-Only Addons (like CyberFlix) & TMDB Targets
         val isTmdbTarget = targetName.equals("tmdb", ignoreCase = true) ||
             mediaItem.provider.equals("tmdb", ignoreCase = true) ||
             baseId.startsWith("tt") ||
@@ -197,12 +310,31 @@ open class ProviderRepository(
                 baseId
             }
 
-            val enriched = TmdbBridge.fetchEnrichedDetails(
+            var enriched = TmdbBridge.fetchEnrichedDetails(
                 client = DohDns.metadataClient,
                 tmdbId = resolvedTmdbId,
                 isTv = isTv,
                 providerName = "tmdb"
             )
+
+            // Cinemeta fallback if TMDB returns null and ID is tt...
+            if (enriched == null && baseId.startsWith("tt")) {
+                val cinemetaType = if (isTv) "series" else "movie"
+                val cinemetaUrl = "https://v3-cinemeta.strem.io/meta/$cinemetaType/$baseId.json"
+                val cinemetaResp = runCatching {
+                    com.euthopiar.core.js.network.httpRequestRaw("GET", cinemetaUrl, emptyMap(), "", followRedirects = true)
+                }.getOrNull()
+                if (cinemetaResp != null && cinemetaResp.status in 200..299 && cinemetaResp.body.isNotBlank()) {
+                    val cinemetaDetail = com.euthopiar.core.addons.AddonMetaParser.parseMeta(
+                        payload = cinemetaResp.body,
+                        addonName = "Cinemeta"
+                    )
+                    if (cinemetaDetail != null) {
+                        return@withContext cinemetaDetail
+                    }
+                }
+            }
+
             if (enriched != null) {
                 val safeTmdbId = enriched.tmdbId.ifBlank { resolvedTmdbId }
                 val episodes: List<EpisodeItem> = if (isTv) {
@@ -233,7 +365,7 @@ open class ProviderRepository(
                 return@withContext MediaDetail(
                     id = safeTmdbId,
                     title = enriched.title,
-                    url = "",
+                    url = mediaItem.url,
                     posterUrl = enriched.posterUrl,
                     backdropUrl = enriched.backdropUrl,
                     type = mediaItem.type,
@@ -257,7 +389,7 @@ open class ProviderRepository(
                 return@withContext MediaDetail(
                     id = cleanId.ifBlank { mediaItem.id },
                     title = mediaItem.title.ifBlank { "Media Details" },
-                    url = "",
+                    url = mediaItem.url,
                     posterUrl = mediaItem.posterUrl,
                     backdropUrl = mediaItem.backdropUrl,
                     type = mediaItem.type,
@@ -598,20 +730,30 @@ open class ProviderRepository(
                                 else -> null
                             }
                             val effectiveAddon = stream.addonName.ifBlank { stream.sourceName.orEmpty() }
+                            val isM3u8Stream = stream.container == StreamContainer.HLS || url.contains(".m3u8", ignoreCase = true)
+                            val resolvedContainer = if (stream.container != StreamContainer.AUTO) {
+                                stream.container
+                            } else if (isM3u8Stream) {
+                                StreamContainer.HLS
+                            } else {
+                                StreamContainer.AUTO
+                            }
+                            val allSubs = (stream.externalSubtitles + stream.subtitles).distinctBy { it.url }
+                            val subTracks = allSubs.map { sub ->
+                                SubtitleTrack(
+                                    language = sub.name ?: sub.language,
+                                    url = sub.url,
+                                    headers = sub.headers ?: emptyMap()
+                                )
+                            }
 
                             val src = StreamSource(
                                 serverName = serverLabel,
                                 url = url,
                                 quality = stream.quality ?: "Auto",
-                                isM3u8 = url.contains(".m3u8", ignoreCase = true),
+                                isM3u8 = isM3u8Stream,
                                 headers = stream.headers,
-                                subtitles = stream.externalSubtitles.map { sub ->
-                                    SubtitleTrack(
-                                        language = sub.name ?: sub.language,
-                                        url = sub.url,
-                                        headers = sub.headers ?: emptyMap()
-                                    )
-                                },
+                                subtitles = subTracks,
                                 infoHash = stream.infoHash,
                                 seeders = stream.seeders,
                                 fileIdx = stream.fileIdx,
@@ -625,19 +767,13 @@ open class ProviderRepository(
                                 isCached = if (hasActiveDebrid) stream.isCached else false,
                                 hdrType = parsedHdr,
                                 codec = parsedCodec,
-                                addonName = effectiveAddon
+                                addonName = effectiveAddon,
+                                container = resolvedContainer,
+                                trackers = stream.trackers
                             )
                             send(StreamEmission.SourceFound(src))
-                            for (sub in stream.externalSubtitles) {
-                                send(
-                                    StreamEmission.SubtitleFound(
-                                        SubtitleTrack(
-                                            url = sub.url,
-                                            language = sub.name ?: sub.language,
-                                            headers = sub.headers ?: emptyMap()
-                                        )
-                                    )
-                                )
+                            for (sub in subTracks) {
+                                send(StreamEmission.SubtitleFound(sub))
                             }
                         }
                     }
