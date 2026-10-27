@@ -6,7 +6,7 @@
 
 ### 🎬 Your Movies, Series & Anime — All in One Beautiful App
 
-[![Latest Release](https://img.shields.io/badge/Latest%20Release-v1.0.2--Stable-E50914?style=for-the-badge&logo=github&logoColor=white)](https://github.com/TheARCreactorGUY/Euthopiar-/releases/latest)
+[![Latest Release](https://img.shields.io/badge/Latest%20Release-v1.0.3--Stable-E50914?style=for-the-badge&logo=github&logoColor=white)](https://github.com/TheARCreactorGUY/Euthopiar-/releases/latest)
 [![Platform](https://img.shields.io/badge/Platform-Android-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/TheARCreactorGUY/Euthopiar-/releases/latest)
 [![Kotlin](https://img.shields.io/badge/Built%20with-Kotlin-7F52FF?style=for-the-badge&logo=kotlin&logoColor=white)](https://kotlinlang.org/)
 [![Open Source](https://img.shields.io/badge/Open%20Source-Yes-brightgreen?style=for-the-badge)](https://github.com/TheARCreactorGUY/Euthopiar-)
@@ -86,7 +86,7 @@ https://raw.githubusercontent.com/TheARCreactorGUY/Plugins/main/manifest.json
 
 <div align="center">
 
-[![Download Latest](https://img.shields.io/badge/⬇%20%20GET%20v1.0.2--Stable-E50914?style=for-the-badge)](https://github.com/TheARCreactorGUY/Euthopiar-/releases/latest)
+[![Download Latest](https://img.shields.io/badge/⬇%20%20GET%20v1.0.3--Stable-E50914?style=for-the-badge)](https://github.com/TheARCreactorGUY/Euthopiar-/releases/latest)
 
 </div>
 
