@@ -151,7 +151,7 @@ fun PlayerSidePanel(
     onLockScreen: () -> Unit = {},
     seekIntervalSeconds: Int = 10,
     onSelectSeekInterval: (Int) -> Unit = {},
-    smartFailoverEnabled: Boolean = true,
+    smartFailoverEnabled: Boolean = false,
     onToggleSmartFailover: (Boolean) -> Unit = {},
     episodes: List<EpisodeItem> = emptyList(),
     availableSeasons: List<Int> = emptyList(),

@@ -57,7 +57,7 @@ class PlaybackSettingsViewModel(application: Application) : AndroidViewModel(app
     private val _hardwareAcceleration = MutableStateFlow(true)
     val hardwareAcceleration: StateFlow<Boolean> = _hardwareAcceleration.asStateFlow()
 
-    private val _smartFailover = MutableStateFlow(true)
+    private val _smartFailover = MutableStateFlow(false)
     val smartFailover: StateFlow<Boolean> = _smartFailover.asStateFlow()
 
     private val _audioPassthrough = MutableStateFlow(false)
@@ -166,7 +166,7 @@ class PlaybackSettingsViewModel(application: Application) : AndroidViewModel(app
         setDefaultQuality("Auto")
         setBufferSizeMb(50)
         setHardwareAcceleration(true)
-        setSmartFailover(true)
+        setSmartFailover(false)
         setAudioPassthrough(false)
         setSeekInterval(10)
         setAutoPlayNext(true)

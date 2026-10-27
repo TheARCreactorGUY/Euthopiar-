@@ -618,7 +618,14 @@ fun AppNavHost(
                     episodeTitle = episodeTitle,
                     initialSeason = season,
                     initialEpisode = episode,
-                    onBack = { navController.popBackStack() },
+                    onBack = {
+                        val popped = navController.popBackStack()
+                        if (!popped) {
+                            navController.navigate(NavTab.HOME.route) {
+                                popUpTo(0) { inclusive = true }
+                            }
+                        }
+                    },
                     onNavigateToPluginManager = { navController.navigate("plugin_manager") }
                 )
             }

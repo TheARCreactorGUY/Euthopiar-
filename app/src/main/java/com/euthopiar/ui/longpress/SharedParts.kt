@@ -45,6 +45,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
@@ -387,36 +388,35 @@ fun WatchlistIcon(
 fun SharedScrim(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
-    scrimAlpha: Float = 0.70f,
+    scrimAlpha: Float = 0.76f,
     progress: Float = 1f,
     hazeState: HazeState? = LocalLongPressHazeState.current
 ) {
     val clampedProgress = progress.coerceIn(0f, 1f)
-    val currentBlur = 16.dp * clampedProgress
-    val currentAlpha = scrimAlpha * clampedProgress
-
     val isBlurSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hazeState != null
 
-    val scrimModifier = if (isBlurSupported) {
-        Modifier
+    Box(
+        modifier = modifier
             .fillMaxSize()
-            .hazeEffect(state = hazeState) {
-                blurRadius = currentBlur
-                tints = listOf(HazeTint(Color.Black.copy(alpha = currentAlpha)))
-                fallbackTint = HazeTint(Color.Black.copy(alpha = 0.85f * clampedProgress))
+            .graphicsLayer {
+                alpha = clampedProgress
             }
+            // Ambient dark underlay so transparent/negative space blurs seamlessly without patchy halos
+            .background(Color.Black.copy(alpha = 0.55f))
+            .then(
+                if (isBlurSupported) {
+                    Modifier.hazeEffect(state = hazeState) {
+                        blurRadius = 26.dp
+                        tints = listOf(HazeTint(Color.Black.copy(alpha = scrimAlpha)))
+                        fallbackTint = HazeTint(Color.Black.copy(alpha = 0.85f))
+                    }
+                } else {
+                    Modifier.background(Color.Black.copy(alpha = 0.85f))
+                }
+            )
             .pointerInput(Unit) {
                 detectTapGestures { onDismiss() }
             }
-    } else {
-        Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.85f * clampedProgress))
-            .pointerInput(Unit) {
-                detectTapGestures { onDismiss() }
-            }
-    }
-
-    Box(modifier = modifier.then(scrimModifier))
+    )
 }
 

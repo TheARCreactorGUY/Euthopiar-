@@ -2,6 +2,7 @@ package com.euthopiar.ui.home
 
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -287,10 +288,11 @@ fun HomeScreen(
                 .fillMaxSize()
                 .background(screenBg)
         ) {
-            // Screen content behind the sheet (marked as hazeSource, Rule 1.1)
+            // Screen content behind the sheet (marked as hazeSource with screenBg for uniform non-patchy blur)
             Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .background(screenBg)
                     .hazeSource(state = homeHazeState)
             ) {
         Crossfade(
@@ -671,22 +673,32 @@ fun HomeScreen(
 }
 } // Close Box(hazeSource)
 
+        val isPreviewActive = quickActionItem != null
+        val headerAlpha by animateFloatAsState(
+            targetValue = if (isPreviewActive) 0f else 1f,
+            animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+            label = "HeaderPreviewAlpha"
+        )
+
         // Pinned Top Header Bar, Offline Banner & Update Banner (outside hazeSource, samples homeHazeState)
         Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
+                .graphicsLayer {
+                    alpha = headerAlpha
+                }
         ) {
             TopHeaderBar(
                 registry = registry,
                 scrollFraction = { headerScrollFraction },
-                hazeState = homeHazeState,
+                hazeState = if (isPreviewActive) null else homeHazeState,
                 hasUpdateAvailable = updateState is UpdateCheckState.UpdateAvailable,
                 onUpdateBadgeClick = { showUpdateDialog = true }
             )
             OfflineBanner()
             HomeUpdateBanner(
-                hazeState = homeHazeState,
+                hazeState = if (isPreviewActive) null else homeHazeState,
                 onOpenUpdatePopup = { _, _ -> showUpdateDialog = true },
                 onDismiss = { updateManager.dismissBannerForSession() }
             )

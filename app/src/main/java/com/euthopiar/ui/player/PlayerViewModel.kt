@@ -218,7 +218,7 @@ data class PlayerUiState(
     val episodePlaybackMap: Map<Pair<Int, Int>, PlaybackHistoryEntity> = emptyMap(),
     val isEpisodesLoading: Boolean = false,
     val activeSidePanel: PlayerSidePanelType = PlayerSidePanelType.NONE,
-    val smartFailoverEnabled: Boolean = true,
+    val smartFailoverEnabled: Boolean = false,
     val isScreenLocked: Boolean = false,
     val pinchAspectToast: String? = null,
     val showUpNextCard: Boolean = false,

@@ -1004,7 +1004,8 @@ fun PluginsSettingsPage(
                                                         fontWeight = FontWeight.Medium
                                                     ),
                                                     maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis
+                                                    overflow = TextOverflow.Ellipsis,
+                                                    modifier = Modifier.weight(1f, fill = false)
                                                 )
                                                 val vStr = "v${addon.manifest?.version ?: "1.0"}"
                                                 Text(
@@ -1013,7 +1014,9 @@ fun PluginsSettingsPage(
                                                         color = PluginsGlassTokens.TextSecondary,
                                                         fontSize = 12.sp,
                                                         fontWeight = FontWeight.Normal
-                                                    )
+                                                    ),
+                                                    maxLines = 1,
+                                                    softWrap = false
                                                 )
                                             }
 

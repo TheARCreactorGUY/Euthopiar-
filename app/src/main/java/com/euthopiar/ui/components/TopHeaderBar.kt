@@ -114,14 +114,17 @@ fun TopHeaderBar(
         // 1. Scrolled Frosted Glass Background Layer
         // Fades in/out continuously via graphicsLayer alpha with smootherstep easing
         // Eliminates rigid threshold pops and abrupt last-millisecond snaps
+        val currentScrollFraction = scrollFraction().coerceIn(0f, 1f)
+        val isHazeActive = isUsingHaze && currentScrollFraction > 0.01f
+
         Box(
             modifier = Modifier
                 .matchParentSize()
                 .graphicsLayer {
-                    alpha = scrollFraction().coerceIn(0f, 1f)
+                    alpha = currentScrollFraction
                 }
                 .then(
-                    if (isUsingHaze) {
+                    if (isHazeActive) {
                         Modifier.hazeEffect(state = hazeState!!) {
                             blurRadius = GlassDefaults.BlurRadius
                             tints = listOf(
@@ -139,7 +142,7 @@ fun TopHeaderBar(
                 )
                 .drawBehind {
                     // Solid dark obsidian fill to ensure 100% opacity over scrolled catalog items
-                    if (isUsingHaze) {
+                    if (isHazeActive) {
                         drawRect(color = barBg.copy(alpha = 0.88f))
                         drawRect(color = Color.White.copy(alpha = 0.05f))
                     }

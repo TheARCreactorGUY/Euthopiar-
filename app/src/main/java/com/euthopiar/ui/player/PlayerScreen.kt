@@ -139,7 +139,6 @@ fun PlayerScreen(
             uiState.isEpisodeSelectorOpen -> viewModel.setEpisodeSelectorOpen(false)
             uiState.activeSidePanel != PlayerSidePanelType.NONE -> viewModel.closeSidePanel()
             uiState.isScreenLocked -> triggerShowUnlockButton()
-            uiState.controlsVisible -> viewModel.hideControls()
             else -> onBack()
         }
     }
@@ -631,13 +630,7 @@ fun PlayerScreen(
                     }
                 },
                 onBack = {
-                    when {
-                        showCastPickerSheet -> showCastPickerSheet = false
-                        uiState.isEpisodeSelectorOpen -> viewModel.setEpisodeSelectorOpen(false)
-                        uiState.activeSidePanel != PlayerSidePanelType.NONE -> viewModel.closeSidePanel()
-                        uiState.controlsVisible -> viewModel.hideControls()
-                        else -> onBack()
-                    }
+                    handleBackNavigation()
                 },
                 modifier = Modifier.align(Alignment.TopCenter)
             )

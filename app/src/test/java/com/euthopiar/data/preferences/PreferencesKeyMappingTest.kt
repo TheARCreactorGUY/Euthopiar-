@@ -112,12 +112,12 @@ class PreferencesKeyMappingTest {
     @Test
     fun testSmartFailoverAndAudioPassthroughPreferences() = runBlocking {
         val smartFailover = repository.smartFailoverEnabled.first()
-        assertTrue(smartFailover)
+        assertFalse(smartFailover)
 
-        repository.setSmartFailoverEnabled(false)
-        assertFalse(repository.smartFailoverEnabled.first())
         repository.setSmartFailoverEnabled(true)
         assertTrue(repository.smartFailoverEnabled.first())
+        repository.setSmartFailoverEnabled(false)
+        assertFalse(repository.smartFailoverEnabled.first())
 
         val audioPassthrough = repository.audioPassthroughEnabled.first()
         assertFalse(audioPassthrough)

@@ -773,7 +773,7 @@ class PreferencesRepository private constructor(private val context: Context) {
             if (exception is IOException) emit(emptyPreferences()) else throw exception
         }
         .map { preferences ->
-            preferences[PreferencesKeys.SMART_FAILOVER_ENABLED] ?: true
+            preferences[PreferencesKeys.SMART_FAILOVER_ENABLED] ?: false
         }
         .distinctUntilChanged()
 

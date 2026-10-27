@@ -86,7 +86,8 @@ fun TintedResumeSheet(
     item: SheetItem,
     actions: SheetActions,
     onDismiss: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    hazeState: dev.chrisbanes.haze.HazeState? = LocalLongPressHazeState.current
 ) {
     val coroutineScope = rememberCoroutineScope()
     val density = LocalDensity.current
@@ -199,8 +200,9 @@ fun TintedResumeSheet(
 
         SharedScrim(
             onDismiss = dismissWithAnim,
-            scrimAlpha = 0.70f,
-            progress = animProgress
+            scrimAlpha = 0.76f,
+            progress = animProgress,
+            hazeState = hazeState
         )
 
         Box(

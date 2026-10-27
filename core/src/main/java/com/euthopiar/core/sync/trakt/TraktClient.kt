@@ -157,8 +157,8 @@ class TraktClient(
     companion object {
         const val BASE_URL = "https://api.trakt.tv"
         // Public open-source Trakt app client credentials
-        const val DEFAULT_CLIENT_ID = "YOUR_API_KEY_HERE"
-        const val DEFAULT_CLIENT_SECRET = "YOUR_API_KEY_HERE"
+        const val DEFAULT_CLIENT_ID = "086f0aef88e0b7a8a1db56fa8a78377755f137b036578a481ec66bc62040d21a"
+        const val DEFAULT_CLIENT_SECRET = "dbcfcf7599cb510368a5146c65e8a7191192e21262d04a8dc7ae967a5b3a4a08"
 
         @Volatile
         private var instance: TraktClient? = null

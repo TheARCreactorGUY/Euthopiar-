@@ -37,13 +37,13 @@ class PlayerSmartFailoverTest {
     @Test
     fun testSmartFailoverInitialStateAndToggle() {
         val state = viewModel.uiState.value
-        assertTrue("Smart Failover should default to enabled", state.smartFailoverEnabled)
+        assertFalse("Smart Failover should default to disabled", state.smartFailoverEnabled)
+
+        viewModel.setSmartFailoverEnabled(true)
+        assertTrue("Smart Failover should reflect enabled state", viewModel.uiState.value.smartFailoverEnabled)
 
         viewModel.setSmartFailoverEnabled(false)
         assertFalse("Smart Failover should reflect disabled state", viewModel.uiState.value.smartFailoverEnabled)
-
-        viewModel.setSmartFailoverEnabled(true)
-        assertTrue("Smart Failover should reflect re-enabled state", viewModel.uiState.value.smartFailoverEnabled)
     }
 
     @Test
