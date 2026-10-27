@@ -496,6 +496,7 @@ fun SearchScreen(
                         MediaType.MOVIE -> "Movies"
                         MediaType.TV_SERIES -> "Series"
                         MediaType.ANIME -> "Anime"
+                        MediaType.LIVE_TV -> "Live TV"
                         null -> "All types"
                     }
                     SearchGlassDropdown(

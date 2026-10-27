@@ -25,10 +25,18 @@ fun buildAddonResourceUrl(
 
 fun String.encodeAddonPathSegment(): String =
     buildString {
-        encodeToByteArray().forEach { byte ->
-            val value = byte.toInt() and 0xFF
-            val char = value.toChar()
-            if (
+        var i = 0
+        while (i < this@encodeAddonPathSegment.length) {
+            val char = this@encodeAddonPathSegment[i]
+            if (char == '%' && i + 2 < this@encodeAddonPathSegment.length &&
+                this@encodeAddonPathSegment[i + 1].isAddonHexDigit() &&
+                this@encodeAddonPathSegment[i + 2].isAddonHexDigit()
+            ) {
+                append('%')
+                append(this@encodeAddonPathSegment[i + 1])
+                append(this@encodeAddonPathSegment[i + 2])
+                i += 3
+            } else if (
                 char in 'a'..'z' ||
                 char in 'A'..'Z' ||
                 char in '0'..'9' ||
@@ -39,12 +47,21 @@ fun String.encodeAddonPathSegment(): String =
                 char == ':'
             ) {
                 append(char)
+                i++
             } else {
-                append('%')
-                append(ADDON_URL_HEX[value shr 4])
-                append(ADDON_URL_HEX[value and 0x0F])
+                val bytes = char.toString().encodeToByteArray()
+                for (byte in bytes) {
+                    val value = byte.toInt() and 0xFF
+                    append('%')
+                    append(ADDON_URL_HEX[value shr 4])
+                    append(ADDON_URL_HEX[value and 0x0F])
+                }
+                i++
             }
         }
     }
+
+private fun Char.isAddonHexDigit(): Boolean =
+    this in '0'..'9' || this in 'a'..'f' || this in 'A'..'F'
 
 private const val ADDON_URL_HEX = "0123456789ABCDEF"

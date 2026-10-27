@@ -129,9 +129,67 @@ class AddonMetaParserTest {
         val detail = AddonMetaParser.parse(json, "ustv:hbo", "channel", "LiveAddon")
         assertNotNull(detail)
         assertEquals("HBO East", detail!!.title)
-        // channel defaults to MOVIE in AddonMetaParser or single stream target
+        assertEquals(MediaType.LIVE_TV, detail.type)
         assertEquals(1, detail.episodes.size)
         assertEquals("ustv:hbo:live", detail.episodes.first().data)
         assertEquals("ustv:hbo:live", detail.episodes.first().id)
+    }
+
+    @Test
+    fun testParseTvvooLiveTvChannelMeta() {
+        val json = """
+            {
+                "meta": {
+                    "id": "vavoo_SKY%201|group:uk",
+                    "type": "tv",
+                    "name": "SKY 1",
+                    "poster": "https://images.vavoo.to/logos/sky1.png",
+                    "genre": "Entertainment",
+                    "behaviorHints": {
+                        "isLive": true
+                    }
+                }
+            }
+        """.trimIndent()
+
+        val detail = AddonMetaParser.parse(json, "vavoo_SKY%201|group:uk", "tv", "tvvoo")
+        assertNotNull(detail)
+        assertEquals("SKY 1", detail!!.title)
+        assertEquals(MediaType.LIVE_TV, detail.type)
+        assertEquals(listOf("Entertainment"), detail.genres)
+        assertEquals(1, detail.episodes.size)
+        val ep = detail.episodes.first()
+        assertEquals("vavoo_SKY%201|group:uk", ep.id)
+        assertEquals("vavoo_SKY%201|group:uk", ep.data)
+        assertEquals(0, ep.seasonNumber)
+        assertEquals(1, ep.episodeNumber)
+    }
+
+    @Test
+    fun testParseMalformedAndNullMetaFields() {
+        val json = """
+            {
+                "meta": {
+                    "id": "broken:1",
+                    "type": null,
+                    "name": null,
+                    "title": "Broken Title",
+                    "imdbRating": null,
+                    "year": "null",
+                    "genres": null,
+                    "runtime": null,
+                    "cast": null,
+                    "videos": null,
+                    "behaviorHints": null
+                }
+            }
+        """.trimIndent()
+
+        val detail = AddonMetaParser.parse(json, "broken:1", "movie", "BrokenAddon")
+        assertNotNull(detail)
+        assertEquals("Broken Title", detail!!.title)
+        org.junit.Assert.assertNull(detail.year)
+        assertEquals(emptyList<String>(), detail.genres)
+        assertEquals(1, detail.episodes.size)
     }
 }

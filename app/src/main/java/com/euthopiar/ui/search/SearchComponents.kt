@@ -666,6 +666,7 @@ fun TrendingRankedRow(
         MediaType.MOVIE -> "Movie"
         MediaType.TV_SERIES -> "Series"
         MediaType.ANIME -> "Anime"
+        MediaType.LIVE_TV -> "Live TV"
     }
 
     val metadataText = buildString {
@@ -770,6 +771,7 @@ fun BestMatchResultRow(
         MediaType.MOVIE -> "Movie"
         MediaType.TV_SERIES -> "Series"
         MediaType.ANIME -> "Anime"
+        MediaType.LIVE_TV -> "Live TV"
     }
 
     val metadata = buildString {
@@ -931,6 +933,7 @@ fun CompactResultRow(
         MediaType.MOVIE -> "Movie"
         MediaType.TV_SERIES -> "Series"
         MediaType.ANIME -> "Anime"
+        MediaType.LIVE_TV -> "Live TV"
     }
 
     val metadata = buildString {

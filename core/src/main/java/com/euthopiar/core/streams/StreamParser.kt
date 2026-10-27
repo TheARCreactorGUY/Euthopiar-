@@ -23,10 +23,10 @@ object StreamParser {
         originalLanguage: String? = null
     ): List<StreamItem> {
         val root = try {
-            json.parseToJsonElement(payload).jsonObject
+            json.parseToJsonElement(payload) as? JsonObject
         } catch (_: Exception) {
-            return emptyList()
-        }
+            null
+        } ?: return emptyList()
 
         val streamsArray = root["streams"] as? JsonArray ?: return emptyList()
         return streamsArray.mapNotNull { element ->
@@ -37,6 +37,7 @@ object StreamParser {
             val ytId = obj.string("ytId")?.trim()?.takeIf { it.isNotEmpty() }
 
             val hintsObj = obj["behaviorHints"] as? JsonObject
+            val isLive = hintsObj?.boolean("isLive") == true
 
             // Unpack clientResolve from stream item or behaviorHints
             val clientResolveObj = (obj["clientResolve"] as? JsonObject)
@@ -116,29 +117,7 @@ object StreamParser {
                         rawType?.equals("torrent", ignoreCase = true) == true || rawType?.equals("p2p", ignoreCase = true) == true -> {
                     Pair("torrent", StreamContainer.P2P)
                 }
-                targetForExt.endsWith(".mkv") || rawType?.equals("mkv", ignoreCase = true) == true || rawFormat?.equals("mkv", ignoreCase = true) == true -> {
-                    Pair("mkv", StreamContainer.MKV)
-                }
-                targetForExt.endsWith(".m3u8") || targetForExt.contains("/hls/") || targetForExt.contains("format=m3u8") ||
-                        rawType?.equals("m3u8", ignoreCase = true) == true || rawType?.equals("hls", ignoreCase = true) == true -> {
-                    Pair("m3u8", StreamContainer.HLS)
-                }
-                targetForExt.endsWith(".mpd") || targetForExt.contains("format=mpd") ||
-                        rawType?.equals("mpd", ignoreCase = true) == true || rawType?.equals("dash", ignoreCase = true) == true -> {
-                    Pair("mpd", StreamContainer.DASH)
-                }
-                targetForExt.endsWith(".webm") || rawType?.equals("webm", ignoreCase = true) == true -> {
-                    Pair("webm", StreamContainer.WEBM)
-                }
-                targetForExt.endsWith(".ts") || rawType?.equals("ts", ignoreCase = true) == true -> {
-                    Pair("ts", StreamContainer.TS)
-                }
-                targetForExt.endsWith(".mp4") || rawType?.equals("mp4", ignoreCase = true) == true -> {
-                    Pair("mp4", StreamContainer.MP4)
-                }
-                else -> {
-                    Pair(rawType ?: "mp4", StreamContainer.MP4)
-                }
+                else -> detectContainer(cleanUrl, filename, rawType, rawFormat)
             }
 
             // Quality parsing from name, title, description with DS4K and HDR fix
@@ -226,17 +205,81 @@ object StreamParser {
                 filename = filename,
                 container = inferredContainer,
                 trackers = combinedTrackers,
-                subtitles = parsedSubtitles
+                subtitles = parsedSubtitles,
+                isLive = isLive
             )
         }
     }
 
-    private fun JsonObject.string(name: String): String? =
-        this[name]?.jsonPrimitive?.contentOrNull
+    fun detectContainer(
+        url: String?,
+        filename: String?,
+        rawType: String? = null,
+        rawFormat: String? = null
+    ): Pair<String, StreamContainer> {
+        val fullUrlLower = url?.lowercase().orEmpty()
+        val cleanUrl = url?.substringBefore('?')
+        val cleanUrlLower = cleanUrl?.lowercase().orEmpty()
+        val fn = filename?.lowercase().orEmpty()
+        val checkTarget = "$fn $cleanUrlLower $fullUrlLower"
 
-    private fun JsonObject.int(name: String): Int? =
-        this[name]?.jsonPrimitive?.let { it.intOrNull ?: it.contentOrNull?.toIntOrNull() }
+        return when {
+            fn.endsWith(".mkv") || cleanUrlLower.endsWith(".mkv") || checkTarget.contains(".mkv") ||
+                    rawType?.equals("mkv", ignoreCase = true) == true || rawFormat?.equals("mkv", ignoreCase = true) == true -> {
+                Pair("mkv", StreamContainer.MKV)
+            }
+            fn.endsWith(".m3u8") || cleanUrlLower.endsWith(".m3u8") || checkTarget.contains(".m3u8") ||
+                    checkTarget.contains("/hls/") || checkTarget.contains("format=m3u8") || checkTarget.contains("type=m3u8") ||
+                    rawType?.equals("m3u8", ignoreCase = true) == true || rawType?.equals("hls", ignoreCase = true) == true ||
+                    rawType?.contains("mpegurl", ignoreCase = true) == true || rawFormat?.contains("mpegurl", ignoreCase = true) == true -> {
+                Pair("m3u8", StreamContainer.HLS)
+            }
+            fn.endsWith(".mpd") || cleanUrlLower.endsWith(".mpd") || checkTarget.contains(".mpd") ||
+                    checkTarget.contains("/dash/") || checkTarget.contains("format=mpd") ||
+                    rawType?.equals("mpd", ignoreCase = true) == true || rawType?.equals("dash", ignoreCase = true) == true ||
+                    rawType?.contains("dash", ignoreCase = true) == true || rawFormat?.contains("dash", ignoreCase = true) == true -> {
+                Pair("mpd", StreamContainer.DASH)
+            }
+            fn.endsWith(".webm") || cleanUrlLower.endsWith(".webm") || checkTarget.contains(".webm") ||
+                    rawType?.equals("webm", ignoreCase = true) == true -> {
+                Pair("webm", StreamContainer.WEBM)
+            }
+            fn.endsWith(".ts") || cleanUrlLower.endsWith(".ts") || checkTarget.contains(".ts") ||
+                    rawType?.equals("ts", ignoreCase = true) == true -> {
+                Pair("ts", StreamContainer.TS)
+            }
+            fn.endsWith(".mp4") || cleanUrlLower.endsWith(".mp4") || checkTarget.contains(".mp4") ||
+                    fn.endsWith(".m4v") || cleanUrlLower.endsWith(".m4v") || checkTarget.contains(".m4v") ||
+                    rawType?.equals("mp4", ignoreCase = true) == true || rawFormat?.equals("mp4", ignoreCase = true) == true ||
+                    rawType?.contains("video/mp4", ignoreCase = true) == true || rawFormat?.contains("video/mp4", ignoreCase = true) == true -> {
+                Pair("mp4", StreamContainer.MP4)
+            }
+            else -> {
+                Pair(rawType ?: "auto", StreamContainer.AUTO)
+            }
+        }
+    }
 
-    private fun JsonObject.boolean(name: String): Boolean? =
-        this[name]?.jsonPrimitive?.booleanOrNull
+    fun detectContainer(url: String?, filename: String?): Pair<String, StreamContainer> =
+        detectContainer(url, filename, null, null)
+
+    private fun JsonObject.string(name: String): String? {
+        val primitive = this[name] as? JsonPrimitive ?: return null
+        if (primitive is kotlinx.serialization.json.JsonNull) return null
+        if (!primitive.isString && primitive.content.equals("null", ignoreCase = true)) return null
+        val content = primitive.contentOrNull?.trim()
+        return if (content.isNullOrBlank()) null else content
+    }
+
+    private fun JsonObject.int(name: String): Int? {
+        val primitive = this[name] as? JsonPrimitive ?: return null
+        if (primitive is kotlinx.serialization.json.JsonNull) return null
+        return primitive.intOrNull ?: primitive.contentOrNull?.toIntOrNull()
+    }
+
+    private fun JsonObject.boolean(name: String): Boolean? {
+        val primitive = this[name] as? JsonPrimitive ?: return null
+        if (primitive is kotlinx.serialization.json.JsonNull) return null
+        return primitive.booleanOrNull ?: primitive.contentOrNull?.toBooleanStrictOrNull()
+    }
 }

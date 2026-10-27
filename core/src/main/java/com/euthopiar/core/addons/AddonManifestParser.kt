@@ -14,7 +14,8 @@ object AddonManifestParser {
     private val json = Json { ignoreUnknownKeys = true }
 
     fun parse(manifestUrl: String, payload: String): AddonManifest {
-        val root = json.parseToJsonElement(payload).jsonObject
+        val root = (json.parseToJsonElement(payload) as? JsonObject)
+            ?: error("Invalid manifest payload: expected JsonObject")
         val defaultTypes = root.stringList("types")
         val defaultPrefixes = root.stringList("idPrefixes")
 
@@ -37,34 +38,48 @@ object AddonManifestParser {
         defaultTypes: List<String>,
         defaultPrefixes: List<String>
     ): List<AddonResource> =
-        array("resources").map { resource ->
+        array("resources").mapNotNull { resource ->
             when (resource) {
-                is JsonPrimitive -> AddonResource(
-                    name = resource.contentOrNull.orEmpty(),
-                    types = defaultTypes,
-                    idPrefixes = defaultPrefixes
-                )
-                else -> {
-                    val obj = resource.jsonObject
-                    AddonResource(
-                        name = obj.requiredString("name"),
-                        types = obj.stringList("types").ifEmpty { defaultTypes },
-                        idPrefixes = obj.stringList("idPrefixes").ifEmpty { defaultPrefixes }
-                    )
+                is JsonPrimitive -> {
+                    if (resource is kotlinx.serialization.json.JsonNull) null
+                    else {
+                        val name = resource.contentOrNull?.trim()
+                        if (!name.isNullOrBlank() && !name.equals("null", ignoreCase = true)) {
+                            AddonResource(
+                                name = name,
+                                types = defaultTypes,
+                                idPrefixes = defaultPrefixes
+                            )
+                        } else null
+                    }
                 }
+                is JsonObject -> {
+                    val name = resource.optionalString("name")
+                    if (!name.isNullOrBlank()) {
+                        AddonResource(
+                            name = name,
+                            types = resource.stringList("types").ifEmpty { defaultTypes },
+                            idPrefixes = resource.stringList("idPrefixes").ifEmpty { defaultPrefixes }
+                        )
+                    } else null
+                }
+                else -> null
             }
         }.filter { it.name.isNotBlank() }
 
     private fun JsonObject.catalogs(): List<AddonCatalog> =
-        array("catalogs").map { catalogElement ->
-            val catalog = catalogElement.jsonObject
+        array("catalogs").mapNotNull { catalogElement ->
+            val catalog = catalogElement as? JsonObject ?: return@mapNotNull null
+            val catalogId = catalog.optionalString("id") ?: return@mapNotNull null
+            val catalogType = catalog.optionalString("type") ?: return@mapNotNull null
             val extras = catalog.array("extra").mapNotNull { extraElement ->
-                extraElement.jsonObject.optionalString("name")?.takeIf { it.isNotBlank() }?.let { name ->
+                val extraObj = extraElement as? JsonObject ?: return@mapNotNull null
+                extraObj.optionalString("name")?.takeIf { it.isNotBlank() }?.let { name ->
                     AddonExtraProperty(
                         name = name,
-                        isRequired = extraElement.jsonObject.boolean("isRequired"),
-                        options = extraElement.jsonObject.stringList("options"),
-                        optionsLimit = extraElement.jsonObject.int("optionsLimit")
+                        isRequired = extraObj.boolean("isRequired"),
+                        options = extraObj.stringList("options"),
+                        optionsLimit = extraObj.int("optionsLimit")
                     )
                 }
             }
@@ -79,15 +94,15 @@ object AddonManifestParser {
             } else extras
 
             AddonCatalog(
-                type = catalog.requiredString("type"),
-                id = catalog.requiredString("id"),
-                name = catalog.optionalString("name").orEmpty().ifBlank { catalog.requiredString("id") },
+                type = catalogType,
+                id = catalogId,
+                name = catalog.optionalString("name")?.ifBlank { catalogId } ?: catalogId,
                 extra = extrasSupported
             )
         }
 
     private fun JsonObject.behaviorHints(): AddonBehaviorHints {
-        val hints = this["behaviorHints"]?.jsonObject ?: return AddonBehaviorHints()
+        val hints = this["behaviorHints"] as? JsonObject ?: return AddonBehaviorHints()
         return AddonBehaviorHints(
             configurable = hints.boolean("configurable"),
             configurationRequired = hints.boolean("configurationRequired"),
@@ -100,20 +115,35 @@ object AddonManifestParser {
         optionalString(name)?.takeIf { it.isNotBlank() }
             ?: error("Addon manifest missing required field: $name")
 
-    private fun JsonObject.optionalString(name: String): String? =
-        this[name]?.jsonPrimitive?.contentOrNull
+    private fun JsonObject.optionalString(name: String): String? {
+        val primitive = this[name] as? JsonPrimitive ?: return null
+        if (primitive is kotlinx.serialization.json.JsonNull) return null
+        if (!primitive.isString && primitive.content.equals("null", ignoreCase = true)) return null
+        val content = primitive.contentOrNull?.trim()
+        return if (content.isNullOrBlank()) null else content
+    }
 
-    private fun JsonObject.boolean(name: String): Boolean =
-        this[name]?.jsonPrimitive?.booleanOrNull ?: false
+    private fun JsonObject.boolean(name: String): Boolean {
+        val primitive = this[name] as? JsonPrimitive ?: return false
+        if (primitive is kotlinx.serialization.json.JsonNull) return false
+        return primitive.booleanOrNull ?: primitive.contentOrNull?.toBooleanStrictOrNull() ?: false
+    }
 
-    private fun JsonObject.int(name: String): Int? =
-        this[name]?.jsonPrimitive?.intOrNull
+    private fun JsonObject.int(name: String): Int? {
+        val primitive = this[name] as? JsonPrimitive ?: return null
+        if (primitive is kotlinx.serialization.json.JsonNull) return null
+        return primitive.intOrNull ?: primitive.contentOrNull?.toIntOrNull()
+    }
 
     private fun JsonObject.array(name: String): List<kotlinx.serialization.json.JsonElement> =
         (this[name] as? JsonArray)?.toList() ?: emptyList()
 
     private fun JsonObject.stringList(name: String): List<String> =
-        array(name).mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+        array(name).mapNotNull {
+            val p = it as? JsonPrimitive ?: return@mapNotNull null
+            if (p is kotlinx.serialization.json.JsonNull || (!p.isString && p.content.equals("null", ignoreCase = true))) null
+            else p.contentOrNull?.trim()?.takeIf { s -> s.isNotBlank() }
+        }
 
     private fun String.resolveAgainstManifest(manifestUrl: String): String =
         when {

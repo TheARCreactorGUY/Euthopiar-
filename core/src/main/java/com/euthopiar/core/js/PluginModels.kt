@@ -263,3 +263,51 @@ data class PluginRuntimeResult(
         } ?: emptyList()
     }
 }
+
+/**
+ * Compares two plugin version strings.
+ * Supports Semantic Versioning (e.g. "1.2.3", "v1.2", "2.0.0-beta"),
+ * integer versions ("2"), and pre-release suffix precedence.
+ */
+fun isPluginVersionNewer(currentVersion: String, remoteVersion: String): Boolean {
+    if (currentVersion.isBlank() && remoteVersion.isNotBlank()) return true
+    if (remoteVersion.isBlank()) return false
+
+    val cleanCurrent = currentVersion.trim().removePrefix("v").removePrefix("V").trim()
+    val cleanRemote = remoteVersion.trim().removePrefix("v").removePrefix("V").trim()
+
+    val currentCore = cleanCurrent.substringBefore("-").substringBefore("+")
+    val remoteCore = cleanRemote.substringBefore("-").substringBefore("+")
+
+    val currentParts = currentCore.split(".").mapNotNull { it.trim().toIntOrNull() }
+    val remoteParts = remoteCore.split(".").mapNotNull { it.trim().toIntOrNull() }
+
+    val maxLen = maxOf(currentParts.size, remoteParts.size)
+    for (i in 0 until maxLen) {
+        val curr = currentParts.getOrElse(i) { 0 }
+        val rem = remoteParts.getOrElse(i) { 0 }
+        if (rem > curr) return true
+        if (rem < curr) return false
+    }
+
+    val currentHasPreRelease = cleanCurrent.contains("-") && !cleanCurrent.contains("-stable", ignoreCase = true)
+    val remoteHasPreRelease = cleanRemote.contains("-") && !cleanRemote.contains("-stable", ignoreCase = true)
+
+    if (currentHasPreRelease && !remoteHasPreRelease) {
+        return true
+    }
+
+    return false
+}
+
+/**
+ * Validates that downloaded scraper code is non-empty and is not an HTML error or splash page.
+ */
+fun isValidJsPluginCode(code: String): Boolean {
+    if (code.isBlank()) return false
+    val trimmed = code.trimStart { it <= ' ' || it == '\uFEFF' }
+    if (trimmed.startsWith("<!DOCTYPE", ignoreCase = true) || trimmed.startsWith("<html", ignoreCase = true)) {
+        return false
+    }
+    return true
+}

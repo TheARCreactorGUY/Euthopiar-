@@ -556,4 +556,64 @@ class StreamingPlaybackRegressionTest {
         assertTrue("High-match 1080p HTTP stream should be prime candidate", vm.isPrimeCandidate(primeOpt, hasDebrid = false, prefHeight = 1080))
         assertFalse("Raw P2P without debrid should not be prime candidate for 0ms start", vm.isPrimeCandidate(rawP2pOpt, hasDebrid = false, prefHeight = 1080))
     }
+
+    @Test
+    fun testIsDashStreamRejectsOpaqueGoogleCdnTokenAndAcceptsValidPath() {
+        val app = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.app.Application>()
+        val vm = PlayerViewModel(app)
+
+        // Reflection to invoke private isDashStream
+        val isDashMethod = PlayerViewModel::class.java.getDeclaredMethod(
+            "isDashStream",
+            String::class.java,
+            com.euthopiar.core.model.StreamContainer::class.java
+        ).apply { isAccessible = true }
+
+        // Opaque Google CDN URL with "dash" inside the long token
+        val googleCdnUrl = "https://video-downloads.googleusercontent.com/ADGPM2_dash_secret_token_123456/stream.mp4"
+        val isDashGoogle = isDashMethod.invoke(vm, googleCdnUrl, null) as Boolean
+        assertFalse("Google CDN URL with 'dash' in token must NOT be classified as DASH", isDashGoogle)
+
+        // Known sequential cloud host with MKV container
+        val isDashMkv = isDashMethod.invoke(vm, "https://cdn.example.com/manifest.mpd", com.euthopiar.core.model.StreamContainer.MKV) as Boolean
+        assertFalse("MKV container must never be classified as DASH even with .mpd in url", isDashMkv)
+
+        // Valid DASH URL ending with /dash in path
+        val validDashPath = "https://example.com/live/channel/dash?token=abc"
+        val isDashPath = isDashMethod.invoke(vm, validDashPath, null) as Boolean
+        assertTrue("URL path ending in /dash must be classified as DASH", isDashPath)
+
+        // Valid DASH URL with .mpd
+        val validMpd = "https://example.com/live/manifest.mpd"
+        val isDashMpd = isDashMethod.invoke(vm, validMpd, null) as Boolean
+        assertTrue("URL with .mpd must be classified as DASH", isDashMpd)
+    }
+
+    @Test
+    fun testLooksLikeHlsUrlDetectsM3u8InQueryStringAndEncoded() {
+        val app = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.app.Application>()
+        val vm = PlayerViewModel(app)
+
+        val looksLikeHlsMethod = PlayerViewModel::class.java.getDeclaredMethod(
+            "looksLikeHlsUrl",
+            String::class.java,
+            Map::class.java,
+            Map::class.java
+        ).apply { isAccessible = true }
+
+        // tvvoo URL with .m3u8 in path
+        val tvvooUrl = "https://tvvoo.hayd.uk/live/manifest.m3u8?url=http://upstream.com/live"
+        val isTvvooHls = looksLikeHlsMethod.invoke(vm, tvvooUrl, emptyMap<String, String>(), emptyMap<String, String>()) as Boolean
+        assertTrue("tvvoo live manifest URL must be classified as HLS", isTvvooHls)
+
+        // Proxy URL with m3u8 in query parameter
+        val proxyM3u8InQuery = "https://proxy.example.com/stream?source=http://upstream.com/live.m3u8"
+        val isQueryHls = looksLikeHlsMethod.invoke(vm, proxyM3u8InQuery, emptyMap<String, String>(), emptyMap<String, String>()) as Boolean
+        assertTrue("URL with .m3u8 in query parameter must be classified as HLS", isQueryHls)
+
+        // Encoded %2em3u8
+        val encodedM3u8 = "https://proxy.example.com/stream?target=http%3A%2F%2Fserver%2Findex%2em3u8"
+        val isEncodedHls = looksLikeHlsMethod.invoke(vm, encodedM3u8, emptyMap<String, String>(), emptyMap<String, String>()) as Boolean
+        assertTrue("URL with %2em3u8 must be classified as HLS", isEncodedHls)
+    }
 }

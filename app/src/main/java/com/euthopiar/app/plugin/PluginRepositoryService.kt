@@ -15,6 +15,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.withContext
@@ -54,10 +55,27 @@ class PluginRepositoryService(
             if (res.isSuccess) {
                 res.getOrThrow().scrapers.size
             } else {
-                0
+                -1
             }
         } catch (e: Exception) {
             android.util.Log.e("PluginRepositoryService", "Failed to install all from repo $repoUrl", e)
+            -1
+        }
+    }
+
+    /**
+     * Checks all configured repositories for plugin updates and automatically installs newer versions.
+     */
+    suspend fun checkAndAutoUpdatePlugins(installNewFromRepos: Boolean = false): Int = withContext(Dispatchers.IO) {
+        try {
+            val userRepoUrls = preferencesRepository.repositoryUrls.first()
+            val updatedCount = storage.checkAndAutoUpdatePlugins(
+                extraRepoUrls = userRepoUrls,
+                installNewFromRepos = installNewFromRepos
+            )
+            updatedCount
+        } catch (e: Exception) {
+            android.util.Log.w("PluginRepositoryService", "Auto-update check failed: ${e.message}")
             0
         }
     }
@@ -69,7 +87,8 @@ class PluginRepositoryService(
         val repoUrls = storage.repositoriesFlow.value.toSet()
         var count = 0
         for (repoUrl in repoUrls) {
-            count += installAllFromRepo(repoUrl)
+            val c = installAllFromRepo(repoUrl)
+            if (c > 0) count += c
         }
         count
     }
@@ -116,8 +135,9 @@ class PluginRepositoryService(
                 dlUrl = baseUrl + manifest.id + ".js"
             }
             if (!dlUrl.isNullOrBlank()) {
-                val res = com.euthopiar.core.js.network.httpRequestRaw("GET", dlUrl, emptyMap(), "", followRedirects = true)
-                if (res.status in 200..299 && res.body.isNotBlank()) {
+                val noCacheHeaders = mapOf("Cache-Control" to "no-cache, no-store, must-revalidate", "Pragma" to "no-cache")
+                val res = com.euthopiar.core.js.network.httpRequestRaw("GET", dlUrl, noCacheHeaders, "", followRedirects = true)
+                if (res.status in 200..299 && res.body.isNotBlank() && com.euthopiar.core.js.isValidJsPluginCode(res.body)) {
                     storage.installScraper(
                         id = manifest.id,
                         name = manifest.name,

@@ -115,6 +115,18 @@ class EuthopiarApp : Application(), SingletonImageLoader.Factory {
                     }
                 }
             } catch (_: Exception) {}
+
+            launch(Dispatchers.IO) {
+                try {
+                    val updated = PluginRepositoryService.getInstance(this@EuthopiarApp)
+                        .checkAndAutoUpdatePlugins(installNewFromRepos = false)
+                    if (updated > 0) {
+                        android.util.Log.i("EuthopiarApp", "Auto-updated $updated provider plugin(s) on launch")
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w("EuthopiarApp", "Startup plugin auto-update error: ${e.message}")
+                }
+            }
         }
     }
 

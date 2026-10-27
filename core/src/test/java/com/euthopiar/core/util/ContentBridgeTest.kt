@@ -32,6 +32,40 @@ class ContentBridgeTest {
     }
 
     @Test
+    fun testTvvooLiveTvUrlGeneration() {
+        val channelId = "vavoo_SKY%201|group:uk"
+        val encoded = channelId.encodeAddonPathSegment()
+        assertEquals("vavoo_SKY%201%7Cgroup:uk", encoded)
+
+        val metaUrl = buildAddonResourceUrl(
+            manifestUrl = "https://tvvoo.com/manifest.json",
+            resource = "meta",
+            type = "tv",
+            id = channelId
+        )
+        assertEquals("https://tvvoo.com/meta/tv/vavoo_SKY%201%7Cgroup:uk.json", metaUrl)
+
+        val streamUrl = buildAddonResourceUrl(
+            manifestUrl = "https://tvvoo.com/manifest.json",
+            resource = "stream",
+            type = "tv",
+            id = channelId
+        )
+        assertEquals("https://tvvoo.com/stream/tv/vavoo_SKY%201%7Cgroup:uk.json", streamUrl)
+    }
+
+    @Test
+    fun testIsCustomStremioAddonId() {
+        assertTrue(com.euthopiar.core.addons.isCustomStremioAddonId("vavoo_SKY%201|group:uk"))
+        assertTrue(com.euthopiar.core.addons.isCustomStremioAddonId("custom_channel:123"))
+        assertFalse(com.euthopiar.core.addons.isCustomStremioAddonId("550"))
+        assertFalse(com.euthopiar.core.addons.isCustomStremioAddonId("tt0944947"))
+        assertFalse(com.euthopiar.core.addons.isCustomStremioAddonId("tmdb:12345"))
+        assertFalse(com.euthopiar.core.addons.isCustomStremioAddonId("kitsu:456"))
+        assertFalse(com.euthopiar.core.addons.isCustomStremioAddonId("   "))
+    }
+
+    @Test
     fun testAddonManifestEffectivePrefixesFallback() {
         // Manifest defines idPrefixes at root, but resource has empty idPrefixes
         val manifest = AddonManifest(
@@ -169,5 +203,53 @@ class ContentBridgeTest {
         assertEquals("tt0944947", TmdbBridge.resolveImdbId(tmdbId = "1399:1:1", isTv = true))
         assertEquals("tt0944947", TmdbBridge.resolveImdbId(tmdbId = "tmdb:1399", isTv = true))
         assertEquals("tt0944947", TmdbBridge.resolveImdbId(tmdbId = "tt0944947:1:1", isTv = true))
+    }
+
+    @Test
+    fun testDetectContainerMimeTypesAndQueryUrls() {
+        val (ext1, c1) = com.euthopiar.core.streams.StreamParser.detectContainer(
+            url = "https://example.com/proxy?url=https%3A%2F%2Ffeed.com%2Fstream.m3u8",
+            filename = null,
+            rawType = null,
+            rawFormat = null
+        )
+        assertEquals(com.euthopiar.core.model.StreamContainer.HLS, c1)
+
+        val (ext2, c2) = com.euthopiar.core.streams.StreamParser.detectContainer(
+            url = "https://example.com/live/channel",
+            filename = null,
+            rawType = "application/vnd.apple.mpegurl",
+            rawFormat = null
+        )
+        assertEquals(com.euthopiar.core.model.StreamContainer.HLS, c2)
+
+        val (ext3, c3) = com.euthopiar.core.streams.StreamParser.detectContainer(
+            url = "https://example.com/manifest.mpd?auth=123",
+            filename = null,
+            rawType = null,
+            rawFormat = null
+        )
+        assertEquals(com.euthopiar.core.model.StreamContainer.DASH, c3)
+    }
+
+    @Test
+    fun testLiveTvResourceMatchingCrossTypes() {
+        val manifest = AddonManifest(
+            id = "tv.tvvoo",
+            name = "TvVoo",
+            idPrefixes = listOf("vavoo"),
+            resources = listOf(
+                AddonResource(
+                    name = "stream",
+                    types = listOf("tv"),
+                    idPrefixes = listOf("vavoo")
+                )
+            )
+        )
+
+        assertTrue(manifest.supportsStream("live", "vavoo_SKY%201|group:uk"))
+        assertTrue(manifest.supportsStream("channel", "vavoo_SKY%201|group:uk"))
+        assertTrue(manifest.supportsStream("live_tv", "vavoo_SKY%201|group:uk"))
+        assertTrue(manifest.supportsStream("tv", "vavoo_SKY%201|group:uk"))
     }
 }

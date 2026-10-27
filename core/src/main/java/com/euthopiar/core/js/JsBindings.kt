@@ -1936,8 +1936,16 @@ object JsBindings {
                                 }
                             }
                             if (isJunk) continue;
+                            if (/busycdn|rtmark|redirect|advert/i.test(sUrl)) continue;
                             if (seen[sUrl]) continue;
                             seen[sUrl] = true;
+
+                            if (!s.serverName) {
+                                s.serverName = s.displayName || s.title || (options && options.name) || 'Direct Stream';
+                            }
+                            if (!s.displayName) {
+                                s.displayName = s.serverName || s.title || 'Direct Stream';
+                            }
 
                             if (!s.headers || typeof s.headers !== 'object') {
                                 s.headers = {};
@@ -2102,6 +2110,8 @@ object JsBindings {
                                     hubStreams.push({
                                         name: options.name ? (options.name + ' [' + label + ']') : label,
                                         title: label,
+                                        serverName: label,
+                                        displayName: label,
                                         url: href,
                                         quality: qual,
                                         headers: { 'Referer': cleanUrl }
@@ -2145,11 +2155,19 @@ object JsBindings {
                                 if (href.startsWith('/')) href = origin + href;
                                 if (!/^https?:\/\//i.test(href)) return;
 
-                                if (/fastcdn|r2\.dev|workers\.dev|pixeldrain|\.(?:mkv|mp4)/i.test(href) || /instant|fast cloud|download|worker/i.test(text)) {
+                                if (/busycdn|rtmark|redirect|advert|ad\.|shortlink|clk/i.test(href)) return;
+
+                                var isDirectMedia = /fastcdn|r2\.dev|workers\.dev|pixeldrain|googleusercontent|cloudflarestorage|\.(?:mkv|mp4|m3u8)/i.test(href);
+                                var isKnownLocker = /gofile|hubcloud|fastcloud|driveeed|filepress/i.test(href);
+                                var isMediaText = /fast cloud|download|worker|pixel/i.test(text);
+
+                                if (isDirectMedia || isKnownLocker || (isMediaText && /\.(?:mkv|mp4|m3u8)/i.test(href))) {
                                     var label = text.trim() || 'Cloud Stream';
                                     gdfStreams.push({
                                         name: options.name ? (options.name + ' [' + label + ']') : label,
                                         title: label,
+                                        serverName: label,
+                                        displayName: label,
                                         url: href,
                                         quality: options.quality || '1080p',
                                         headers: { 'Referer': cleanUrl }

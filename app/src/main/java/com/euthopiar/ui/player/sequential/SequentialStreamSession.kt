@@ -30,7 +30,7 @@ sealed interface BridgeState {
 
 @UnstableApi
 class SequentialStreamSession(
-    private val context: Context,
+    val context: Context,
     val url: String,
     val headers: Map<String, String>,
     val okHttpClient: OkHttpClient,
@@ -81,10 +81,27 @@ class SequentialStreamSession(
         private set
     @Volatile var currentReadOffset: Long = 0L
     @Volatile var pendingTargetTimeUs: Long = -1L
+    @Volatile var pendingTargetByteOffset: Long = -1L
+    @Volatile var acceptsRanges: Boolean = false
+    @Volatile var isEof: Boolean = false
     @Volatile var isClosed: Boolean = false
         private set
     @Volatile var streamError: IOException? = null
         private set
+
+    @Volatile var detectedContainer: com.euthopiar.core.model.StreamContainer = com.euthopiar.core.model.StreamContainer.AUTO
+        private set
+    private val containerCompletable = kotlinx.coroutines.CompletableDeferred<com.euthopiar.core.model.StreamContainer>()
+
+    suspend fun awaitDetectedContainer(timeoutMs: Long = 8000L): com.euthopiar.core.model.StreamContainer {
+        return try {
+            withTimeout(timeoutMs) {
+                containerCompletable.await()
+            }
+        } catch (_: Throwable) {
+            detectedContainer
+        }
+    }
 
     private val _bridgeState = MutableStateFlow<BridgeState>(BridgeState.Idle)
     val bridgeState: StateFlow<BridgeState> = _bridgeState
@@ -100,37 +117,108 @@ class SequentialStreamSession(
         startSinglePipeDownload()
     }
 
+    private fun inspectInitialBytesForContainer(bytes: ByteArray, length: Int) {
+        if (containerCompletable.isCompleted || length < 4) return
+        val detected = when {
+            // EBML ID: 0x1A 0x45 0xDF 0xA3
+            length >= 4 && (bytes[0].toInt() and 0xFF == 0x1A) &&
+                    (bytes[1].toInt() and 0xFF == 0x45) &&
+                    (bytes[2].toInt() and 0xFF == 0xDF) &&
+                    (bytes[3].toInt() and 0xFF == 0xA3) -> {
+                com.euthopiar.core.model.StreamContainer.MKV
+            }
+            // MP4 box type at bytes 4..7: "ftyp", "moov", "mdat", "free", "wide", "skip"
+            length >= 8 && run {
+                val boxType = String(bytes, 4, 4, Charsets.US_ASCII)
+                boxType == "ftyp" || boxType == "moov" || boxType == "mdat" ||
+                        boxType == "free" || boxType == "wide" || boxType == "skip"
+            } -> {
+                com.euthopiar.core.model.StreamContainer.MP4
+            }
+            // HLS playlist "#EXTM3U"
+            length >= 7 && String(bytes, 0, min(length, 16), Charsets.UTF_8).startsWith("#EXTM3U") -> {
+                com.euthopiar.core.model.StreamContainer.HLS
+            }
+            else -> com.euthopiar.core.model.StreamContainer.AUTO
+        }
+        detectedContainer = detected
+        containerCompletable.complete(detected)
+    }
+
     private fun startSinglePipeDownload() {
         scope.launch {
-            val targetUrl = SequentialStreamManager.getPinnedUrl(url) ?: url
-            val requestBuilder = Request.Builder().url(targetUrl)
-            headers.forEach { (k, v) -> requestBuilder.addHeader(k, v) }
-            if (headers.keys.none { it.equals("Range", ignoreCase = true) }) {
-                requestBuilder.header("Range", "bytes=0-")
-            }
+            var retryCount = 0
+            val maxRetries = 3
 
-            try {
-                okHttpClient.newCall(requestBuilder.build()).execute().use { response ->
-                    if (!response.isSuccessful) {
-                        throw IOException("Sequential stream HTTP ${response.code}: ${response.message}")
-                    }
-                    val finalUrl = response.request.url.toString()
-                    resolvedUrl = finalUrl
-                    SequentialStreamManager.pinResolvedUrl(url, finalUrl)
-                    totalContentLength = response.body?.contentLength() ?: -1L
-                    val inputStream = response.body?.byteStream()
-                        ?: throw IOException("Empty response body from sequential stream")
+            while (isActive && !isClosed) {
+                val targetUrl = SequentialStreamManager.getPinnedUrl(url) ?: url
+                val requestBuilder = Request.Builder().url(targetUrl)
+                headers.forEach { (k, v) -> requestBuilder.addHeader(k, v) }
+                if (headers.keys.none { it.equals("User-Agent", ignoreCase = true) }) {
+                    requestBuilder.header("User-Agent", com.euthopiar.core.network.AppUserAgent.get(context))
+                }
 
-                    val netBuffer = ByteArray(256 * 1024) // 256 KB network buffer
-                    var activeChunkIndex = -1L
-                    var activeRaf: RandomAccessFile? = null
+                val currentHwm = highWaterMark
+                if (currentHwm > 0L) {
+                    requestBuilder.header("Range", "bytes=$currentHwm-")
+                } else if (headers.keys.none { it.equals("Range", ignoreCase = true) }) {
+                    requestBuilder.header("Range", "bytes=0-")
+                }
 
-                    try {
+                var activeChunkIndex = -1L
+                var activeRaf: RandomAccessFile? = null
+
+                try {
+                    okHttpClient.newCall(requestBuilder.build()).execute().use { response ->
+                        val code = response.code
+                        if (currentHwm > 0L) {
+                            if (code != 206) {
+                                throw IOException("Sequential stream resume failed: expected 206 Partial Content, got $code")
+                            }
+                        } else {
+                            if (!response.isSuccessful && code != 206) {
+                                throw IOException("Sequential stream HTTP $code: ${response.message}")
+                            }
+                        }
+
+                        val finalUrl = response.request.url.toString()
+                        resolvedUrl = finalUrl
+                        SequentialStreamManager.pinResolvedUrl(url, finalUrl)
+
+                        val acceptRangesHeader = response.header("Accept-Ranges")
+                        acceptsRanges = (code == 206 || acceptRangesHeader?.equals("bytes", ignoreCase = true) == true)
+
+                        if (currentHwm == 0L) {
+                            var cl = response.body?.contentLength() ?: -1L
+                            if (cl <= 0L) {
+                                val crHeader = response.header("Content-Range")
+                                if (crHeader != null) {
+                                    val totalStr = crHeader.substringAfterLast('/', "")
+                                    totalStr.toLongOrNull()?.let { cl = it }
+                                }
+                            }
+                            totalContentLength = cl
+                        } else {
+                            val crHeader = response.header("Content-Range")
+                            if (crHeader != null && totalContentLength <= 0L) {
+                                val totalStr = crHeader.substringAfterLast('/', "")
+                                totalStr.toLongOrNull()?.let { totalContentLength = it }
+                            }
+                        }
+
+                        val inputStream = response.body?.byteStream()
+                            ?: throw IOException("Empty response body from sequential stream")
+
+                        val netBuffer = ByteArray(256 * 1024) // 256 KB network buffer
+                        retryCount = 0 // Reset retries on successful connection
+                        var firstChunkProcessed = (currentHwm > 0L)
+
                         while (isActive && !isClosed) {
                             // Backpressure control: pause high-speed pulling if buffered far ahead
                             lock.withLock {
                                 while (!isClosed &&
                                     pendingTargetTimeUs == -1L &&
+                                    pendingTargetByteOffset == -1L &&
                                     highWaterMark - currentReadOffset > maxReadAheadBytes
                                 ) {
                                     spaceAvailable.await()
@@ -138,7 +226,21 @@ class SequentialStreamSession(
                             }
 
                             val read = inputStream.read(netBuffer)
-                            if (read == -1) break
+                            if (read == -1) {
+                                lock.withLock {
+                                    isEof = true
+                                    dataArrived.signalAll()
+                                }
+                                if (!containerCompletable.isCompleted) {
+                                    containerCompletable.complete(detectedContainer)
+                                }
+                                return@launch
+                            }
+
+                            if (!firstChunkProcessed) {
+                                inspectInitialBytesForContainer(netBuffer, read)
+                                firstChunkProcessed = true
+                            }
 
                             // 1. Scan for Matroska Clusters in-flight
                             scanner.onBytesReceived(netBuffer, 0, read, highWaterMark)
@@ -173,16 +275,36 @@ class SequentialStreamSession(
                                 dataArrived.signalAll()
                             }
                         }
-                    } finally {
-                        try { activeRaf?.close() } catch (_: Throwable) {}
                     }
-                }
-            } catch (e: IOException) {
-                lock.withLock {
-                    if (!isClosed) {
-                        streamError = e
-                        dataArrived.signalAll()
+                } catch (e: IOException) {
+                    try { activeRaf?.close() } catch (_: Throwable) {}
+                    if (isClosed) return@launch
+
+                    val isTransient = e is java.net.SocketTimeoutException ||
+                            e is java.net.SocketException ||
+                            e.message?.contains("unexpected end of stream", ignoreCase = true) == true ||
+                            e.message?.contains("stream was reset", ignoreCase = true) == true ||
+                            e.message?.contains("connection reset", ignoreCase = true) == true
+
+                    if (highWaterMark > 0L && retryCount < maxRetries && isTransient) {
+                        retryCount++
+                        android.util.Log.w(TAG, "Transient error on sequential stream at hwm=$highWaterMark, retry $retryCount/$maxRetries: ${e.message}")
+                        delay(500L * retryCount)
+                        continue
                     }
+
+                    if (!containerCompletable.isCompleted) {
+                        containerCompletable.complete(detectedContainer)
+                    }
+                    lock.withLock {
+                        if (!isClosed) {
+                            streamError = e
+                            dataArrived.signalAll()
+                        }
+                    }
+                    return@launch
+                } finally {
+                    try { activeRaf?.close() } catch (_: Throwable) {}
                 }
             }
         }
@@ -196,39 +318,59 @@ class SequentialStreamSession(
     fun awaitOffsetOrCluster(requestedOffset: Long): Long {
         lock.withLock {
             val targetTime = pendingTargetTimeUs
-            pendingTargetTimeUs = -1L
+            pendingTargetByteOffset = requestedOffset
             spaceAvailable.signalAll()
 
-            while (!isClosed) {
-                streamError?.let { throw it }
+            try {
+                while (!isClosed) {
+                    streamError?.let { throw it }
 
-                // Check indexed clusters if seeking by time
-                if (targetTime > 0 && clusterIndex.getMaxIndexedTimeUs() >= targetTime) {
-                    _bridgeState.value = BridgeState.Idle
-                    val floor = clusterIndex.findFloorCluster(targetTime)
-                    if (floor != null) return floor.position
+                    // Ensure response headers and initial data have arrived before returning 0L
+                    if (highWaterMark == 0L && !isEof) {
+                        dataArrived.await()
+                        continue
+                    }
+
+                    // Check indexed clusters if seeking by time
+                    if (targetTime > 0 && clusterIndex.getMaxIndexedTimeUs() >= targetTime) {
+                        _bridgeState.value = BridgeState.Idle
+                        val floor = clusterIndex.findFloorCluster(targetTime)
+                        if (floor != null) {
+                            val resolved = floor.position
+                            currentReadOffset = resolved
+                            return resolved
+                        }
+                    }
+
+                    // Check byte offset if target offset is within downloaded stream
+                    if (targetTime <= 0 && highWaterMark >= requestedOffset && (highWaterMark > 0L || isEof)) {
+                        _bridgeState.value = BridgeState.Idle
+                        currentReadOffset = requestedOffset
+                        return requestedOffset
+                    }
+
+                    // Check EOF
+                    if (isEof || (totalContentLength in 1..requestedOffset)) {
+                        _bridgeState.value = BridgeState.Idle
+                        val resolved = if (totalContentLength in 1..requestedOffset) requestedOffset else highWaterMark
+                        currentReadOffset = resolved
+                        return resolved
+                    }
+
+                    _bridgeState.value = BridgeState.FastForwarding(
+                        currentOffset = highWaterMark,
+                        targetOffset = requestedOffset.coerceAtLeast(highWaterMark),
+                        speedBytesPerSec = 0L
+                    )
+
+                    dataArrived.await()
                 }
-
-                // Check byte offset if target offset is within downloaded stream
-                if (targetTime <= 0 && highWaterMark >= requestedOffset) {
-                    _bridgeState.value = BridgeState.Idle
-                    return requestedOffset
-                }
-
-                // Check EOF
-                if (totalContentLength in 1..requestedOffset) {
-                    return requestedOffset
-                }
-
-                _bridgeState.value = BridgeState.FastForwarding(
-                    currentOffset = highWaterMark,
-                    targetOffset = requestedOffset.coerceAtLeast(highWaterMark),
-                    speedBytesPerSec = 0L
-                )
-
-                dataArrived.await()
+                throw IOException("Sequential stream session closed")
+            } finally {
+                pendingTargetTimeUs = -1L
+                pendingTargetByteOffset = -1L
+                spaceAvailable.signalAll()
             }
-            throw IOException("Sequential stream session closed")
         }
     }
 
@@ -247,7 +389,7 @@ class SequentialStreamSession(
 
             while (highWaterMark <= position && !isClosed) {
                 streamError?.let { throw it }
-                if (totalContentLength in 1..position) return -1 // EOF
+                if (isEof || (totalContentLength in 1..position)) return -1
                 dataArrived.await()
             }
             if (isClosed) throw IOException("Sequential stream session closed")
@@ -282,6 +424,7 @@ class SequentialStreamSession(
     fun isOffsetAvailable(offset: Long): Boolean {
         if (offset < 0L) return false
         if (offset == 0L) return true
+        if (acceptsRanges && (totalContentLength <= 0L || offset <= totalContentLength)) return true
         val minValidOffset = if (offset < CHUNK_SIZE) 0L else evictionFloorOffset
         return offset in minValidOffset..(highWaterMark + maxForwardBridgeBytes)
     }
@@ -300,7 +443,12 @@ class SequentialStreamSession(
 
     private fun evictOldChunksIfNeededLocked() {
         // Never evict Chunk 0 (EBML header, tracks, codec config)
-        val safeEvictBeforeOffset = currentReadOffset - maxRewindWindowBytes
+        val anchorOffset = if (pendingTargetByteOffset > 0L || pendingTargetTimeUs > 0L) {
+            highWaterMark
+        } else {
+            currentReadOffset
+        }
+        val safeEvictBeforeOffset = anchorOffset - maxRewindWindowBytes
         val maxChunkIdxToEvict = (safeEvictBeforeOffset / CHUNK_SIZE) - 1
         if (maxChunkIdxToEvict <= 0) return
 
@@ -325,6 +473,9 @@ class SequentialStreamSession(
             isClosed = true
             dataArrived.signalAll()
             spaceAvailable.signalAll()
+        }
+        if (!containerCompletable.isCompleted) {
+            containerCompletable.complete(detectedContainer)
         }
         scope.cancel()
         synchronized(readLock) {

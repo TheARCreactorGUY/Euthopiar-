@@ -1,5 +1,6 @@
 package com.euthopiar.core.streams
 
+import com.euthopiar.core.addons.isCustomStremioAddonId
 import com.euthopiar.core.js.JsPluginStorage
 import com.euthopiar.core.js.PluginRuntime
 import com.euthopiar.core.js.normalizePluginType
@@ -67,13 +68,16 @@ object StreamsRepository {
         activeJob?.cancel()
 
         val normType = normalizePluginType(type)
-        val cleanTmdbId = pluginContentId(videoId, season, episode)
+        val isCustomId = isCustomStremioAddonId(videoId)
+        val isLiveTv = normType == "live" || normType == "channel" || normType == "live_tv" || (normType == "tv" && isCustomId)
+        val cleanTmdbId = if (isLiveTv) videoId.trim() else pluginContentId(videoId, season, episode)
         val effectiveOriginalLanguage = originalLanguage ?: if (normType == "anime") "ja" else null
 
         val storage = JsPluginStorage.getInstanceOrNull()
-        val scrapers = storage?.getEnabledScrapersForType(normType) ?: emptyList()
+        val scrapers = if (isLiveTv) emptyList() else (storage?.getEnabledScrapersForType(normType) ?: emptyList())
         val addonRepo = com.euthopiar.core.addons.AddonRepository.getInstanceOrNull()
-        val addons = addonRepo?.getEnabledAddonsForType(normType, cleanTmdbId) ?: emptyList()
+        val targetAddonType = if (isLiveTv) "live" else normType
+        val addons = addonRepo?.getEnabledAddonsForType(targetAddonType, cleanTmdbId) ?: emptyList()
 
         if (scrapers.isEmpty() && addons.isEmpty()) {
             _uiState.value = StreamsUiState(
@@ -114,71 +118,84 @@ object StreamsRepository {
             val totalTasks = scrapers.size + addons.size
             val completions = Channel<StreamLoadCompletion>(capacity = Channel.BUFFERED)
 
-            val baseId = cleanTmdbId.substringBefore(':')
-            val isTv = normType == "series" || normType == "tv"
+            val baseId = if (isLiveTv || isCustomId) cleanTmdbId else cleanTmdbId.substringBefore(':')
+            val isTv = !isLiveTv && (normType == "series" || normType == "tv")
 
-            var resolvedTmdbId = if (baseId.startsWith("tt")) {
-                com.euthopiar.core.util.TmdbBridge.findTmdbIdByImdb(
-                    client = com.euthopiar.core.network.DohDns.metadataClient,
-                    imdbId = baseId,
-                    isTv = isTv
-                ) ?: baseId
+            val canonicalTmdbId: String
+            val effectiveImdbId: String?
+            val effectiveTitle: String?
+            val effectiveYear: Int?
+            var cachedEnriched: com.euthopiar.core.util.TmdbBridge.EnrichedMetadata? = null
+
+            if (isLiveTv || isCustomId) {
+                canonicalTmdbId = cleanTmdbId
+                effectiveImdbId = null
+                effectiveTitle = title
+                effectiveYear = year
             } else {
-                baseId
-            }
-
-            if (resolvedTmdbId.startsWith("mal:", ignoreCase = true) ||
-                resolvedTmdbId.startsWith("jikan:", ignoreCase = true) ||
-                (!resolvedTmdbId.all { it.isDigit() } && !resolvedTmdbId.startsWith("tt"))
-            ) {
-                if (!title.isNullOrBlank()) {
-                    val searched = com.euthopiar.core.util.TmdbBridge.searchTmdbId(
+                var resolvedTmdbId = if (baseId.startsWith("tt")) {
+                    com.euthopiar.core.util.TmdbBridge.findTmdbIdByImdb(
                         client = com.euthopiar.core.network.DohDns.metadataClient,
-                        title = title,
-                        year = year,
+                        imdbId = baseId,
                         isTv = isTv
-                    )
-                    if (searched != null) {
-                        resolvedTmdbId = searched
+                    ) ?: baseId
+                } else {
+                    baseId
+                }
+
+                if (resolvedTmdbId.startsWith("mal:", ignoreCase = true) ||
+                    resolvedTmdbId.startsWith("jikan:", ignoreCase = true) ||
+                    (!resolvedTmdbId.all { it.isDigit() } && !resolvedTmdbId.startsWith("tt"))
+                ) {
+                    if (!title.isNullOrBlank()) {
+                        val searched = com.euthopiar.core.util.TmdbBridge.searchTmdbId(
+                            client = com.euthopiar.core.network.DohDns.metadataClient,
+                            title = title,
+                            year = year,
+                            isTv = isTv
+                        )
+                        if (searched != null) {
+                            resolvedTmdbId = searched
+                        }
                     }
                 }
-            }
 
-            val canonicalTmdbId = resolvedTmdbId
+                canonicalTmdbId = resolvedTmdbId
 
-            val canonicalImdbId = when {
-                !imdbId.isNullOrBlank() && imdbId.startsWith("tt") -> imdbId
-                baseId.startsWith("tt") -> baseId
-                canonicalTmdbId.all { it.isDigit() } -> com.euthopiar.core.util.TmdbBridge.resolveImdbId(
-                    tmdbId = canonicalTmdbId,
-                    isTv = isTv
-                )
-                else -> null
-            }
-
-            var cachedEnriched = com.euthopiar.core.util.TmdbBridge.getCachedEnrichedDetails(canonicalTmdbId, isTv = isTv)
-            if (cachedEnriched == null && (canonicalTmdbId.all { it.isDigit() } || canonicalTmdbId.startsWith("tt"))) {
-                cachedEnriched = com.euthopiar.core.util.TmdbBridge.fetchEnrichedDetails(
-                    client = com.euthopiar.core.network.DohDns.metadataClient,
-                    tmdbId = canonicalTmdbId,
-                    isTv = isTv,
-                    providerName = "tmdb"
-                )
-            }
-
-            val effectiveImdbId = canonicalImdbId?.takeIf { it.startsWith("tt") }
-                ?: cachedEnriched?.imdbId?.takeIf { it.startsWith("tt") }
-                ?: if (canonicalTmdbId.all { it.isDigit() }) {
-                    com.euthopiar.core.util.TmdbBridge.resolveImdbId(
+                val canonicalImdbId = when {
+                    !imdbId.isNullOrBlank() && imdbId.startsWith("tt") -> imdbId
+                    baseId.startsWith("tt") -> baseId
+                    canonicalTmdbId.all { it.isDigit() } -> com.euthopiar.core.util.TmdbBridge.resolveImdbId(
                         tmdbId = canonicalTmdbId,
                         isTv = isTv
                     )
-                } else null
-            val effectiveTitle = title ?: cachedEnriched?.title
-            val effectiveYear = year ?: cachedEnriched?.year
+                    else -> null
+                }
 
-            val isAnime = normType == "anime" || effectiveOriginalLanguage.equals("ja", ignoreCase = true)
-            val absoluteEpisode = if (season != null && episode != null) {
+                cachedEnriched = com.euthopiar.core.util.TmdbBridge.getCachedEnrichedDetails(canonicalTmdbId, isTv = isTv)
+                if (cachedEnriched == null && (canonicalTmdbId.all { it.isDigit() } || canonicalTmdbId.startsWith("tt"))) {
+                    cachedEnriched = com.euthopiar.core.util.TmdbBridge.fetchEnrichedDetails(
+                        client = com.euthopiar.core.network.DohDns.metadataClient,
+                        tmdbId = canonicalTmdbId,
+                        isTv = isTv,
+                        providerName = "tmdb"
+                    )
+                }
+
+                effectiveImdbId = canonicalImdbId?.takeIf { it.startsWith("tt") }
+                    ?: cachedEnriched?.imdbId?.takeIf { it.startsWith("tt") }
+                    ?: if (canonicalTmdbId.all { it.isDigit() }) {
+                        com.euthopiar.core.util.TmdbBridge.resolveImdbId(
+                            tmdbId = canonicalTmdbId,
+                            isTv = isTv
+                        )
+                    } else null
+                effectiveTitle = title ?: cachedEnriched?.title
+                effectiveYear = year ?: cachedEnriched?.year
+            }
+
+            val isAnime = !isLiveTv && (normType == "anime" || effectiveOriginalLanguage.equals("ja", ignoreCase = true))
+            val absoluteEpisode = if (!isLiveTv && season != null && episode != null) {
                 val shouldCalculate = isAnime || (cachedEnriched?.isAnime == true)
                 if (shouldCalculate) {
                     com.euthopiar.core.util.TmdbBridge.resolveAnimeAbsoluteEpisode(
@@ -192,7 +209,7 @@ object StreamsRepository {
             } else null
 
             val effectiveAddonId = effectiveImdbId ?: canonicalTmdbId
-            val addonStreamId = if (season != null && episode != null) "$effectiveAddonId:$season:$episode" else effectiveAddonId
+            val addonStreamId = if (!isLiveTv && season != null && episode != null && season > 0) "$effectiveAddonId:$season:$episode" else effectiveAddonId
 
             val streamHints = cachedEnriched?.toMatchHints(
                 isTv = isTv,
@@ -280,41 +297,65 @@ object StreamsRepository {
             }
 
             // Concurrently query each enabled Stremio addon
-            val stremioAddonStreamId = if (!effectiveImdbId.isNullOrBlank() && effectiveImdbId.startsWith("tt")) {
-                if (season != null && episode != null) "$effectiveImdbId:$season:$episode" else effectiveImdbId
-            } else if (effectiveImdbId == null && (
-                videoId.startsWith("kitsu:", ignoreCase = true) ||
-                videoId.startsWith("ustv:", ignoreCase = true) ||
-                videoId.startsWith("yt_id:", ignoreCase = true) ||
-                videoId.contains(":") ||
-                !videoId.all { it.isDigit() }
-            )) {
-                videoId
-            } else {
-                addonStreamId
-            }
-
             addons.forEach { addon ->
                 val addonId = addon.streamAddonInstanceId(addon.manifest?.id ?: addon.displayTitle)
                 val streamResource = addon.manifest?.resources?.firstOrNull { it.name.equals("stream", ignoreCase = true) }
-                val streamTypes = streamResource?.types ?: addon.manifest?.types.orEmpty()
-                val exclusivelyAnime = streamTypes.isNotEmpty() && streamTypes.all { it.equals("anime", ignoreCase = true) }
-
-                val targetType = if (stremioAddonStreamId.startsWith("tt", ignoreCase = true)) {
-                    if (exclusivelyAnime) {
-                        "anime"
-                    } else {
-                        if (season != null && episode != null) "series" else "movie"
-                    }
-                } else if (effectiveImdbId == null) {
-                    val supportedMatchingType = streamTypes.firstOrNull { st ->
-                        st.equals(normType, ignoreCase = true) ||
-                        (normType == "tv" && st.equals("series", ignoreCase = true)) ||
-                        (normType == "anime" && (st.equals("anime", ignoreCase = true) || st.equals("series", ignoreCase = true)))
-                    }
-                    supportedMatchingType ?: if (normType == "tv") "series" else normType
+                val streamTypes = streamResource?.types?.takeIf { it.isNotEmpty() } ?: addon.manifest?.types.orEmpty()
+                val declaredTypes = streamTypes.map { it.lowercase() }
+                val effectivePrefixes = if (!streamResource?.idPrefixes.isNullOrEmpty()) {
+                    streamResource!!.idPrefixes
                 } else {
-                    if (normType == "tv") "series" else normType
+                    addon.manifest?.idPrefixes.orEmpty()
+                }
+                val addonSupportsTt = effectivePrefixes.isEmpty() || effectivePrefixes.any { it.startsWith("tt", ignoreCase = true) }
+                val matchesPrefixes = effectivePrefixes.any { prefix ->
+                    cleanTmdbId.startsWith(prefix, ignoreCase = true) ||
+                    (prefix.endsWith(":") && cleanTmdbId.startsWith(prefix.removeSuffix(":"), ignoreCase = true))
+                }
+                val isSeries = !isLiveTv && (normType == "tv" || normType == "series" || (season != null && episode != null && season > 0))
+
+                val perAddonStreamId = when {
+                    isLiveTv -> cleanTmdbId
+                    matchesPrefixes || (isCustomId && !addonSupportsTt) -> {
+                        if (isSeries && season != null && episode != null && season > 0 && !cleanTmdbId.endsWith(":$season:$episode")) {
+                            "$cleanTmdbId:$season:$episode"
+                        } else {
+                            cleanTmdbId
+                        }
+                    }
+                    !effectiveImdbId.isNullOrBlank() && effectiveImdbId.startsWith("tt") && addonSupportsTt -> {
+                        if (isSeries && season != null && episode != null && season > 0 && !effectiveImdbId.endsWith(":$season:$episode")) {
+                            "$effectiveImdbId:$season:$episode"
+                        } else {
+                            effectiveImdbId
+                        }
+                    }
+                    isCustomId -> {
+                        if (isSeries && season != null && episode != null && season > 0 && !cleanTmdbId.endsWith(":$season:$episode")) {
+                            "$cleanTmdbId:$season:$episode"
+                        } else {
+                            cleanTmdbId
+                        }
+                    }
+                    else -> addonStreamId
+                }
+
+                val targetType = when {
+                    isLiveTv -> {
+                        listOf("tv", "channel", "live", "live_tv").firstOrNull { it in declaredTypes } ?: "tv"
+                    }
+                    normType == "anime" && ("anime" in declaredTypes) -> {
+                        "anime"
+                    }
+                    isSeries -> {
+                        if ("series" in declaredTypes) "series" else if ("tv" in declaredTypes) "tv" else "series"
+                    }
+                    normType == "movie" -> {
+                        if ("movie" in declaredTypes) "movie" else if ("movies" in declaredTypes) "movies" else "movie"
+                    }
+                    else -> {
+                        listOf(normType, "movie").firstOrNull { it in declaredTypes } ?: normType
+                    }
                 }
 
                 launch(Dispatchers.IO) {
@@ -323,7 +364,7 @@ object StreamsRepository {
                             manifestUrl = addon.manifestUrl,
                             resource = "stream",
                             type = targetType,
-                            id = stremioAddonStreamId,
+                            id = perAddonStreamId,
                             extraPathSegment = null
                         )
                         val response = com.euthopiar.core.js.network.httpRequestRaw("GET", url, emptyMap(), "", followRedirects = true)
@@ -336,7 +377,23 @@ object StreamsRepository {
                                 originalLanguage = effectiveOriginalLanguage
                             )
                         } else emptyList()
-                        val verifiedStreams = com.euthopiar.core.matcher.MatchScorer.filterAndRankStreams(streamHints, streamItems)
+
+                        val shouldBypassMatchScorer = isLiveTv ||
+                            isCustomId ||
+                            !perAddonStreamId.startsWith("tt", ignoreCase = true) ||
+                            streamItems.any { it.isLive }
+
+                        val verifiedStreams = if (shouldBypassMatchScorer) {
+                            streamItems.map { item ->
+                                if (item.matchScore <= 0.0) {
+                                    item.copy(matchScore = 1.0, isLive = item.isLive || isLiveTv)
+                                } else {
+                                    item.copy(isLive = item.isLive || isLiveTv)
+                                }
+                            }
+                        } else {
+                            com.euthopiar.core.matcher.MatchScorer.filterAndRankStreams(streamHints, streamItems)
+                        }
 
                         completions.trySend(
                             StreamLoadCompletion.PluginScraper(
@@ -368,7 +425,11 @@ object StreamsRepository {
                             if (group.addonId != completion.addonId) {
                                 group
                             } else {
-                                val mergedStreams = (group.streams + completion.streams).sortedForGroupedDisplay()
+                                val mergedStreams = if (isLiveTv || isCustomId) {
+                                    (group.streams + completion.streams)
+                                } else {
+                                    (group.streams + completion.streams).sortedForGroupedDisplay()
+                                }
                                 group.copy(
                                     streams = mergedStreams,
                                     isLoading = false,

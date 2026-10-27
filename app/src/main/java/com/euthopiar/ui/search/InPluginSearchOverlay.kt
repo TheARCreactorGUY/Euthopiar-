@@ -286,6 +286,7 @@ fun InPluginSearchOverlay(
                                     com.euthopiar.core.model.MediaType.MOVIE -> "Movie"
                                     com.euthopiar.core.model.MediaType.TV_SERIES -> "Series"
                                     com.euthopiar.core.model.MediaType.ANIME -> "Anime"
+                                    com.euthopiar.core.model.MediaType.LIVE_TV -> "Live TV"
                                 },
                                 onClick = { onMediaClick(item) },
                                 width = Dp.Unspecified

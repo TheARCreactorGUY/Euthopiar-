@@ -197,13 +197,56 @@ open class ProviderRepository(
         }
     }
 
+    private fun resolveMetaTypeForAddon(manifest: AddonManifest, mediaType: MediaType, rawTypeFromUrl: String?): String? {
+        val metaRes = manifest.resources.firstOrNull { it.name.equals("meta", ignoreCase = true) }
+        val declaredTypes = (metaRes?.types?.ifEmpty { manifest.types } ?: manifest.types).map { it.lowercase() }
+
+        if (rawTypeFromUrl != null && (declaredTypes.isEmpty() || declaredTypes.contains(rawTypeFromUrl.lowercase()))) {
+            return rawTypeFromUrl.lowercase()
+        }
+
+        return when (mediaType) {
+            MediaType.LIVE_TV -> {
+                if (declaredTypes.isEmpty()) "tv"
+                else listOf("tv", "channel", "live").firstOrNull { it in declaredTypes } ?: "tv"
+            }
+            MediaType.TV_SERIES -> {
+                if (declaredTypes.isEmpty()) "series"
+                else listOf("series", "tv").firstOrNull { it in declaredTypes } ?: "series"
+            }
+            MediaType.MOVIE -> {
+                if (declaredTypes.isEmpty()) "movie"
+                else listOf("movie", "movies").firstOrNull { it in declaredTypes } ?: "movie"
+            }
+            MediaType.ANIME -> {
+                if (declaredTypes.isEmpty()) "anime"
+                else listOf("anime", "series", "tv", "movie").firstOrNull { it in declaredTypes } ?: "anime"
+            }
+        }
+    }
+
+    private fun isCustomStremioAddonId(id: String): Boolean {
+        val clean = id.trim()
+        if (clean.isBlank()) return false
+        if (clean.all { it.isDigit() }) return false
+        if (clean.startsWith("tt", ignoreCase = true)) return false
+        val knownPrefixes = listOf("tmdb:", "imdb:", "mal:", "jikan:", "kitsu:", "anilist:", "tmdb/")
+        if (knownPrefixes.any { clean.startsWith(it, ignoreCase = true) }) return false
+        return true
+    }
+
     /**
      * Loads media details for [mediaItem].
      *
      * @param mediaItem The media item to inspect.
      * @param providerName Optional provider name override; falls back to [MediaItem.provider], then active provider.
      */
-    suspend fun getDetails(mediaItem: MediaItem, providerName: String? = null): MediaDetail = withContext(Dispatchers.IO) {
+    suspend fun getDetails(
+        mediaItem: MediaItem,
+        providerName: String? = null,
+        fallbackTitle: String? = null,
+        fallbackPosterUrl: String? = null
+    ): MediaDetail = withContext(Dispatchers.IO) {
         val targetName = providerName ?: mediaItem.provider
         val cleanId = mediaItem.id.removePrefix("tmdb:").removePrefix("tmdb/").trim()
         val baseId = cleanId.substringBefore(':').trim()
@@ -211,12 +254,6 @@ open class ProviderRepository(
         val rawTypeFromUrl = if (mediaItem.url.startsWith("stremio_type:")) {
             mediaItem.url.removePrefix("stremio_type:").trim()
         } else null
-
-        val stremioType = rawTypeFromUrl ?: when (mediaItem.type) {
-            MediaType.TV_SERIES -> "series"
-            MediaType.ANIME -> "anime"
-            MediaType.MOVIE -> "movie"
-        }
 
         val addonRepo = com.euthopiar.core.addons.AddonRepository.getInstanceOrNull()
         val allAddons = addonRepo?.uiState?.value?.addons.orEmpty()
@@ -228,9 +265,13 @@ open class ProviderRepository(
             it.manifest?.id.equals(targetName, ignoreCase = true)
         }
 
-        val metaSupportingAddons = enabledAddons.filter { addon ->
-            addon.manifest?.supportsResource("meta", stremioType, mediaItem.id) == true
-        }.sortedByDescending { addon ->
+        val metaSupportingAddons = enabledAddons.mapNotNull { addon ->
+            val manifest = addon.manifest ?: return@mapNotNull null
+            val resolvedType = resolveMetaTypeForAddon(manifest, mediaItem.type, rawTypeFromUrl) ?: return@mapNotNull null
+            if (manifest.supportsResource("meta", resolvedType, mediaItem.id)) {
+                addon to resolvedType
+            } else null
+        }.sortedByDescending { (addon, _) ->
             if (targetName != null && (
                 addon.displayTitle.equals(targetName, ignoreCase = true) ||
                 addon.manifest?.name.equals(targetName, ignoreCase = true) ||
@@ -248,11 +289,11 @@ open class ProviderRepository(
 
         // Step 1: Direct Addon meta First
         if (metaSupportingAddons.isNotEmpty()) {
-            for (addon in metaSupportingAddons) {
+            for ((addon, metaType) in metaSupportingAddons) {
                 val metaUrl = com.euthopiar.core.addons.buildAddonResourceUrl(
                     manifestUrl = addon.manifestUrl,
                     resource = "meta",
-                    type = stremioType,
+                    type = metaType,
                     id = mediaItem.id
                 )
                 val response = runCatching {
@@ -260,15 +301,17 @@ open class ProviderRepository(
                 }.getOrNull()
 
                 if (response != null && response.status in 200..299 && response.body.isNotBlank()) {
-                    val parsed = com.euthopiar.core.addons.AddonMetaParser.parseMeta(
-                        payload = response.body,
-                        addonName = addon.displayTitle
-                    )
+                    val parsed = runCatching {
+                        com.euthopiar.core.addons.AddonMetaParser.parseMeta(
+                            payload = response.body,
+                            addonName = addon.displayTitle
+                        )
+                    }.getOrNull()
                     if (parsed != null) {
                         val effectiveImdb = parsed.imdbId?.takeIf { it.startsWith("tt") }
                             ?: baseId.takeIf { it.startsWith("tt") }
 
-                        if (!effectiveImdb.isNullOrBlank()) {
+                        if (!effectiveImdb.isNullOrBlank() && mediaItem.type != MediaType.LIVE_TV) {
                             val isTv = parsed.type == MediaType.TV_SERIES || parsed.type == MediaType.ANIME
                             runCatching {
                                 val tmdbId = TmdbBridge.findTmdbIdByImdb(DohDns.metadataClient, effectiveImdb, isTv) ?: effectiveImdb
@@ -289,6 +332,44 @@ open class ProviderRepository(
                     }
                 }
             }
+        }
+
+        val isCustomId = isCustomStremioAddonId(mediaItem.id)
+        val isLiveOrCustom = mediaItem.type == MediaType.LIVE_TV || isCustomId
+
+        if (isLiveOrCustom) {
+            val effTitle = mediaItem.title.takeIf { it.isNotBlank() && !it.equals("Media Details", ignoreCase = true) }
+                ?: fallbackTitle?.takeIf { it.isNotBlank() && !it.equals("Media Details", ignoreCase = true) }
+                ?: mediaItem.id
+            val effPoster = mediaItem.posterUrl ?: fallbackPosterUrl
+            val nonTmdbTarget = targetName?.takeUnless { it.equals("tmdb", ignoreCase = true) }
+            val nonTmdbItemProvider = mediaItem.provider?.takeUnless { it.equals("tmdb", ignoreCase = true) }
+            val matchedAddon = allAddons.firstOrNull { addon ->
+                addon.manifest?.supportsResource("stream", if (mediaItem.type == MediaType.LIVE_TV) "tv" else "movie", mediaItem.id) == true ||
+                addon.manifest?.supportsResource("meta", if (mediaItem.type == MediaType.LIVE_TV) "tv" else "movie", mediaItem.id) == true
+            }
+            val effProvider = nonTmdbTarget ?: nonTmdbItemProvider ?: matchedAddon?.displayTitle ?: "Stremio"
+            return@withContext MediaDetail(
+                id = mediaItem.id,
+                title = effTitle,
+                url = mediaItem.url.ifBlank { "stremio_type:${if (mediaItem.type == MediaType.LIVE_TV) "tv" else "movie"}" },
+                posterUrl = effPoster,
+                backdropUrl = effPoster,
+                type = mediaItem.type,
+                year = mediaItem.year,
+                synopsis = "Live channel / custom stream details.",
+                provider = effProvider,
+                episodes = listOf(
+                    EpisodeItem(
+                        id = mediaItem.id,
+                        title = effTitle,
+                        seasonNumber = 0,
+                        episodeNumber = 1,
+                        data = mediaItem.id,
+                        thumbnail = effPoster
+                    )
+                )
+            )
         }
 
         // Step 2: Fallback for Catalog-Only Addons (like CyberFlix) & TMDB Targets
@@ -325,10 +406,12 @@ open class ProviderRepository(
                     com.euthopiar.core.js.network.httpRequestRaw("GET", cinemetaUrl, emptyMap(), "", followRedirects = true)
                 }.getOrNull()
                 if (cinemetaResp != null && cinemetaResp.status in 200..299 && cinemetaResp.body.isNotBlank()) {
-                    val cinemetaDetail = com.euthopiar.core.addons.AddonMetaParser.parseMeta(
-                        payload = cinemetaResp.body,
-                        addonName = "Cinemeta"
-                    )
+                    val cinemetaDetail = runCatching {
+                        com.euthopiar.core.addons.AddonMetaParser.parseMeta(
+                            payload = cinemetaResp.body,
+                            addonName = "Cinemeta"
+                        )
+                    }.getOrNull()
                     if (cinemetaDetail != null) {
                         return@withContext cinemetaDetail
                     }
@@ -568,17 +651,19 @@ open class ProviderRepository(
     suspend fun getDetails(
         mediaId: String,
         type: MediaType = MediaType.MOVIE,
-        providerName: String? = null
+        providerName: String? = null,
+        fallbackTitle: String? = null,
+        fallbackPosterUrl: String? = null
     ): MediaDetail {
         val dummy = MediaItem(
             id = mediaId,
-            title = "",
-            url = "",
-            posterUrl = null,
+            title = fallbackTitle.orEmpty(),
+            url = "stremio_type:${if (type == MediaType.LIVE_TV) "tv" else if (type == MediaType.TV_SERIES) "series" else "movie"}",
+            posterUrl = fallbackPosterUrl,
             type = type,
             provider = providerName
         )
-        return getDetails(dummy, providerName)
+        return getDetails(dummy, providerName, fallbackTitle, fallbackPosterUrl)
     }
 
     /**
@@ -656,20 +741,25 @@ open class ProviderRepository(
         originalLanguage: String? = null
     ): Flow<StreamEmission> = channelFlow {
         val cleanData = episodeData.removePrefix("tmdb:").removePrefix("tmdb/")
-        val parts = cleanData.split(":")
-        val lastSeason = parts.getOrNull(parts.size - 2)?.toIntOrNull()
-        val lastEpisode = parts.getOrNull(parts.size - 1)?.toIntOrNull()
-        val (mediaId, season, episode) = if (parts.size >= 3 && lastSeason != null && lastEpisode != null) {
-            val id = parts.dropLast(2).joinToString(":")
-            Triple(id, lastSeason, lastEpisode)
+        val isLiveTvType = mediaType != null && (
+            mediaType.equals("live", ignoreCase = true) ||
+            mediaType.equals("channel", ignoreCase = true) ||
+            mediaType.equals("live_tv", ignoreCase = true)
+        )
+
+        val (mediaId, season, episode) = if (isLiveTvType) {
+            Triple(cleanData, null, null)
         } else {
-            val knownPrefixes = setOf("mal", "jikan", "kitsu", "anilist", "tmdb", "imdb")
-            val hasPrefix = parts.size >= 2 && parts[0].lowercase() in knownPrefixes
-            val idPartCount = if (hasPrefix) 2 else 1
-            val id = parts.take(idPartCount).joinToString(":")
-            val s = parts.getOrNull(idPartCount)?.toIntOrNull()
-            val e = parts.getOrNull(idPartCount + 1)?.toIntOrNull()
-            Triple(id, s, e)
+            val parts = cleanData.split(":")
+            val lastSeason = parts.getOrNull(parts.size - 2)?.toIntOrNull()
+            val lastEpisode = parts.getOrNull(parts.size - 1)?.toIntOrNull()
+            if (parts.size >= 3 && lastSeason != null && lastEpisode != null) {
+                Triple(parts.dropLast(2).joinToString(":"), lastSeason, lastEpisode)
+            } else if (parts.size == 2 && parts[0].toIntOrNull() != null && parts[1].toIntOrNull() != null) {
+                Triple(cleanData, parts[0].toInt(), parts[1].toInt())
+            } else {
+                Triple(cleanData, null, null)
+            }
         }
         val isTv = season != null && episode != null
         val resolvedType = mediaType ?: if (isTv) "tv" else "movie"
@@ -769,7 +859,8 @@ open class ProviderRepository(
                                 codec = parsedCodec,
                                 addonName = effectiveAddon,
                                 container = resolvedContainer,
-                                trackers = stream.trackers
+                                trackers = stream.trackers,
+                                isLive = stream.isLive || (mediaType != null && (mediaType.equals("live", ignoreCase = true) || mediaType.equals("channel", ignoreCase = true) || mediaType.equals("live_tv", ignoreCase = true)))
                             )
                             send(StreamEmission.SourceFound(src))
                             for (sub in subTracks) {

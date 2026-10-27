@@ -3,7 +3,7 @@ package com.euthopiar.core.model
 import androidx.compose.runtime.Immutable
 import kotlinx.serialization.Serializable
 
-enum class MediaType { MOVIE, TV_SERIES, ANIME }
+enum class MediaType { MOVIE, TV_SERIES, ANIME, LIVE_TV }
 
 @Immutable
 @Serializable
@@ -170,7 +170,8 @@ data class StreamSource(
     val container: StreamContainer = if (isM3u8) StreamContainer.HLS else StreamContainer.AUTO,
     val drm: DrmConfig? = null,
     val trackers: List<String> = emptyList(),
-    val manifestContent: String? = null
+    val manifestContent: String? = null,
+    val isLive: Boolean = false
 ) {
     val server: String get() = serverName
     val isM3M8: Boolean get() = isM3u8

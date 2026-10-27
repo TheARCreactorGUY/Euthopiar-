@@ -14,8 +14,13 @@ import java.io.InterruptedIOException
 
 @UnstableApi
 class SequentialStreamDataSource(
-    private val session: SequentialStreamSession
+    private val session: SequentialStreamSession,
+    listener: androidx.media3.datasource.TransferListener? = null
 ) : BaseDataSource(/* isNetwork = */ true) {
+
+    init {
+        listener?.let { addTransferListener(it) }
+    }
 
     private var uri: Uri? = null
     private var readPosition: Long = 0L
@@ -55,6 +60,9 @@ class SequentialStreamDataSource(
             val targetUrl = SequentialStreamManager.getPinnedUrl(session.url) ?: session.resolvedUrl
             val reqBuilder = Request.Builder().url(targetUrl)
             session.headers.forEach { (k, v) -> reqBuilder.addHeader(k, v) }
+            if (session.headers.keys.none { it.equals("User-Agent", ignoreCase = true) }) {
+                reqBuilder.header("User-Agent", com.euthopiar.core.network.AppUserAgent.get(session.context))
+            }
 
             val rangeHeader = if (dataSpec.length != C.LENGTH_UNSET.toLong()) {
                 "bytes=$targetOffset-${targetOffset + dataSpec.length - 1}"
@@ -67,6 +75,7 @@ class SequentialStreamDataSource(
             try {
                 val response = session.okHttpClient.newCall(reqBuilder.build()).execute()
                 if (response.code == 206 || (response.code == 200 && targetOffset == 0L)) {
+                    session.acceptsRanges = true
                     val finalUrl = response.request.url.toString()
                     session.resolvedUrl = finalUrl
                     SequentialStreamManager.pinResolvedUrl(session.url, finalUrl)
@@ -175,7 +184,10 @@ class SequentialStreamDataSource(
         useRangeRequest = false
     }
 
-    class Factory(private val session: SequentialStreamSession) : DataSource.Factory {
-        override fun createDataSource(): DataSource = SequentialStreamDataSource(session)
+    class Factory(
+        private val session: SequentialStreamSession,
+        private val listener: androidx.media3.datasource.TransferListener? = null
+    ) : DataSource.Factory {
+        override fun createDataSource(): DataSource = SequentialStreamDataSource(session, listener)
     }
 }

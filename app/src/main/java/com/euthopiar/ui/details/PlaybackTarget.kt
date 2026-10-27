@@ -33,6 +33,9 @@ object PlaybackTargetHelper {
         history: PlaybackHistoryEntity?,
         mediaType: MediaType? = null
     ): PlaybackActionState {
+        if (mediaType == MediaType.LIVE_TV) {
+            return PlaybackActionState.Play("Watch Live")
+        }
         if (history == null) {
             return PlaybackActionState.Play("Play")
         }
@@ -80,6 +83,18 @@ object PlaybackTargetHelper {
         episodePlaybackMap: Map<Pair<Int, Int>, PlaybackHistoryEntity>,
         latestPlayback: PlaybackHistoryEntity?
     ): Pair<EpisodeItem?, PlaybackHistoryEntity?> {
+        if (detail.type == MediaType.LIVE_TV) {
+            val liveTarget = detail.episodes.firstOrNull() ?: EpisodeItem(
+                id = detail.id,
+                title = detail.title,
+                seasonNumber = 1,
+                episodeNumber = 1,
+                data = detail.id,
+                thumbnail = detail.posterUrl ?: detail.backdropUrl,
+                description = detail.synopsis
+            )
+            return liveTarget to null
+        }
         val isTv = detail.type == MediaType.TV_SERIES || detail.type == MediaType.ANIME
         return if (isTv) {
             val seasonEps = detail.episodes

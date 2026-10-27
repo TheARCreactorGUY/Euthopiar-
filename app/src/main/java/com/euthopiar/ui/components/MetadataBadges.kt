@@ -78,6 +78,7 @@ fun MediaTypeBadge(
         MediaType.MOVIE -> "MOVIE"
         MediaType.TV_SERIES -> "SERIES"
         MediaType.ANIME -> "ANIME"
+        MediaType.LIVE_TV -> "LIVE"
         else -> type.name.replace("_", " ")
     }
     FrostedBadge(

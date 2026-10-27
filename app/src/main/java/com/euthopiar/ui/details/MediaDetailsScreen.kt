@@ -265,12 +265,19 @@ fun MediaDetailsScreen(
         when (type?.uppercase()) {
             "TV_SERIES" -> MediaType.TV_SERIES
             "ANIME" -> MediaType.ANIME
+            "LIVE_TV", "CHANNEL", "TV_CHANNEL", "LIVE" -> MediaType.LIVE_TV
             else -> MediaType.MOVIE
         }
     }
 
-    LaunchedEffect(mediaId, provider, parsedType) {
-        viewModel.loadDetails(mediaId = mediaId, provider = provider, type = parsedType)
+    LaunchedEffect(mediaId, provider, parsedType, initialTitle, initialPosterUrl) {
+        viewModel.loadDetails(
+            mediaId = mediaId,
+            provider = provider,
+            type = parsedType,
+            fallbackTitle = initialTitle,
+            fallbackPosterUrl = initialPosterUrl
+        )
     }
 
     val uiState by viewModel.uiState.collectAsState()
@@ -359,7 +366,11 @@ fun MediaDetailsScreen(
 
                 is MediaDetailsUiState.Success -> {
                     val detail = state.detail
-                    val isTv = detail.type == MediaType.TV_SERIES || detail.type == MediaType.ANIME
+                    val isLiveTv = detail.type == MediaType.LIVE_TV ||
+                        detail.url.contains("stremio_type:channel", ignoreCase = true) ||
+                        detail.url.contains("stremio_type:tv_channel", ignoreCase = true) ||
+                        detail.url.contains("stremio_type:live", ignoreCase = true)
+                    val isTv = !isLiveTv && (detail.type == MediaType.TV_SERIES || detail.type == MediaType.ANIME)
 
                     // Target episode and resume point calculation
                     val (targetEpisodeForPlay, resumePlaybackForPlay) = remember(detail, selectedSeason, episodePlaybackMap, latestPlayback) {
@@ -1942,17 +1953,25 @@ private fun DetailsMetaBlock(
     detail: MediaDetail,
     hazeState: HazeState? = null
 ) {
-    val isTv = detail.type == MediaType.TV_SERIES || detail.type == MediaType.ANIME
-    val metaTextItems = remember(detail) {
+    val isLiveTv = detail.type == MediaType.LIVE_TV ||
+        detail.url.contains("stremio_type:channel", ignoreCase = true) ||
+        detail.url.contains("stremio_type:tv_channel", ignoreCase = true) ||
+        detail.url.contains("stremio_type:live", ignoreCase = true)
+    val isTv = !isLiveTv && (detail.type == MediaType.TV_SERIES || detail.type == MediaType.ANIME)
+    val metaTextItems = remember(detail, isLiveTv) {
         buildList {
-            detail.year?.let { if (it > 0) add("$it") }
-            val durationOrSeasons = if (isTv && detail.episodes.isNotEmpty()) {
-                val totalSeasons = detail.episodes.map { it.seasonNumber }.distinct().size
-                if (totalSeasons > 1) "$totalSeasons Seasons" else "1 Season"
+            if (isLiveTv) {
+                add("LIVE CHANNEL")
             } else {
-                detail.duration
+                detail.year?.let { if (it > 0) add("$it") }
+                val durationOrSeasons = if (isTv && detail.episodes.isNotEmpty()) {
+                    val totalSeasons = detail.episodes.map { it.seasonNumber }.distinct().size
+                    if (totalSeasons > 1) "$totalSeasons Seasons" else "1 Season"
+                } else {
+                    detail.duration
+                }
+                durationOrSeasons?.takeIf { it.isNotBlank() }?.let { add(it) }
             }
-            durationOrSeasons?.takeIf { it.isNotBlank() }?.let { add(it) }
             if (detail.genres.isNotEmpty()) {
                 add(detail.genres.take(2).joinToString(", "))
             }
@@ -2061,7 +2080,11 @@ private fun DetailsActionBlock(
     hazeState: HazeState? = null
 ) {
     val context = LocalContext.current
-    val isTv = detail.type == MediaType.TV_SERIES || detail.type == MediaType.ANIME || detail.episodes.isNotEmpty()
+    val isLiveTv = detail.type == MediaType.LIVE_TV ||
+        detail.url.contains("stremio_type:channel", ignoreCase = true) ||
+        detail.url.contains("stremio_type:tv_channel", ignoreCase = true) ||
+        detail.url.contains("stremio_type:live", ignoreCase = true)
+    val isTv = !isLiveTv && (detail.type == MediaType.TV_SERIES || detail.type == MediaType.ANIME || detail.episodes.isNotEmpty())
     val actionState = remember(latestPlayback, detail.type) {
         PlaybackTargetHelper.resolveActionState(latestPlayback, detail.type)
     }
@@ -2168,6 +2191,9 @@ private fun DetailsActionBlock(
     val handleDownloadClick: () -> Unit = {
         val downloadRepo = DownloadRepository.getInstance(context)
         when {
+            isLiveTv -> {
+                android.widget.Toast.makeText(context, "Live channels cannot be downloaded offline", android.widget.Toast.LENGTH_SHORT).show()
+            }
             isDownloading -> {
                 val activeItem = if (isTv) activeDownloadingEp else mediaDownload
                 if (activeItem != null) downloadRepo.pauseDownload(activeItem.id)
@@ -2189,8 +2215,9 @@ private fun DetailsActionBlock(
 
     Column(modifier = Modifier.fillMaxWidth()) {
         // Primary Play Pill (White pill)
+        val primaryLabel = if (isLiveTv) "Watch Live" else actionState.label
         PrimaryButton(
-            text = actionState.label,
+            text = primaryLabel,
             icon = Icons.Filled.PlayArrow,
             onClick = onPlay,
             modifier = Modifier
@@ -2198,7 +2225,7 @@ private fun DetailsActionBlock(
                 .focusRequester(playFocusRequester)
         )
 
-        if (actionState is PlaybackActionState.Resume) {
+        if (!isLiveTv && actionState is PlaybackActionState.Resume) {
             Spacer(modifier = Modifier.height(Dimens.spacing8))
             Row(
                 verticalAlignment = Alignment.CenterVertically,

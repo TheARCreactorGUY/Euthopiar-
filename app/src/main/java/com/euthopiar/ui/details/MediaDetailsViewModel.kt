@@ -31,10 +31,12 @@ sealed interface MediaDetailsUiState {
 
 class MediaDetailsViewModel(
     application: Application,
-    private val repository: ProviderRepository
+    private val repository: ProviderRepository,
+    private val initialTitle: String? = null,
+    private val initialPosterUrl: String? = null
 ) : AndroidViewModel(application) {
 
-    constructor(application: Application) : this(application, ProviderRepository.Default)
+    constructor(application: Application) : this(application, ProviderRepository.Default, null, null)
 
     private val libraryRepository = LibraryRepository.getInstance(application)
     private val playlistRepository = com.euthopiar.data.repository.PlaylistRepository.getInstance(application)
@@ -76,9 +78,17 @@ class MediaDetailsViewModel(
     private var currentMediaId: String? = null
     private var currentProvider: String? = null
     private var currentType: MediaType? = null
+    private var currentFallbackTitle: String? = null
+    private var currentFallbackPosterUrl: String? = null
     private var hasUserManuallySelectedSeason = false
 
-    fun loadDetails(mediaId: String, provider: String? = null, type: MediaType? = null) {
+    fun loadDetails(
+        mediaId: String,
+        provider: String? = null,
+        type: MediaType? = null,
+        fallbackTitle: String? = initialTitle,
+        fallbackPosterUrl: String? = initialPosterUrl
+    ) {
         hasUserManuallySelectedSeason = false
         watchlistObserverJob?.cancel()
         watchlistObserverJob = viewModelScope.launch {
@@ -126,6 +136,8 @@ class MediaDetailsViewModel(
         currentMediaId = mediaId
         currentProvider = provider
         currentType = type
+        currentFallbackTitle = fallbackTitle
+        currentFallbackPosterUrl = fallbackPosterUrl
 
         _uiState.value = MediaDetailsUiState.Loading
 
@@ -134,7 +146,9 @@ class MediaDetailsViewModel(
                 val detail = repository.getDetails(
                     mediaId = mediaId,
                     type = type ?: MediaType.MOVIE,
-                    providerName = provider
+                    providerName = provider,
+                    fallbackTitle = fallbackTitle,
+                    fallbackPosterUrl = fallbackPosterUrl
                 )
 
                 if ((detail.type == MediaType.TV_SERIES || detail.type == MediaType.ANIME) && detail.episodes.isNotEmpty()) {
@@ -270,6 +284,6 @@ class MediaDetailsViewModel(
     }
 
     fun retry() {
-        currentMediaId?.let { loadDetails(it, currentProvider, currentType) }
+        currentMediaId?.let { loadDetails(it, currentProvider, currentType, currentFallbackTitle, currentFallbackPosterUrl) }
     }
 }

@@ -35,7 +35,8 @@ fun Modifier.tvFocusable(
     shape: Shape = ShapeS,
     focusedScale: Float = 1.05f,
     onClick: (() -> Unit)? = null,
-    enabled: Boolean = true
+    enabled: Boolean = true,
+    focusedBorderColor: Color = TextPrimary
 ): Modifier = composed {
     var isFocused by remember { mutableStateOf(false) }
 
@@ -74,7 +75,7 @@ fun Modifier.tvFocusable(
                         spotColor = Color.White.copy(alpha = 0.35f),
                         ambientColor = Color.White.copy(alpha = 0.20f)
                     )
-                    .border(2.dp, TextPrimary, shape)
+                    .border(2.dp, focusedBorderColor, shape)
             } else {
                 Modifier
             }

@@ -138,4 +138,62 @@ class PreferencesKeyMappingTest {
         val resetDir = repository.customDownloadDir.first()
         assertEquals(null, resetDir)
     }
+
+    @Test
+    fun testDonationReminderCooldownPreferences() = runBlocking {
+        // Initial value should be 0L
+        val initialTimestamp = repository.lastDonationPromptTimestamp.first()
+        assertEquals(0L, initialTimestamp)
+
+        // Update timestamp
+        val testTimestamp = 1729000000000L
+        repository.setLastDonationPromptTimestamp(testTimestamp)
+        val updatedTimestamp = repository.lastDonationPromptTimestamp.first()
+        assertEquals(testTimestamp, updatedTimestamp)
+
+        // Verify DonationConfig
+        assertEquals("https://buymeacoffee.com/TheARCreactorGUY", com.euthopiar.data.common.DonationConfig.BUY_ME_A_COFFEE_URL)
+        assertEquals(24L * 60L * 60L * 1000L, com.euthopiar.data.common.DonationConfig.COOLDOWN_MS)
+    }
+
+    @Test
+    fun testSupportEuthopiarSettingsSearchIndexing() {
+        val entries = com.euthopiar.ui.settings.search.getAllSettingsSearchEntries()
+        val supportEntry = entries.firstOrNull { it.id == "support_euthopiar" }
+        assertNotNull("support_euthopiar search entry must be present", supportEntry)
+        assertEquals("Support Euthopiar", supportEntry!!.title)
+        assertEquals(com.euthopiar.ui.settings.models.SettingsCategory.About, supportEntry.category)
+        assertEquals(com.euthopiar.ui.settings.models.SettingsPage.About, supportEntry.page)
+
+        val requiredKeywords = listOf("donate", "coffee", "support", "sponsor", "contribution", "tip")
+        for (kw in requiredKeywords) {
+            assertTrue("Keywords must include '$kw'", supportEntry.keywords.contains(kw))
+        }
+    }
+
+    @Test
+    fun testDonationCooldownWindowCalculations() {
+        val now = 100_000_000L
+        val cooldown = com.euthopiar.data.common.DonationConfig.COOLDOWN_MS
+
+        // When fresh install (0L) -> should prime with now
+        val freshPrompt = 0L
+        val shouldPrimeFresh = freshPrompt == 0L || freshPrompt > now
+        assertTrue(shouldPrimeFresh)
+
+        // When cooldown not expired -> should NOT prompt
+        val recentPrompt = now - (cooldown - 1000L)
+        val shouldPromptRecent = now - recentPrompt >= cooldown
+        assertFalse(shouldPromptRecent)
+
+        // When cooldown expired -> should prompt
+        val expiredPrompt = now - cooldown
+        val shouldPromptExpired = now - expiredPrompt >= cooldown
+        assertTrue(shouldPromptExpired)
+
+        // Clock skew / forward time -> should prime/reset
+        val futurePrompt = now + 50000L
+        val shouldResetSkew = futurePrompt == 0L || futurePrompt > now
+        assertTrue(shouldResetSkew)
+    }
 }

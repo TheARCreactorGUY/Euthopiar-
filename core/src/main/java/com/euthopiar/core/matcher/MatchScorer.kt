@@ -260,7 +260,8 @@ object MatchScorer {
         val ct = when (item.type) {
             MediaType.MOVIE -> ContentType.MOVIE
             MediaType.TV_SERIES -> ContentType.TV_SERIES
-            MediaType.ANIME -> ContentType.ANIME
+            MediaType.ANIME -> ContentType.ANIME
+            MediaType.LIVE_TV -> ContentType.TV_SERIES
         }
         return score(hints, item.title, item.year, ct)
     }

@@ -79,11 +79,12 @@ fun com.euthopiar.core.model.MediaItem.toShowcasePosterItem(
     val displayGenre = when (type) {
         com.euthopiar.core.model.MediaType.TV_SERIES -> "TV Series"
         com.euthopiar.core.model.MediaType.ANIME -> "Anime"
+        com.euthopiar.core.model.MediaType.LIVE_TV -> "Live TV"
         com.euthopiar.core.model.MediaType.MOVIE -> "Movie"
     }
     val defaultRes = when (type) {
         com.euthopiar.core.model.MediaType.ANIME -> R.drawable.avatar_anime_hero
-        com.euthopiar.core.model.MediaType.TV_SERIES -> R.drawable.avatar_retro_cinephile
+        com.euthopiar.core.model.MediaType.TV_SERIES, com.euthopiar.core.model.MediaType.LIVE_TV -> R.drawable.avatar_retro_cinephile
         com.euthopiar.core.model.MediaType.MOVIE -> R.drawable.avatar_classic_director
     }
     return ShowcasePosterItem(

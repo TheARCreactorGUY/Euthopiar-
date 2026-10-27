@@ -55,6 +55,7 @@ fun MediaCard(
         MediaType.MOVIE -> "Movie"
         MediaType.TV_SERIES -> "Series"
         MediaType.ANIME -> "Anime"
+        MediaType.LIVE_TV -> "Live TV"
     }
     val cleanTitle = androidx.compose.runtime.remember(item.title) { sanitizeTitle(item.title) }
     val a11yDescription = buildList {

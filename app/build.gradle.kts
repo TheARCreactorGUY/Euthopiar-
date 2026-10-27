@@ -14,8 +14,8 @@ android {
         applicationId = "com.euthopiar"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.0.2-Stable"
+        versionCode = 4
+        versionName = "1.0.3-Stable"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -51,6 +51,12 @@ android {
             it.systemProperty("robolectric.sqliteMode", "NATIVE")
             it.maxHeapSize = "2048m"
             it.forkEvery = 4
+            it.jvmArgs(
+                "--add-opens=java.base/java.lang=ALL-UNNAMED",
+                "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
+                "--add-opens=java.base/java.io=ALL-UNNAMED",
+                "--add-opens=java.base/java.util=ALL-UNNAMED"
+            )
         }
     }
 

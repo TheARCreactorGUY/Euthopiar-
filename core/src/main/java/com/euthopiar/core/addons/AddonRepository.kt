@@ -212,7 +212,7 @@ class AddonRepository private constructor(private val context: Context) {
     }
 
     fun getEnabledAddonsForResource(resource: String, type: String, id: String = ""): List<ManagedAddon> {
-        val canonicalType = if (type.equals("tv", ignoreCase = true)) "series" else type.lowercase()
+        val canonicalType = type.lowercase()
         return _uiState.value.addons.filter { addon ->
             addon.enabled && addon.manifest?.supportsResource(resource, canonicalType, id) == true
         }

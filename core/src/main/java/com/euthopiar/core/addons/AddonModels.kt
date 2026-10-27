@@ -32,8 +32,10 @@ fun AddonManifest.supportsResource(name: String, type: String, id: String): Bool
                     it.equals("tv", ignoreCase = true) ||
                     it.equals("movie", ignoreCase = true)
                 )) ||
-                ((canonical == "channel" || canonical == "tv") && (
+                ((canonical == "channel" || canonical == "live" || canonical == "live_tv" || canonical == "tv") && (
                     it.equals("channel", ignoreCase = true) ||
+                    it.equals("live", ignoreCase = true) ||
+                    it.equals("live_tv", ignoreCase = true) ||
                     it.equals("tv", ignoreCase = true)
                 ))
             }
@@ -60,6 +62,16 @@ fun AddonManifest.supportsResource(name: String, type: String, id: String): Bool
 
 fun AddonManifest.supportsStream(type: String, id: String): Boolean =
     supportsResource("stream", type, id)
+
+fun isCustomStremioAddonId(id: String): Boolean {
+    val clean = id.trim()
+    if (clean.isBlank()) return false
+    if (clean.all { it.isDigit() }) return false
+    if (clean.startsWith("tt", ignoreCase = true)) return false
+    val knownPrefixes = listOf("tmdb:", "imdb:", "mal:", "jikan:", "kitsu:", "anilist:", "tmdb/")
+    if (knownPrefixes.any { clean.startsWith(it, ignoreCase = true) }) return false
+    return true
+}
 
 @Serializable
 data class AddonResource(

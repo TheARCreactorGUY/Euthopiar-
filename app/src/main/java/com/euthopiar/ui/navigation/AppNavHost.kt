@@ -378,8 +378,8 @@ fun AppNavHost(
                         )
                     },
                     onContinueWatchingClick = { item ->
-                        val isTv = item.mediaType == "TV_SERIES" || item.mediaType == "ANIME" || (item.mediaType == null && item.seasonNumber != null && item.episodeNumber != null)
-                        val typeStr = if (isTv) (item.mediaType ?: "TV_SERIES") else "MOVIE"
+                        val isTv = item.mediaType != "LIVE_TV" && (item.mediaType == "TV_SERIES" || item.mediaType == "ANIME" || (item.mediaType == null && item.seasonNumber != null && item.seasonNumber > 0 && item.episodeNumber != null))
+                        val typeStr = if (isTv) (item.mediaType ?: "TV_SERIES") else (item.mediaType ?: "MOVIE")
                         val epData = item.episodeData ?: if (isTv) "${item.mediaId}:${item.seasonNumber ?: 1}:${item.episodeNumber ?: 1}" else item.mediaId
                         val season = if (isTv) (item.seasonNumber ?: 1) else 0
                         val episode = if (isTv) (item.episodeNumber ?: 1) else 0
@@ -397,11 +397,13 @@ fun AppNavHost(
                         )
                     },
                     onPlayHero = { item, history ->
-                        val isTv = item.type == com.euthopiar.core.model.MediaType.TV_SERIES ||
+                        val isTv = item.type != com.euthopiar.core.model.MediaType.LIVE_TV &&
+                            history?.mediaType != "LIVE_TV" &&
+                            (item.type == com.euthopiar.core.model.MediaType.TV_SERIES ||
                             item.type == com.euthopiar.core.model.MediaType.ANIME ||
                             history?.mediaType == "TV_SERIES" ||
                             history?.mediaType == "ANIME" ||
-                            (history?.seasonNumber != null && history.seasonNumber > 0)
+                            (history?.seasonNumber != null && history.seasonNumber > 0))
                         val typeStr = if (isTv) (history?.mediaType ?: item.type.name) else "MOVIE"
                         val epData = history?.episodeData ?: if (isTv) "${item.id}:${history?.seasonNumber ?: 1}:${history?.episodeNumber ?: 1}" else item.id
                         val season = if (isTv) (history?.seasonNumber ?: 1) else 0
@@ -443,7 +445,8 @@ fun AppNavHost(
                         )
                     },
                     onPlayMedia = { item: MediaItem ->
-                        val isTv = item.type == com.euthopiar.core.model.MediaType.TV_SERIES || item.type == com.euthopiar.core.model.MediaType.ANIME
+                        val isTv = item.type != com.euthopiar.core.model.MediaType.LIVE_TV &&
+                            (item.type == com.euthopiar.core.model.MediaType.TV_SERIES || item.type == com.euthopiar.core.model.MediaType.ANIME)
                         val typeStr = item.type.name
                         val epData = if (isTv) "${item.id}:1:1" else item.id
                         navController.navigate(
@@ -454,8 +457,8 @@ fun AppNavHost(
                                 episodeData = epData,
                                 mediaTitle = item.title,
                                 episodeTitle = null,
-                                season = if (isTv) 1 else 0,
-                                episode = if (isTv) 1 else 0
+                                season = if (isTv) 1 else -1,
+                                episode = if (isTv) 1 else -1
                             )
                         )
                     },
@@ -541,10 +544,13 @@ fun AppNavHost(
                     },
                     onPlayMedia = { detail, episode ->
                         val prov = detail.provider ?: provider ?: "tmdb"
-                        val isTv = detail.type == com.euthopiar.core.model.MediaType.TV_SERIES || detail.type == com.euthopiar.core.model.MediaType.ANIME
-                        val season = if (isTv) (episode?.seasonNumber ?: 1) else 0
-                        val epNum = if (isTv) (episode?.episodeNumber ?: 1) else 0
-                        val rawEpData = if (isTv) episode?.data else (detail.episodes.firstOrNull()?.data ?: episode?.data)
+                        val firstEp = detail.episodes.firstOrNull()
+                        val isTv = detail.type != com.euthopiar.core.model.MediaType.LIVE_TV &&
+                            (firstEp == null || firstEp.seasonNumber > 0) &&
+                            (detail.type == com.euthopiar.core.model.MediaType.TV_SERIES || detail.type == com.euthopiar.core.model.MediaType.ANIME)
+                        val season = if (isTv) (episode?.seasonNumber ?: 1) else -1
+                        val epNum = if (isTv) (episode?.episodeNumber ?: 1) else -1
+                        val rawEpData = if (isTv) episode?.data else (firstEp?.data ?: episode?.data)
                         val epData = if (isTv) {
                             if (!rawEpData.isNullOrBlank() && rawEpData.contains(":")) rawEpData else "${detail.id}:$season:$epNum"
                         } else {
@@ -1098,13 +1104,17 @@ fun PlaceholderScreen(
     }
 }
 
+internal fun rfc3986Encode(value: String): String =
+    URLEncoder.encode(value, "UTF-8").replace("+", "%20")
+
 internal fun safeDoubleEncode(value: String): String {
-    return URLEncoder.encode(URLEncoder.encode(value, "UTF-8"), "UTF-8")
+    return rfc3986Encode(rfc3986Encode(value))
 }
 
 internal fun safeDecode(value: String): String {
     return try {
-        URLDecoder.decode(value, "UTF-8")
+        val sanitized = value.replace("+", "%2B")
+        URLDecoder.decode(sanitized, "UTF-8")
     } catch (_: Exception) {
         value
     }
@@ -1121,10 +1131,10 @@ internal fun buildDetailsRoute(
     val safeId = mediaId.trim().ifBlank { "unknown" }
     val encodedId = safeDoubleEncode(safeId)
     val prov = if (provider.isNullOrBlank()) "tmdb" else provider
-    val encodedProv = URLEncoder.encode(prov, "UTF-8")
+    val encodedProv = rfc3986Encode(prov)
     val typeStr = type ?: "MOVIE"
-    val encodedTitle = title?.let { URLEncoder.encode(it, "UTF-8") } ?: ""
-    val posterQuery = if (!posterUrl.isNullOrBlank()) "&posterUrl=${URLEncoder.encode(posterUrl, "UTF-8")}" else ""
+    val encodedTitle = title?.let { rfc3986Encode(it) } ?: ""
+    val posterQuery = if (!posterUrl.isNullOrBlank()) "&posterUrl=${rfc3986Encode(posterUrl)}" else ""
     return "details/$encodedId?provider=$encodedProv&type=$typeStr&depth=$depth&title=$encodedTitle$posterQuery"
 }
 
@@ -1141,10 +1151,10 @@ internal fun buildPlayerRoute(
     val safeId = mediaId.trim().ifBlank { "unknown" }
     val encodedMediaId = safeDoubleEncode(safeId)
     val prov = if (provider.isNullOrBlank()) "tmdb" else provider
-    val encodedProv = URLEncoder.encode(prov, "UTF-8")
+    val encodedProv = rfc3986Encode(prov)
     val typeStr = type ?: "MOVIE"
-    val encodedEpData = episodeData?.let { URLEncoder.encode(it, "UTF-8") } ?: ""
-    val encodedTitle = mediaTitle?.let { URLEncoder.encode(it, "UTF-8") } ?: ""
-    val encodedEpTitle = episodeTitle?.let { URLEncoder.encode(it, "UTF-8") } ?: ""
+    val encodedEpData = episodeData?.let { rfc3986Encode(it) } ?: ""
+    val encodedTitle = mediaTitle?.let { rfc3986Encode(it) } ?: ""
+    val encodedEpTitle = episodeTitle?.let { rfc3986Encode(it) } ?: ""
     return "player/$encodedMediaId?provider=$encodedProv&type=$typeStr&episodeData=$encodedEpData&mediaTitle=$encodedTitle&episodeTitle=$encodedEpTitle&season=$season&episode=$episode"
 }

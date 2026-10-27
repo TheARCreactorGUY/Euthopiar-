@@ -135,6 +135,11 @@ class PreferencesRepository private constructor(private val context: Context) {
         val INCLUDE_PRERELEASES = booleanPreferencesKey("include_prereleases")
         val SKIPPED_UPDATE_VERSION = stringPreferencesKey("skipped_update_version")
         val LAST_UPDATE_CHECK_TIMESTAMP = longPreferencesKey("last_update_check_timestamp")
+
+        // 1.5 Support & Donation Preferences
+        val LAST_DONATION_PROMPT_TIMESTAMP = longPreferencesKey("last_donation_prompt_timestamp")
+        val LAST_APP_VERSION = stringPreferencesKey("last_app_version")
+        val LAST_APP_VERSION_CODE = intPreferencesKey("last_app_version_code")
     }
     val dohProvider: Flow<String> = context.preferencesDataStore.data
         .catch { exception ->
@@ -850,6 +855,51 @@ class PreferencesRepository private constructor(private val context: Context) {
     suspend fun setLastUpdateCheckTimestamp(timestampMs: Long) {
         context.preferencesDataStore.edit { preferences ->
             preferences[PreferencesKeys.LAST_UPDATE_CHECK_TIMESTAMP] = timestampMs
+        }
+    }
+
+    val lastDonationPromptTimestamp: Flow<Long> = context.preferencesDataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            preferences[PreferencesKeys.LAST_DONATION_PROMPT_TIMESTAMP] ?: 0L
+        }
+        .distinctUntilChanged()
+
+    suspend fun setLastDonationPromptTimestamp(timestampMs: Long) {
+        context.preferencesDataStore.edit { preferences ->
+            preferences[PreferencesKeys.LAST_DONATION_PROMPT_TIMESTAMP] = timestampMs
+        }
+    }
+
+    val lastAppVersion: Flow<String> = context.preferencesDataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            preferences[PreferencesKeys.LAST_APP_VERSION] ?: ""
+        }
+        .distinctUntilChanged()
+
+    suspend fun setLastAppVersion(version: String) {
+        context.preferencesDataStore.edit { preferences ->
+            preferences[PreferencesKeys.LAST_APP_VERSION] = version
+        }
+    }
+
+    val lastAppVersionCode: Flow<Int> = context.preferencesDataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            preferences[PreferencesKeys.LAST_APP_VERSION_CODE] ?: 0
+        }
+        .distinctUntilChanged()
+
+    suspend fun setLastAppVersionCode(versionCode: Int) {
+        context.preferencesDataStore.edit { preferences ->
+            preferences[PreferencesKeys.LAST_APP_VERSION_CODE] = versionCode
         }
     }
 

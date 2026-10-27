@@ -20,6 +20,7 @@ class MatroskaClusterIndex {
 
     // Default Matroska TimestampScale is 1,000,000 ns (1 ms = 1,000 us)
     @Volatile var timestampScaleNs: Long = 1_000_000L
+    @Volatile var parsedDurationUs: Long = androidx.media3.common.C.TIME_UNSET
 
     fun recordCluster(clusterTimecodeTicks: Long, clusterStartByteOffset: Long) {
         val timeUs = (clusterTimecodeTicks * timestampScaleNs) / 1_000L

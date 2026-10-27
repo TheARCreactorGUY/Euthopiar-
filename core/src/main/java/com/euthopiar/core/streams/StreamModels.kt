@@ -36,7 +36,8 @@ data class StreamItem(
     val filename: String? = null,
     val container: StreamContainer = StreamContainer.AUTO,
     val trackers: List<String> = emptyList(),
-    val subtitles: List<StreamSubtitle> = emptyList()
+    val subtitles: List<StreamSubtitle> = emptyList(),
+    val isLive: Boolean = false
 ) {
     val effectiveInfoHash: String?
         get() = infoHash ?: url?.let { u ->

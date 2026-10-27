@@ -14,6 +14,9 @@ import com.euthopiar.core.model.PluginManifest
 import com.euthopiar.core.registry.PluginRegistry
 import com.euthopiar.data.preferences.PreferencesRepository
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -177,7 +180,7 @@ class PluginManagerViewModel(
                 var total = 0
                 for (url in urls) {
                     val count = pluginService.installAllFromRepo(url)
-                    total += count
+                    if (count > 0) total += count
                 }
                 loadPlugins()
                 _selectedTab.value = Tab.MARKETPLACE
@@ -197,6 +200,16 @@ class PluginManagerViewModel(
     fun fetchTestEupsRepository(onResult: (Boolean, String?) -> Unit) = syncCommunityRepository(onResult)
 
     init {
+        viewModelScope.launch {
+            pluginService.installedPluginsFlow.collect { list ->
+                _installedPlugins.value = list.filterNot { it.isAdultPlugin }
+            }
+        }
+        viewModelScope.launch {
+            try {
+                pluginService.checkAndAutoUpdatePlugins(installNewFromRepos = false)
+            } catch (_: Exception) {}
+        }
         loadPlugins()
     }
 
@@ -208,29 +221,34 @@ class PluginManagerViewModel(
                 val installed = pluginService.getInstalledPlugins().distinctBy { it.id }
                 _installedPlugins.value = installed.filterNot { it.isAdultPlugin }
 
-                // Fetch community plugins from configured repos
+                // Fetch community plugins from configured repos in parallel
                 val urls = preferencesRepository.repositoryUrls.first()
                 val activeUrls = urls.filter { it.isNotBlank() }
-                val discoveredRepos = mutableListOf<ProviderRepoInfo>()
-                val discovered = mutableListOf<PluginManifest>()
 
-                for (url in activeUrls) {
-                    try {
-                        val repoIndex = pluginService.fetchRepository(url)
-                        val repoPlugins = repoIndex.plugins.filterNot { it.isAdultPlugin }
-                        if (repoPlugins.isNotEmpty()) {
-                            discoveredRepos.add(
-                                ProviderRepoInfo(
-                                    url = url,
-                                    name = repoIndex.name.ifBlank { url.substringAfterLast("/").substringBefore(".json") },
-                                    description = repoIndex.description,
-                                    plugins = repoPlugins
-                                )
-                            )
-                            discovered.addAll(repoPlugins)
+                val repoResults = coroutineScope {
+                    activeUrls.map { url ->
+                        async(Dispatchers.IO) {
+                            try {
+                                val repoIndex = pluginService.fetchRepository(url)
+                                val repoPlugins = repoIndex.plugins.filterNot { it.isAdultPlugin }
+                                if (repoPlugins.isNotEmpty()) {
+                                    val repoInfo = ProviderRepoInfo(
+                                        url = url,
+                                        name = repoIndex.name.ifBlank { url.substringAfterLast("/").substringBefore(".json") },
+                                        description = repoIndex.description,
+                                        plugins = repoPlugins
+                                    )
+                                    Pair(repoInfo, repoPlugins)
+                                } else null
+                            } catch (_: Exception) {
+                                null
+                            }
                         }
-                    } catch (_: Exception) {}
+                    }.awaitAll().filterNotNull()
                 }
+
+                val discoveredRepos = repoResults.map { it.first }
+                val discovered = repoResults.flatMap { it.second }
 
                 _providerRepos.value = discoveredRepos
                 _communityPlugins.value = discovered.distinctBy { it.id }
@@ -314,10 +332,16 @@ class PluginManagerViewModel(
 
             try {
                 val count = pluginService.installAllFromRepo(trimmed)
-                preferencesRepository.addRepositoryUrl(trimmed)
-                loadPlugins()
-                withContext(Dispatchers.Main) {
-                    onResult(true, "Installed $count plugins from repository")
+                if (count >= 0) {
+                    preferencesRepository.addRepositoryUrl(trimmed)
+                    loadPlugins()
+                    withContext(Dispatchers.Main) {
+                        onResult(true, "Installed $count plugins from repository")
+                    }
+                } else {
+                    withContext(Dispatchers.Main) {
+                        onResult(false, "Failed to load repository")
+                    }
                 }
             } catch (e: Exception) {
                 android.util.Log.w("PluginManagerViewModel", "Failed to load repository: $trimmed", e)
@@ -399,28 +423,41 @@ class PluginManagerViewModel(
                     .distinct()
                     .filter { it.isNotBlank() }
 
+                val repoCounts = coroutineScope {
+                    allRepoUrls.map { repoUrl ->
+                        async(Dispatchers.IO) {
+                            try {
+                                pluginService.installAllFromRepo(repoUrl)
+                            } catch (e: Exception) {
+                                android.util.Log.w("PluginManagerViewModel", "Failed to update repository: $repoUrl", e)
+                                -1
+                            }
+                        }
+                    }.awaitAll()
+                }
+
                 var totalScrapersUpdated = 0
                 var reposUpdated = 0
-
-                for (repoUrl in allRepoUrls) {
-                    try {
-                        val count = pluginService.installAllFromRepo(repoUrl)
-                        totalScrapersUpdated += count
+                for (cnt in repoCounts) {
+                    if (cnt >= 0) {
+                        totalScrapersUpdated += cnt
                         reposUpdated++
-                    } catch (e: Exception) {
-                        android.util.Log.w("PluginManagerViewModel", "Failed to update repository: $repoUrl", e)
                     }
                 }
 
                 val currentAddons = addonRepository.uiState.value.addons
-                var addonsRefreshed = 0
-                for (addon in currentAddons) {
-                    try {
-                        addonRepository.refreshAddon(addon.manifestUrl)
-                        addonsRefreshed++
-                    } catch (e: Exception) {
-                        android.util.Log.w("PluginManagerViewModel", "Failed to refresh addon: ${addon.manifestUrl}", e)
-                    }
+                val addonsRefreshed = coroutineScope {
+                    currentAddons.map { addon ->
+                        async(Dispatchers.IO) {
+                            try {
+                                addonRepository.refreshAddon(addon.manifestUrl)
+                                1
+                            } catch (e: Exception) {
+                                android.util.Log.w("PluginManagerViewModel", "Failed to refresh addon: ${addon.manifestUrl}", e)
+                                0
+                            }
+                        }
+                    }.awaitAll().sum()
                 }
 
                 loadPlugins()
@@ -456,7 +493,11 @@ class PluginManagerViewModel(
                 val count = pluginService.installAllFromRepo(repoUrl)
                 loadPlugins()
                 withContext(Dispatchers.Main) {
-                    onResult(true, "Updated repository · $count scrapers installed/updated")
+                    if (count >= 0) {
+                        onResult(true, "Updated repository · $count scrapers installed/updated")
+                    } else {
+                        onResult(false, "Failed to update repository")
+                    }
                 }
             } catch (e: Exception) {
                 android.util.Log.e("PluginManagerViewModel", "Failed to update repo $repoUrl", e)

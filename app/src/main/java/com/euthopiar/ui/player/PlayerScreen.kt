@@ -609,6 +609,7 @@ fun PlayerScreen(
                 title = uiState.mediaTitle,
                 subtitle = uiState.episodeTitle,
                 isTvSeries = isMultiEpisode,
+                isLiveStream = uiState.isLiveStream,
                 seasonNumber = uiState.seasonNumber,
                 episodeNumber = uiState.episodeNumber,
                 isEpisodeSelectorOpen = uiState.isEpisodeSelectorOpen,
@@ -671,6 +672,7 @@ fun PlayerScreen(
                 isLoading = uiState.isLoading,
                 isBuffering = uiState.isBuffering,
                 seekIntervalSeconds = uiState.seekIntervalSeconds,
+                isLiveStream = uiState.isLiveStream,
                 hasNextEpisode = isMultiEpisode && uiState.hasNextEpisode,
                 onNextEpisode = { viewModel.playNextEpisode() },
                 onTogglePlayPause = { viewModel.togglePlayPause() },
@@ -710,6 +712,7 @@ fun PlayerScreen(
                 scrubPositionMs = uiState.scrubPositionMs,
                 playbackSpeed = uiState.playbackSpeed,
                 isTvSeries = isMultiEpisode,
+                isLiveStream = uiState.isLiveStream,
                 hasNextEpisode = uiState.hasNextEpisode,
                 mediaTitle = uiState.mediaTitle,
                 episodeTitle = uiState.episodeTitle,
@@ -869,7 +872,7 @@ fun PlayerScreen(
 
             // Layer 11.5: Up Next Episode Countdown Card
             UpNextCountdownCard(
-                visible = uiState.showUpNextCard,
+                visible = uiState.showUpNextCard && !uiState.isLiveStream,
                 nextEpisode = uiState.upNextEpisode,
                 countdownSeconds = uiState.upNextCountdownSeconds,
                 onPlayNow = { viewModel.playUpNextNow() },
@@ -946,7 +949,7 @@ fun PlayerScreen(
 
             // Layer 13.5: Skip Intro / Skip Outro Floating Overlay (with 6s perimeter countdown)
             val isOutro = uiState.showSkipOutro
-            val isIntroOrOutroVisible = (uiState.showSkipIntro || uiState.showSkipOutro) && !uiState.isScreenLocked
+            val isIntroOrOutroVisible = (uiState.showSkipIntro || uiState.showSkipOutro) && !uiState.isScreenLocked && !uiState.isLiveStream
             val skipAlignment = if (isOutro && uiState.showUpNextCard) Alignment.BottomStart else Alignment.BottomEnd
 
             SkipIntroOverlay(

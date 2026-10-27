@@ -11,7 +11,7 @@ class DynamicClusterSeekMap(
     private val session: SequentialStreamSession
 ) : SeekMap {
 
-    override fun isSeekable(): Boolean = durationUs != C.TIME_UNSET && durationUs > 0
+    override fun isSeekable(): Boolean = true
 
     override fun getDurationUs(): Long = durationUs
 

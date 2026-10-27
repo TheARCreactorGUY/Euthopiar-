@@ -19,6 +19,17 @@ import java.io.File
 class JsPluginStorage(private val context: Context) {
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
     private val mutex = Mutex()
+    private val noCacheHeaders = mapOf("Cache-Control" to "no-cache, no-store, must-revalidate", "Pragma" to "no-cache")
+
+    private fun writeTextAtomically(targetFile: File, content: String) {
+        targetFile.parentFile?.mkdirs()
+        val tempFile = File(targetFile.parentFile, "${targetFile.name}.tmp")
+        tempFile.writeText(content)
+        if (!tempFile.renameTo(targetFile)) {
+            targetFile.writeText(content)
+            tempFile.delete()
+        }
+    }
 
     private val pluginsRootDir: File
         get() = File(context.filesDir, "plugins").apply { if (!exists()) mkdirs() }
@@ -104,7 +115,7 @@ class JsPluginStorage(private val context: Context) {
         }.distinctBy { it.id }
 
         if (populated.size != scrapers.size) {
-            try { scrapersMetadataFile.writeText(json.encodeToString(populated)) } catch (_: Exception) {}
+            try { writeTextAtomically(scrapersMetadataFile, json.encodeToString(populated)) } catch (_: Exception) {}
         }
         _scrapersFlow.value = populated
 
@@ -123,7 +134,7 @@ class JsPluginStorage(private val context: Context) {
 
     suspend fun fetchRepositoryManifest(manifestUrl: String): Result<JsRepoManifest> = withContext(Dispatchers.IO) {
         runCatching {
-            val response = httpRequestRaw("GET", manifestUrl, emptyMap(), "", followRedirects = true)
+            val response = httpRequestRaw("GET", manifestUrl, noCacheHeaders, "", followRedirects = true)
             if (response.status !in 200..299 || response.body.isBlank()) {
                 error("Failed to load manifest: HTTP ${response.status}")
             }
@@ -150,8 +161,8 @@ class JsPluginStorage(private val context: Context) {
                     }
 
                     try {
-                        val scriptResponse = httpRequestRaw("GET", scriptUrl, emptyMap(), "", followRedirects = true)
-                        if (scriptResponse.status in 200..299 && scriptResponse.body.isNotBlank()) {
+                        val scriptResponse = httpRequestRaw("GET", scriptUrl, noCacheHeaders, "", followRedirects = true)
+                        if (scriptResponse.status in 200..299 && scriptResponse.body.isNotBlank() && isValidJsPluginCode(scriptResponse.body)) {
                             Pair(scraperMeta, scriptResponse.body)
                         } else null
                     } catch (e: Exception) {
@@ -165,7 +176,7 @@ class JsPluginStorage(private val context: Context) {
             val currentRepos = _repositoriesFlow.value.toMutableList()
             if (!currentRepos.contains(manifestUrl)) {
                 currentRepos.add(manifestUrl)
-                reposFile.writeText(json.encodeToString(currentRepos))
+                writeTextAtomically(reposFile, json.encodeToString(currentRepos))
                 _repositoriesFlow.value = currentRepos
             }
 
@@ -176,11 +187,12 @@ class JsPluginStorage(private val context: Context) {
                 val cleanScraperId = scraperMeta.id.substringAfter(":")
                 val namespacedId = getStorageKey(repoId, cleanScraperId)
                 val codeFile = getPluginScriptFile(repoId, cleanScraperId)
-                codeFile.writeText(code)
+                writeTextAtomically(codeFile, code)
 
                 val existingIndex = updatedScrapers.indexOfFirst {
                     it.id == namespacedId || (it.canonicalRepoId == repoId && (it.id == cleanScraperId || it.id.substringAfter(":") == cleanScraperId))
                 }
+                val existingScraper = if (existingIndex >= 0) updatedScrapers[existingIndex] else null
                 val item = PluginScraper(
                     id = namespacedId,
                     repositoryUrl = manifestUrl,
@@ -190,7 +202,7 @@ class JsPluginStorage(private val context: Context) {
                     version = scraperMeta.version,
                     filename = scraperMeta.filename,
                     supportedTypes = scraperMeta.supportedTypes,
-                    enabled = scraperMeta.enabled,
+                    enabled = existingScraper?.enabled ?: scraperMeta.enabled,
                     hasSettings = scraperMeta.hasSettings,
                     logo = scraperMeta.logo,
                     formats = scraperMeta.formats,
@@ -205,7 +217,7 @@ class JsPluginStorage(private val context: Context) {
             }
 
             val distinctUpdated = updatedScrapers.distinctBy { it.id }
-            scrapersMetadataFile.writeText(json.encodeToString(distinctUpdated))
+            writeTextAtomically(scrapersMetadataFile, json.encodeToString(distinctUpdated))
             _scrapersFlow.value = distinctUpdated
 
             for (scraper in updatedScrapers) {
@@ -224,7 +236,7 @@ class JsPluginStorage(private val context: Context) {
             val currentRepos = _repositoriesFlow.value.filter {
                 computeCanonicalRepoId(it) != targetRepoId && it.trim() != manifestUrl.trim()
             }
-            reposFile.writeText(json.encodeToString(currentRepos))
+            writeTextAtomically(reposFile, json.encodeToString(currentRepos))
             _repositoriesFlow.value = currentRepos
 
             val currentScrapers = _scrapersFlow.value.filter { scraper ->
@@ -237,7 +249,7 @@ class JsPluginStorage(private val context: Context) {
                     false
                 } else true
             }
-            scrapersMetadataFile.writeText(json.encodeToString(currentScrapers))
+            writeTextAtomically(scrapersMetadataFile, json.encodeToString(currentScrapers))
             _scrapersFlow.value = currentScrapers
 
             // Cleanly delete the partitioned directory for this repo
@@ -261,12 +273,20 @@ class JsPluginStorage(private val context: Context) {
         logo: String?,
         code: String
     ): PluginScraper = withContext(Dispatchers.IO) {
+        if (!isValidJsPluginCode(code)) {
+            throw IllegalArgumentException("Invalid JavaScript plugin code for $name")
+        }
         val repoId = if (repositoryUrl.isNotBlank()) computeCanonicalRepoId(repositoryUrl) else "local"
         mutex.withLock {
             val cleanId = id.substringAfter(":")
             val namespacedId = getStorageKey(repoId, cleanId)
             val codeFile = getPluginScriptFile(repoId, cleanId)
-            codeFile.writeText(code)
+            writeTextAtomically(codeFile, code)
+
+            val existingScraper = _scrapersFlow.value.firstOrNull {
+                it.id == namespacedId || (it.canonicalRepoId == repoId && (it.id == id || it.id.substringAfter(":") == cleanId))
+            }
+            val preservedEnabled = existingScraper?.enabled ?: true
 
             val item = PluginScraper(
                 id = namespacedId,
@@ -277,7 +297,7 @@ class JsPluginStorage(private val context: Context) {
                 version = version,
                 filename = filename,
                 supportedTypes = supportedTypes,
-                enabled = true,
+                enabled = preservedEnabled,
                 hasSettings = false,
                 logo = logo,
                 code = code
@@ -286,10 +306,10 @@ class JsPluginStorage(private val context: Context) {
             val updated = (_scrapersFlow.value.filterNot {
                 it.id == namespacedId || (it.canonicalRepoId == repoId && (it.id == id || it.id.substringAfter(":") == cleanId))
             } + item).distinctBy { it.id }
-            scrapersMetadataFile.writeText(json.encodeToString(updated))
+            writeTextAtomically(scrapersMetadataFile, json.encodeToString(updated))
             _scrapersFlow.value = updated
             com.euthopiar.core.registry.PluginRegistry.Default.registerPlugin(JsUniversalPlugin(item))
-            com.euthopiar.core.registry.PluginRegistry.Default.setPluginEnabled(item.name, true)
+            com.euthopiar.core.registry.PluginRegistry.Default.setPluginEnabled(item.name, preservedEnabled)
             item
         }
     }
@@ -300,7 +320,7 @@ class JsPluginStorage(private val context: Context) {
             val cleanId = id.substringAfter(":")
             val canonicalKey = getStorageKey(repoId, cleanId)
             val codeFile = getPluginScriptFile(repoId, cleanId)
-            codeFile.writeText(code)
+            writeTextAtomically(codeFile, code)
 
             val item = PluginScraper(
                 id = canonicalKey,
@@ -320,7 +340,7 @@ class JsPluginStorage(private val context: Context) {
             val updated = (_scrapersFlow.value.filterNot {
                 it.id == canonicalKey || (it.canonicalRepoId == repoId && (it.id == id || it.id.substringAfter(":") == cleanId))
             } + item).distinctBy { it.id }
-            scrapersMetadataFile.writeText(json.encodeToString(updated))
+            writeTextAtomically(scrapersMetadataFile, json.encodeToString(updated))
             _scrapersFlow.value = updated
             com.euthopiar.core.registry.PluginRegistry.Default.registerPlugin(JsUniversalPlugin(item))
             com.euthopiar.core.registry.PluginRegistry.Default.setPluginEnabled(item.name, true)
@@ -342,7 +362,7 @@ class JsPluginStorage(private val context: Context) {
                     it.copy(enabled = enabled)
                 } else it
             }
-            scrapersMetadataFile.writeText(json.encodeToString(updated))
+            writeTextAtomically(scrapersMetadataFile, json.encodeToString(updated))
             _scrapersFlow.value = updated
         }
     }
@@ -370,7 +390,7 @@ class JsPluginStorage(private val context: Context) {
             val updated = _scrapersFlow.value.filterNot {
                 it.id == targetId || it.id == id
             }
-            scrapersMetadataFile.writeText(json.encodeToString(updated))
+            writeTextAtomically(scrapersMetadataFile, json.encodeToString(updated))
             _scrapersFlow.value = updated
         }
     }
@@ -384,6 +404,130 @@ class JsPluginStorage(private val context: Context) {
         return getEnabledScrapers().filter { scraper ->
             scraper.supportsType(normType)
         }
+    }
+
+    /**
+     * Checks all configured repositories for updated scraper versions, downloads only newer
+     * or missing scripts concurrently, writes them atomically, and preserves the user's enabled preferences.
+     */
+    suspend fun checkAndAutoUpdatePlugins(
+        extraRepoUrls: Set<String> = emptySet(),
+        installNewFromRepos: Boolean = false
+    ): Int = withContext(Dispatchers.IO) {
+        val repoUrls = (_repositoriesFlow.value + extraRepoUrls + _scrapersFlow.value.map { it.repositoryUrl })
+            .filter { it.startsWith("http://", ignoreCase = true) || it.startsWith("https://", ignoreCase = true) }
+            .distinct()
+
+        if (repoUrls.isEmpty()) return@withContext 0
+
+        val fetchedManifests = coroutineScope {
+            repoUrls.map { url ->
+                async(Dispatchers.IO) {
+                    url to fetchRepositoryManifest(url).getOrNull()
+                }
+            }.awaitAll()
+        }
+
+        var totalUpdatedCount = 0
+
+        for ((manifestUrl, manifest) in fetchedManifests) {
+            if (manifest == null) continue
+            val repoId = computeCanonicalRepoId(manifestUrl)
+            val baseUrl = manifestUrl.substringBeforeLast("/") + "/"
+            val currentInstalled = _scrapersFlow.value
+
+            val distinctScrapers = manifest.scrapers.distinctBy { it.id.lowercase().trim() }
+
+            val toDownload = distinctScrapers.mapNotNull { meta ->
+                val cleanMetaId = meta.id.substringAfter(":")
+                val namespacedId = getStorageKey(repoId, cleanMetaId)
+                val existing = currentInstalled.firstOrNull {
+                    it.id == namespacedId || (it.canonicalRepoId == repoId && (it.id == cleanMetaId || it.id.substringAfter(":") == cleanMetaId))
+                }
+                val needsUpdate = (existing != null && (isPluginVersionNewer(existing.version, meta.version) || existing.code.isBlank())) ||
+                        (existing == null && installNewFromRepos)
+                if (needsUpdate) {
+                    Triple(meta, existing, namespacedId)
+                } else null
+            }
+
+            if (toDownload.isEmpty()) continue
+
+            val downloaded = coroutineScope {
+                toDownload.map { (meta, existing, _) ->
+                    async(Dispatchers.IO) {
+                        val scriptUrl = if (meta.filename.startsWith("http")) {
+                            meta.filename
+                        } else {
+                            baseUrl + meta.filename
+                        }
+                        try {
+                            val scriptResponse = httpRequestRaw("GET", scriptUrl, noCacheHeaders, "", followRedirects = true)
+                            if (scriptResponse.status in 200..299 && scriptResponse.body.isNotBlank() && isValidJsPluginCode(scriptResponse.body)) {
+                                Triple(meta, existing, scriptResponse.body)
+                            } else null
+                        } catch (e: Exception) {
+                            android.util.Log.w("JsPluginStorage", "Failed to download update for ${meta.name} ($scriptUrl): ${e.message}")
+                            null
+                        }
+                    }
+                }.awaitAll().filterNotNull()
+            }
+
+            if (downloaded.isEmpty()) continue
+
+            mutex.withLock {
+                val updatedScrapers = _scrapersFlow.value.toMutableList()
+                var updatedInRepo = 0
+
+                for ((meta, existing, code) in downloaded) {
+                    val cleanScraperId = meta.id.substringAfter(":")
+                    val namespacedId = getStorageKey(repoId, cleanScraperId)
+                    val codeFile = getPluginScriptFile(repoId, cleanScraperId)
+                    writeTextAtomically(codeFile, code)
+
+                    val existingIndex = updatedScrapers.indexOfFirst {
+                        it.id == namespacedId || (it.canonicalRepoId == repoId && (it.id == cleanScraperId || it.id.substringAfter(":") == cleanScraperId))
+                    }
+                    val preservedEnabled = existing?.enabled ?: (if (existingIndex >= 0) updatedScrapers[existingIndex].enabled else meta.enabled)
+                    val item = PluginScraper(
+                        id = namespacedId,
+                        repositoryUrl = manifestUrl,
+                        repoId = repoId,
+                        name = meta.name,
+                        description = meta.description ?: "",
+                        version = meta.version,
+                        filename = meta.filename,
+                        supportedTypes = meta.supportedTypes,
+                        enabled = preservedEnabled,
+                        hasSettings = meta.hasSettings,
+                        logo = meta.logo,
+                        formats = meta.formats,
+                        code = code
+                    )
+
+                    if (existingIndex >= 0) {
+                        updatedScrapers[existingIndex] = item
+                    } else {
+                        updatedScrapers.add(item)
+                    }
+
+                    com.euthopiar.core.registry.PluginRegistry.Default.registerPlugin(JsUniversalPlugin(item))
+                    com.euthopiar.core.registry.PluginRegistry.Default.setPluginEnabled(item.name, preservedEnabled)
+                    android.util.Log.i("JsPluginStorage", "Auto-updated plugin ${meta.name}: ${existing?.version ?: "none"} -> ${meta.version}")
+                    updatedInRepo++
+                }
+
+                if (updatedInRepo > 0) {
+                    val distinctUpdated = updatedScrapers.distinctBy { it.id }
+                    writeTextAtomically(scrapersMetadataFile, json.encodeToString(distinctUpdated))
+                    _scrapersFlow.value = distinctUpdated
+                    totalUpdatedCount += updatedInRepo
+                }
+            }
+        }
+
+        totalUpdatedCount
     }
 
     companion object {

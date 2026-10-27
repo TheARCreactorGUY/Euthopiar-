@@ -11,6 +11,7 @@ import androidx.media3.extractor.PositionHolder
 import androidx.media3.extractor.SeekMap
 import androidx.media3.extractor.SeekPoint
 import androidx.media3.extractor.TrackOutput
+import androidx.media3.extractor.mkv.MatroskaExtractor
 
 @UnstableApi
 class SequentialMatroskaExtractorsFactory(
@@ -21,7 +22,7 @@ class SequentialMatroskaExtractorsFactory(
         val extractors = DefaultExtractorsFactory()
             .setConstantBitrateSeekingEnabled(true)
             .setConstantBitrateSeekingAlwaysEnabled(true)
-            .setMatroskaExtractorFlags(0) // Cues seeking ENABLED
+            .setMatroskaExtractorFlags(MatroskaExtractor.FLAG_DISABLE_SEEK_FOR_CUES)
             .createExtractors()
 
         return extractors.map { delegate ->
@@ -57,9 +58,22 @@ class SafeSeekMap(
     private val session: SequentialStreamSession
 ) : SeekMap {
 
-    override fun isSeekable(): Boolean = delegate.isSeekable || delegate.durationUs != C.TIME_UNSET
+    override fun isSeekable(): Boolean = true
 
-    override fun getDurationUs(): Long = delegate.durationUs
+    override fun getDurationUs(): Long {
+        if (delegate.durationUs != C.TIME_UNSET && delegate.durationUs > 0) {
+            return delegate.durationUs
+        }
+        val parsedDuration = session.clusterIndex.parsedDurationUs
+        if (parsedDuration != C.TIME_UNSET && parsedDuration > 0) {
+            return parsedDuration
+        }
+        val maxIndexedTime = session.clusterIndex.getMaxIndexedTimeUs()
+        if (maxIndexedTime > 0) {
+            return maxIndexedTime
+        }
+        return C.TIME_UNSET
+    }
 
     override fun getSeekPoints(timeUs: Long): SeekMap.SeekPoints {
         // User requested seek to 0:00 -> SeekPoint.START is standard and expected
@@ -79,7 +93,7 @@ class SafeSeekMap(
         // Delegate returned SeekPoint.START (time = 0, pos = 0) or is unseekable.
         // This occurs when Cues are still loading or absent.
         // We MUST NEVER return SeekPoint.START (00:00) for non-zero seek timestamps!
-        val durationUs = delegate.durationUs
+        val durationUs = getDurationUs()
         val dynamicSeekMap = DynamicClusterSeekMap(
             if (durationUs != C.TIME_UNSET) durationUs else 0L,
             session

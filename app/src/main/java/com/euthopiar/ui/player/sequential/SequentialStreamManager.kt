@@ -25,8 +25,10 @@ object SequentialStreamManager {
     fun isSequentialStream(
         url: String,
         container: StreamContainer? = null,
-        responseHeaders: Map<String, String> = emptyMap()
+        responseHeaders: Map<String, String> = emptyMap(),
+        isLive: Boolean = false
     ): Boolean {
+        if (isLive) return false
         val trimmedUrl = url.trim()
         val urlLower = trimmedUrl.lowercase()
 
@@ -73,15 +75,29 @@ object SequentialStreamManager {
             return true
         }
 
-        // 7. Progressive container check: container in [MP4, MKV, WEBM, AUTO] or null/unspecified
-        val validContainers = setOf(
-            StreamContainer.MP4,
-            StreamContainer.MKV,
-            StreamContainer.WEBM,
-            StreamContainer.AUTO
-        )
+        // 7. Non-range / non-seekable cloud hosts
+        if (isKnownSequentialCloudHost(urlLower)) {
+            return true
+        }
 
-        return container == null || container in validContainers
+        return false
+    }
+
+    /**
+     * Identifies known cloud download hosts (e.g. Google CDN, HubCloud, Cloudflare workers)
+     * that serve rate-limited or single-pipe video streams.
+     */
+    fun isKnownSequentialCloudHost(url: String): Boolean {
+        val u = url.trim().lowercase()
+        return u.contains("googleusercontent.com") ||
+                u.contains("drive.usercontent.google.com") ||
+                u.contains("docs.googleusercontent.com") ||
+                u.contains("video-seed.dev") ||
+                u.contains("cdn.video-gen.xyz") ||
+                u.contains("pixel.hubcloud") ||
+                u.contains("gpdl.hubcloud") ||
+                u.contains("hubcloud") ||
+                u.contains("workers.dev")
     }
 
     /**
@@ -172,6 +188,13 @@ object SequentialStreamManager {
         ).also {
             activeSession = it
         }
+    }
+
+    fun getActiveSession(): SequentialStreamSession? = activeSession
+
+    fun getSession(url: String): SequentialStreamSession? {
+        val current = activeSession
+        return if (current != null && (current.url == url || current.resolvedUrl == url) && !current.isClosed) current else null
     }
 
     @Synchronized

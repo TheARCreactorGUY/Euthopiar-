@@ -105,3 +105,22 @@ Before completing any task or declaring success:
    BUILD SUCCESSFUL
    ```
 3. If the build fails, fix your changes immediately before reporting.
+
+---
+
+## 🎬 6. STREAMING ENGINE & SCRAPER ARCHITECTURE RULES
+
+### Scraper Invariants (QuickJS Plugins)
+- **Ad Redirector Blacklist**: When scraping gateways/lockers (GDFlix, HubCloud, LinksMod, etc.), NEVER extract links solely based on button text (`download`, `instant`, `fast cloud`). Always verify that `href` does not match `/busycdn|rtmark|redirect|advert|ad\.|shortlink|clk/i` and strictly matches valid media (`.mkv`, `.mp4`, `.m3u8`) or verified lockers (`r2.dev`, `pixeldrain`, `googleusercontent`, `workers.dev`, `gofile.io`). Ad redirectors return HTML pages that crash ExoPlayer with `UnrecognizedInputFormatException`.
+- **Metadata Fallbacks**: Stream items must never have `serverName` or `displayName` as `undefined`. Always assign fallbacks: `item.serverName || item.displayName || item.title || 'Direct Server'`.
+- **Defunct Worker Filtering**: Always filter out known defunct Cloudflare Worker subdomains (e.g. `icy-king-205d`, `download.goldmines`) that return HTTP 403 Forbidden.
+- **Manual Redirects on Gateways (`redirect: 'manual'` Rule)**: Always probe redirect gateways (`pixel.hubcloud`, `fast-dl.one`, `driveseed`) with `redirect: 'manual'` to read the `Location` header before returning URLs to ExoPlayer. Never call `await res.text()` with default `follow` on binary video streams (2GB Binary Redirect RAM trap).
+- **Pre-Signed Cloud Header Rules**: Never attach foreign `Origin`, `Referer`, or `Authorization` headers to pre-signed S3, R2, or Google CDN links.
+
+### Progressive Cloud Streaming Pipeline
+- **HTTP Range Seeking Acceleration**: In `SequentialStreamSession` and `SequentialStreamDataSource`, whenever `acceptsRanges` is true, forward seek requests outside the buffered region must immediately dispatch an HTTP Range request (`Range: bytes=<target>-`) rather than blocking on linear sequential bridging.
+- **Disk Chunk Caching**: Maintain chunked local disk persistence (`chunk_*.bin`) and EBML cluster indexing so local re-reads, backwards seeking, and repeat playback hit disk cache with zero network overhead.
+
+### Stream Testing Protocol
+- When testing stream sources, disable Smart Failover to prevent automatic fallback. Collect data across multiple pieces of content before applying code changes. Respect the 3-second player HUD auto-hide window.
+

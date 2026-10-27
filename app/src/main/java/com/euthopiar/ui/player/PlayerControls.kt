@@ -256,6 +256,7 @@ fun PlayerTopBar(
     title: String,
     subtitle: String?,
     isTvSeries: Boolean,
+    isLiveStream: Boolean = false,
     seasonNumber: Int?,
     episodeNumber: Int?,
     isEpisodeSelectorOpen: Boolean = false,
@@ -346,12 +347,30 @@ fun PlayerTopBar(
             Column(
                 modifier = Modifier.weight(1f, fill = true)
             ) {
-                Text(
-                    text = title,
-                    style = PlayerTokens.HeaderTitle,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = title,
+                        style = PlayerTokens.HeaderTitle,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    if (isLiveStream) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Box(
+                            modifier = Modifier
+                                .clip(PlayerTokens.RadiusPill)
+                                .background(Color(0xFFE50914))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = "LIVE",
+                                color = Color.White,
+                                style = PlayerTokens.TooltipLabel.copy(fontWeight = FontWeight.Bold)
+                            )
+                        }
+                    }
+                }
 
                 // Subtitle: year / S1 · E4 + server + quality
                 val metaParts = mutableListOf<String>()
@@ -559,6 +578,7 @@ fun PlayerCenterCluster(
     isLoading: Boolean,
     isBuffering: Boolean,
     seekIntervalSeconds: Int,
+    isLiveStream: Boolean = false,
     hasPreviousEpisode: Boolean = false,
     hasNextEpisode: Boolean = false,
     onPreviousEpisode: () -> Unit = {},
@@ -619,38 +639,40 @@ fun PlayerCenterCluster(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(gap)
                 ) {
-                // Optional Previous Episode (if TV series)
-                if (hasPreviousEpisode) {
-                    Box(
-                        modifier = Modifier
-                            .size(sideSize)
-                            .videoOverlayGlass(shape = PlayerTokens.RadiusCircle)
-                            .tvFocusable(shape = PlayerTokens.RadiusCircle)
-                            .playerPressable(
-                                enabled = !isSpinning,
-                                role = Role.Button,
-                                onClickLabel = "Previous Episode",
-                                onClick = onPreviousEpisode
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.SkipPrevious,
-                            contentDescription = "Previous Episode",
-                            tint = Color.White,
-                            modifier = Modifier.size(24.dp)
-                        )
+                if (!isLiveStream) {
+                    // Optional Previous Episode (if TV series)
+                    if (hasPreviousEpisode) {
+                        Box(
+                            modifier = Modifier
+                                .size(sideSize)
+                                .videoOverlayGlass(shape = PlayerTokens.RadiusCircle)
+                                .tvFocusable(shape = PlayerTokens.RadiusCircle)
+                                .playerPressable(
+                                    enabled = !isSpinning,
+                                    role = Role.Button,
+                                    onClickLabel = "Previous Episode",
+                                    onClick = onPreviousEpisode
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.SkipPrevious,
+                                contentDescription = "Previous Episode",
+                                tint = Color.White,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
                     }
-                }
 
-                // Rewind 10 seconds button (56 dp circle, rotates 20 deg on tap)
-                SeekIntervalButton(
-                    isForward = false,
-                    size = sideSize,
-                    intervalSeconds = seekIntervalSeconds,
-                    dimmed = isSpinning,
-                    onClick = { onSeekRelative(-seekIntervalSeconds * 1000L) }
-                )
+                    // Rewind 10 seconds button (56 dp circle, rotates 20 deg on tap)
+                    SeekIntervalButton(
+                        isForward = false,
+                        size = sideSize,
+                        intervalSeconds = seekIntervalSeconds,
+                        dimmed = isSpinning,
+                        onClick = { onSeekRelative(-seekIntervalSeconds * 1000L) }
+                    )
+                }
 
                 // Play / Pause / Buffering Primary Button
                 Box(
@@ -707,36 +729,38 @@ fun PlayerCenterCluster(
                     }
                 }
 
-                // Forward 10 seconds button (56 dp circle, rotates 20 deg on tap)
-                SeekIntervalButton(
-                    isForward = true,
-                    size = sideSize,
-                    intervalSeconds = seekIntervalSeconds,
-                    dimmed = isSpinning,
-                    onClick = { onSeekRelative(seekIntervalSeconds * 1000L) }
-                )
+                if (!isLiveStream) {
+                    // Forward 10 seconds button (56 dp circle, rotates 20 deg on tap)
+                    SeekIntervalButton(
+                        isForward = true,
+                        size = sideSize,
+                        intervalSeconds = seekIntervalSeconds,
+                        dimmed = isSpinning,
+                        onClick = { onSeekRelative(seekIntervalSeconds * 1000L) }
+                    )
 
-                // Optional Next Episode (if TV series)
-                if (hasNextEpisode) {
-                    Box(
-                        modifier = Modifier
-                            .size(sideSize)
-                            .videoOverlayGlass(shape = PlayerTokens.RadiusCircle)
-                            .tvFocusable(shape = PlayerTokens.RadiusCircle)
-                            .playerPressable(
-                                enabled = !isSpinning,
-                                role = Role.Button,
-                                onClickLabel = "Next Episode",
-                                onClick = onNextEpisode
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.SkipNext,
-                            contentDescription = "Next Episode",
-                            tint = Color.White,
-                            modifier = Modifier.size(24.dp)
-                        )
+                    // Optional Next Episode (if TV series)
+                    if (hasNextEpisode) {
+                        Box(
+                            modifier = Modifier
+                                .size(sideSize)
+                                .videoOverlayGlass(shape = PlayerTokens.RadiusCircle)
+                                .tvFocusable(shape = PlayerTokens.RadiusCircle)
+                                .playerPressable(
+                                    enabled = !isSpinning,
+                                    role = Role.Button,
+                                    onClickLabel = "Next Episode",
+                                    onClick = onNextEpisode
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.SkipNext,
+                                contentDescription = "Next Episode",
+                                tint = Color.White,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -1486,6 +1510,7 @@ fun PlayerBottomControls(
     scrubPositionMs: Long,
     playbackSpeed: Float,
     isTvSeries: Boolean,
+    isLiveStream: Boolean = false,
     hasNextEpisode: Boolean,
     mediaTitle: String = "",
     episodeTitle: String? = null,
@@ -1799,20 +1824,53 @@ fun PlayerBottomControls(
             }
             Spacer(modifier = Modifier.height(4.dp))
 
-            // Timeline (Section 3.4)
-            PlayerScrubber(
-                currentPositionMs = currentPositionMs,
-                durationMs = durationMs,
-                bufferedPositionMs = bufferedPositionMs,
-                isScrubbing = isScrubbing,
-                scrubPositionMs = scrubPositionMs,
-                showRemainingTime = showRemainingTime,
-                onToggleRemainingTime = onToggleRemainingTime,
-                onScrubStart = onScrubStart,
-                onScrubProgress = onScrubProgress,
-                onScrubEnd = onScrubEnd,
-                modifier = Modifier.fillMaxWidth()
-            )
+            // Timeline / Live Indicator (Section 3.4)
+            if (isLiveStream) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(PlayerTokens.TouchTargetMin),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .clip(PlayerTokens.RadiusPill)
+                            .background(Color(0xFFE50914).copy(alpha = 0.20f))
+                            .border(1.dp, Color(0xFFE50914).copy(alpha = 0.60f), PlayerTokens.RadiusPill)
+                            .padding(horizontal = 14.dp, vertical = 6.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFE50914))
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "LIVE",
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                style = PlayerTokens.PillText
+                            )
+                        }
+                    }
+                }
+            } else {
+                PlayerScrubber(
+                    currentPositionMs = currentPositionMs,
+                    durationMs = durationMs,
+                    bufferedPositionMs = bufferedPositionMs,
+                    isScrubbing = isScrubbing,
+                    scrubPositionMs = scrubPositionMs,
+                    showRemainingTime = showRemainingTime,
+                    onToggleRemainingTime = onToggleRemainingTime,
+                    onScrubStart = onScrubStart,
+                    onScrubProgress = onScrubProgress,
+                    onScrubEnd = onScrubEnd,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
 
             Spacer(modifier = Modifier.height(8.dp))
 

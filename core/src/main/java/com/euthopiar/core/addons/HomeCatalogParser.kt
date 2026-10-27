@@ -5,7 +5,10 @@ import com.euthopiar.core.model.MediaType
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -39,10 +42,10 @@ object HomeCatalogParser {
         maxItems: Int? = null
     ): ParsedCatalogResponse {
         val root = try {
-            json.parseToJsonElement(payload).jsonObject
+            json.parseToJsonElement(payload) as? JsonObject
         } catch (_: Exception) {
-            return ParsedCatalogResponse(emptyList(), 0, null)
-        }
+            null
+        } ?: return ParsedCatalogResponse(emptyList(), 0, null)
 
         val metas = root.array("metas")
         val parsedItems = buildList {
@@ -59,9 +62,25 @@ object HomeCatalogParser {
                     continue
                 }
 
-                val mediaType = when (typeStr.lowercase()) {
-                    "series", "tv" -> MediaType.TV_SERIES
-                    "anime" -> MediaType.ANIME
+                val hintsObj = meta["behaviorHints"] as? JsonObject
+                val isLiveHint = hintsObj?.boolean("isLive") == true ||
+                    hintsObj?.string("type")?.equals("channel", ignoreCase = true) == true ||
+                    hintsObj?.string("type")?.equals("live", ignoreCase = true) == true
+
+                val isVodId = id.startsWith("tt", ignoreCase = true) ||
+                    id.all { it.isDigit() } ||
+                    listOf("tmdb:", "imdb:", "kitsu:", "anilist:", "mal:", "jikan:", "tmdb/").any { id.startsWith(it, ignoreCase = true) }
+
+                val isLiveTv = typeStr.equals("channel", ignoreCase = true) ||
+                    typeStr.equals("live", ignoreCase = true) ||
+                    typeStr.equals("tv_channel", ignoreCase = true) ||
+                    isLiveHint ||
+                    (typeStr.equals("tv", ignoreCase = true) && !isVodId)
+
+                val mediaType = when {
+                    isLiveTv -> MediaType.LIVE_TV
+                    typeStr.equals("series", ignoreCase = true) || typeStr.equals("tv", ignoreCase = true) -> MediaType.TV_SERIES
+                    typeStr.equals("anime", ignoreCase = true) -> MediaType.ANIME
                     else -> MediaType.MOVIE
                 }
 
@@ -107,8 +126,25 @@ object HomeCatalogParser {
         )
     }
 
-    private fun JsonObject.string(name: String): String? =
-        this[name]?.jsonPrimitive?.contentOrNull?.trim()
+    private fun JsonObject.string(name: String): String? {
+        val primitive = this[name] as? JsonPrimitive ?: return null
+        if (primitive is kotlinx.serialization.json.JsonNull) return null
+        if (!primitive.isString && primitive.content.equals("null", ignoreCase = true)) return null
+        val content = primitive.contentOrNull?.trim()
+        return if (content.isNullOrBlank()) null else content
+    }
+
+    private fun JsonObject.boolean(name: String): Boolean? {
+        val primitive = this[name] as? JsonPrimitive ?: return null
+        if (primitive is kotlinx.serialization.json.JsonNull) return null
+        return primitive.booleanOrNull ?: primitive.contentOrNull?.toBooleanStrictOrNull()
+    }
+
+    private fun JsonObject.int(name: String): Int? {
+        val primitive = this[name] as? JsonPrimitive ?: return null
+        if (primitive is kotlinx.serialization.json.JsonNull) return null
+        return primitive.intOrNull ?: primitive.contentOrNull?.toIntOrNull()
+    }
 
     private fun JsonObject.array(name: String): JsonArray =
         this[name] as? JsonArray ?: JsonArray(emptyList())
