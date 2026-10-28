@@ -52,7 +52,41 @@ object TmdbBridge {
     private val logoCache = ConcurrentHashMap<String, String>()
     private val enrichedCache = ConcurrentHashMap<String, EnrichedMetadata>()
     private val seasonCache = ConcurrentHashMap<String, Map<Int, EpisodeDetail>>()
-    @Volatile private var cachedHomeCatalog: Pair<Long, List<CatalogRow>>? = null
+    @Volatile var activeRegionPreset: ContentRegionPreset = ContentRegionPreset.GLOBAL
+    private val cachedHomeCatalog = ConcurrentHashMap<String, Pair<Long, List<CatalogRow>>>()
+    private val nowPlayingMovieIds = ConcurrentHashMap.newKeySet<String>()
+
+    fun resolveReleaseStatus(
+        id: String,
+        isTv: Boolean,
+        releaseDateStr: String?,
+        feedForcedStatus: ReleaseStatus? = null
+    ): ReleaseStatus? {
+        val parsedDate = releaseDateStr?.let { dateStr ->
+            runCatching { java.time.LocalDate.parse(dateStr) }.getOrNull()
+        }
+        val today = java.time.LocalDate.now()
+
+        if (parsedDate != null && parsedDate.isAfter(today)) {
+            return ReleaseStatus.UPCOMING
+        }
+        if (feedForcedStatus == ReleaseStatus.UPCOMING) {
+            return ReleaseStatus.UPCOMING
+        }
+        if (!isTv) {
+            if (feedForcedStatus == ReleaseStatus.IN_CINEMAS) {
+                nowPlayingMovieIds.add(id)
+                return ReleaseStatus.IN_CINEMAS
+            }
+            if (nowPlayingMovieIds.contains(id)) {
+                return ReleaseStatus.IN_CINEMAS
+            }
+            if (parsedDate != null && !parsedDate.isAfter(today) && !parsedDate.isBefore(today.minusDays(42))) {
+                return ReleaseStatus.IN_CINEMAS
+            }
+        }
+        return ReleaseStatus.RELEASED
+    }
 
     data class EnrichedMetadata(
         val tmdbId: String,
@@ -235,11 +269,15 @@ object TmdbBridge {
         }
     }
 
+    fun clearHomeCatalogCache() {
+        cachedHomeCatalog.clear()
+    }
+
     internal fun clearCachesForTesting() {
         logoCache.clear()
         enrichedCache.clear()
         seasonCache.clear()
-        cachedHomeCatalog = null
+        cachedHomeCatalog.clear()
         imdbIdCache.clear()
         rawDetailsJsonCache.clear()
         rawExternalIdsJsonCache.clear()
@@ -429,6 +467,7 @@ object TmdbBridge {
     suspend fun fetchTrendingTopTen(
         type: MediaType,
         language: String = "en-US",
+        preset: ContentRegionPreset = activeRegionPreset,
         client: OkHttpClient = DohDns.metadataClient,
         apiKey: String = DEFAULT_API_KEY,
         dispatcher: CoroutineDispatcher = Dispatchers.IO
@@ -438,7 +477,18 @@ object TmdbBridge {
                 MediaType.TV_SERIES, MediaType.ANIME -> "tv"
                 else -> "movie"
             }
-            val url = appendApiKey("$BASE_URL/trending/$endpointType/day?language=$language", apiKey)
+            val todayStr = java.time.LocalDate.now().toString()
+            val url = if (preset == ContentRegionPreset.GLOBAL) {
+                appendApiKey("$BASE_URL/trending/$endpointType/day?language=$language", apiKey)
+            } else {
+                val dateFilter = if (endpointType == "tv") {
+                    "first_air_date.lte=$todayStr"
+                } else {
+                    "primary_release_date.lte=$todayStr"
+                }
+                val langParam = preset.originalLanguages?.let { "with_original_language=$it&" } ?: ""
+                appendApiKey("$BASE_URL/discover/$endpointType?${langParam}sort_by=popularity.desc&$dateFilter", apiKey)
+            }
             val request = Request.Builder()
                 .url(url)
                 .header("User-Agent", DEFAULT_USER_AGENT)
@@ -472,6 +522,7 @@ object TmdbBridge {
                     val backdropUrl = backdropPath?.let { "https://image.tmdb.org/t/p/w1280$it" }
                     val ratingStr = voteAverage?.let { String.format(Locale.US, "%.1f", it) }
 
+                    val relStatus = resolveReleaseStatus(id, type == MediaType.TV_SERIES || type == MediaType.ANIME, releaseDate, null)
                     items.add(
                         MediaItem(
                             id = id,
@@ -483,7 +534,9 @@ object TmdbBridge {
                             year = year,
                             rating = ratingStr,
                             quality = "1080p",
-                            provider = "tmdb"
+                            provider = "tmdb",
+                            releaseDate = releaseDate,
+                            releaseStatus = relStatus
                         )
                     )
                 }
@@ -543,6 +596,7 @@ object TmdbBridge {
                     val backdropUrl = backdropPath?.let { "https://image.tmdb.org/t/p/w1280$it" }
                     val ratingStr = voteAverage?.let { String.format(Locale.US, "%.1f", it) }
 
+                    val relStatus = resolveReleaseStatus(id, isTv, releaseDate, null)
                     items.add(
                         MediaItem(
                             id = id,
@@ -554,7 +608,9 @@ object TmdbBridge {
                             year = year,
                             rating = ratingStr,
                             quality = "1080p",
-                            provider = "tmdb"
+                            provider = "tmdb",
+                            releaseDate = releaseDate,
+                            releaseStatus = relStatus
                         )
                     )
                 }
@@ -582,8 +638,8 @@ object TmdbBridge {
         apiKey: String = DEFAULT_API_KEY,
         dispatcher: CoroutineDispatcher = Dispatchers.IO
     ): OnboardingShowcase = coroutineScope {
-        val moviesDeferred = async(dispatcher) { fetchTrendingTopTen(MediaType.MOVIE, language, client, apiKey, dispatcher) }
-        val tvDeferred = async(dispatcher) { fetchTrendingTopTen(MediaType.TV_SERIES, language, client, apiKey, dispatcher) }
+        val moviesDeferred = async(dispatcher) { fetchTrendingTopTen(type = MediaType.MOVIE, language = language, client = client, apiKey = apiKey, dispatcher = dispatcher) }
+        val tvDeferred = async(dispatcher) { fetchTrendingTopTen(type = MediaType.TV_SERIES, language = language, client = client, apiKey = apiKey, dispatcher = dispatcher) }
         val topTenDeferred = async(dispatcher) { fetchTrendingAll("day", language, client, apiKey, dispatcher) }
 
         val movies = moviesDeferred.await()
@@ -1506,6 +1562,7 @@ object TmdbBridge {
                     val rYear = rDate?.take(4)?.toIntOrNull()
                     val rType = if (isTv) MediaType.TV_SERIES else MediaType.MOVIE
 
+                    val rStatus = resolveReleaseStatus(rId, isTv, rDate, null)
                     recsList.add(
                         MediaItem(
                             id = rId,
@@ -1516,7 +1573,9 @@ object TmdbBridge {
                             type = rType,
                             year = rYear,
                             rating = rObj["vote_average"]?.jsonPrimitive?.doubleOrNull?.let { String.format(Locale.US, "%.1f", it) },
-                            provider = providerName
+                            provider = providerName,
+                            releaseDate = rDate,
+                            releaseStatus = rStatus
                         )
                     )
                 }
@@ -1776,8 +1835,15 @@ object TmdbBridge {
         url: String,
         providerName: String,
         resolveLogos: Boolean = false,
-        apiKey: String = DEFAULT_API_KEY
+        apiKey: String = DEFAULT_API_KEY,
+        eyebrow: String? = null,
+        subtitle: String? = null
     ): CatalogRow? = withContext(Dispatchers.IO) {
+        val feedForcedStatus = when {
+            url.contains("/movie/now_playing") || url.contains("with_release_type=2|3") || title.contains("In Cinemas", ignoreCase = true) -> ReleaseStatus.IN_CINEMAS
+            url.contains("/movie/upcoming") || url.contains("primary_release_date.gt=") || title.contains("Upcoming", ignoreCase = true) -> ReleaseStatus.UPCOMING
+            else -> null
+        }
         try {
             val req = Request.Builder().url(url).header("User-Agent", DEFAULT_USER_AGENT).build()
             client.newCall(req).execute().use { resp ->
@@ -1806,6 +1872,7 @@ object TmdbBridge {
                     val year = dateStr?.take(4)?.toIntOrNull()
                     val vote = obj["vote_average"]?.jsonPrimitive?.doubleOrNull
 
+                    val relStatus = resolveReleaseStatus(id, isTv, dateStr, feedForcedStatus)
                     items.add(
                         MediaItem(
                             id = id,
@@ -1817,30 +1884,109 @@ object TmdbBridge {
                             year = year,
                             rating = vote?.let { String.format(Locale.US, "%.1f", it) },
                             quality = "1080p",
-                            provider = providerName
+                            provider = providerName,
+                            releaseDate = dateStr,
+                            releaseStatus = relStatus
                         )
                     )
                 }
 
-                // For candidate hero items, resolve top 6 logos quickly
+                // Cache soap genre if present
+                for (elem in resultsArr) {
+                    val obj = elem.jsonObject
+                    val id = obj["id"]?.jsonPrimitive?.contentOrNull ?: continue
+                    val gIds = obj["genre_ids"]?.jsonArray?.mapNotNull { it.jsonPrimitive.intOrNull } ?: emptyList()
+                    if (gIds.contains(SOAP_GENRE_ID)) {
+                        indianTvSerialsCache.add(id)
+                    }
+                }
+
+                // For candidate hero items, resolve top 6 logos quickly (excluding Indian TV serials when in Indian regions)
                 val finalItems = if (resolveLogos && items.isNotEmpty()) {
                     coroutineScope {
-                        items.take(6).map { item ->
-                            async {
-                                val logo = resolveLogo(client, item.id, item.type == MediaType.TV_SERIES, apiKey = apiKey)
-                                item.copy(logoUrl = logo)
+                        val candidateItems = if (activeRegionPreset.isIndianRegion) {
+                            items.filterNot { isIndianTvSerial(it) }
+                        } else {
+                            items
+                        }
+                        val topIdsToResolve = candidateItems.take(6).map { it.id }.toSet()
+                        items.map { item ->
+                            if (item.id in topIdsToResolve) {
+                                async {
+                                    val logo = resolveLogo(client, item.id, item.type == MediaType.TV_SERIES, apiKey = apiKey)
+                                    item.copy(logoUrl = logo)
+                                }
+                            } else {
+                                async { item }
                             }
-                        }.awaitAll() + items.drop(6)
+                        }.awaitAll()
                     }
                 } else {
                     items
                 }
 
-                if (finalItems.isNotEmpty()) CatalogRow(title = title, items = finalItems) else null
+                val cleanTitle = title.replace(Regex("\\s*\\([^)]*\\)"), "").trim()
+                val cleanEyebrow = eyebrow?.replace(Regex("\\s*\\([^)]*\\)"), "")?.trim()
+                val cleanSubtitle = subtitle?.replace(Regex("\\s*\\([^)]*\\)"), "")?.trim()
+
+                if (finalItems.isNotEmpty()) {
+                    CatalogRow(
+                        title = cleanTitle,
+                        items = finalItems,
+                        subtitle = cleanSubtitle,
+                        eyebrow = cleanEyebrow
+                    )
+                } else null
             }
         } catch (_: Exception) {
             null
         }
+    }
+
+    const val SOAP_GENRE_ID: Int = 10766
+
+    val SOAP_NETWORKS: Set<String> = setOf(
+        "starplus", "star plus", "zee tv", "colors", "colors tv",
+        "sony entertainment television", "set india", "sony sab", "sab tv",
+        "star bharat", "life ok", "sun tv", "star maa", "zee telugu",
+        "zee tamil", "star vijay", "vijay tv", "asianet", "colors kannada",
+        "zee kannada", "dangal tv", "dangal", "dd national", "&tv", "and tv",
+        "star pravah", "zee marathi", "colors marathi", "zee bangla", "star jalsha"
+    )
+
+    val KNOWN_SOAP_TITLES: List<String> = listOf(
+        "anupamaa", "balika vadhu", "kyunki saas", "kasauti", "yeh rishta",
+        "kundali bhagya", "kumkum bhagya", "bhabiji ghar", "taarak mehta",
+        "c.i.d.", "cid", "crime patrol", "savdhaan india", "naagin",
+        "ghum hai kisikey", "imlie", "karthika deepam", "sembaruthi", "roja",
+        "ishqbaaaz", "jodha akbar", "jodha & akbar", "pavitra rishta", "jhanak",
+        "qubool hai", "sasural simar", "diya aur baati", "saath nibhaana",
+        "mann kee awaaz", "uttaran", "choti sarrdaarni", "udaariyaan",
+        "balveer", "pushpa impossible", "mangal lakshmi", "radhakrishn"
+    )
+
+    val indianTvSerialsCache: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * Determines whether a given media item is an Indian TV serial (daily broadcast soap opera),
+     * ensuring it is distinguished from streaming OTT Web Series and excluded from the Home Hero Carousel.
+     */
+    fun isIndianTvSerial(item: MediaItem): Boolean {
+        if (item.type != MediaType.TV_SERIES) return false
+        val cleanId = item.id.removePrefix("tmdb:").removePrefix("tmdb/").substringBefore(':').substringBefore('/')
+        if (indianTvSerialsCache.contains(cleanId)) return true
+
+        val titleLower = item.title.lowercase(Locale.ROOT)
+        if (KNOWN_SOAP_TITLES.any { serial -> titleLower.contains(serial) }) {
+            if (cleanId.isNotBlank()) indianTvSerialsCache.add(cleanId)
+            return true
+        }
+
+        if (item.genres.any { it.equals("Soap", ignoreCase = true) || it.contains("Soap", ignoreCase = true) }) {
+            if (cleanId.isNotBlank()) indianTvSerialsCache.add(cleanId)
+            return true
+        }
+        return false
     }
 
     /**
@@ -1888,41 +2034,171 @@ object TmdbBridge {
     )
 
     /**
+     * Model representing a catalog rail feed definition supporting AccentBar, RuleLine, and Eyebrow styles.
+     * Contains clean title (strictly no brackets), target URL, logo resolution flag, uppercase eyebrow, and subtitle.
+     */
+    data class FeedDef(
+        val title: String,
+        val url: String,
+        val resolveLogos: Boolean = false,
+        val eyebrow: String? = null,
+        val subtitle: String? = null
+    )
+
+    private fun deriveProgressiveEyebrow(title: String): String {
+        return when {
+            title.contains("Action", ignoreCase = true) -> "ACTION"
+            title.contains("Sci-Fi", ignoreCase = true) -> "SCI-FI"
+            title.contains("Thriller", ignoreCase = true) -> "THRILLER"
+            title.contains("Horror", ignoreCase = true) -> "HORROR"
+            title.contains("Comedy", ignoreCase = true) -> "COMEDY"
+            title.contains("Animation", ignoreCase = true) || title.contains("Anime", ignoreCase = true) -> "ANIMATION"
+            title.contains("Crime", ignoreCase = true) -> "CRIME"
+            title.contains("Fantasy", ignoreCase = true) -> "FANTASY"
+            title.contains("Romantic", ignoreCase = true) -> "ROMANCE"
+            title.contains("Docu", ignoreCase = true) -> "DOCUMENTARY"
+            title.contains("Drama", ignoreCase = true) -> "DRAMA"
+            title.contains("War", ignoreCase = true) -> "WAR"
+            title.contains("Western", ignoreCase = true) -> "WESTERN"
+            title.contains("Cyberpunk", ignoreCase = true) -> "CYBERPUNK"
+            title.contains("Superhero", ignoreCase = true) -> "HEROES"
+            title.contains("Critically", ignoreCase = true) || title.contains("Acclaimed", ignoreCase = true) -> "TOP RATED"
+            title.contains("Hidden Gems", ignoreCase = true) -> "SPOTLIGHT"
+            else -> "CURATED"
+        }
+    }
+
+    /**
+     * Builds the regional core feeds tailored to the specified preset.
+     * Guaranteed zero brackets in any header title. Configured with eyebrow and subtitle
+     * to seamlessly support all three header styles (AccentBar, RuleLine, and Eyebrow).
+     */
+    fun buildRegionalCoreFeeds(
+        preset: ContentRegionPreset,
+        todayStr: String,
+        apiKey: String
+    ): List<FeedDef> {
+        return if (preset == ContentRegionPreset.GLOBAL) {
+            listOf(
+                FeedDef("Trending Today", appendApiKey("$BASE_URL/trending/all/day", apiKey), resolveLogos = true, eyebrow = "SPOTLIGHT", subtitle = "Top trending titles today"),
+                FeedDef("Trending Movies", appendApiKey("$BASE_URL/trending/movie/week", apiKey), resolveLogos = true, eyebrow = "MOVIES", subtitle = "Most popular movies this week"),
+                FeedDef("Popular Movies", appendApiKey("$BASE_URL/movie/popular", apiKey), resolveLogos = true, eyebrow = "POPULAR", subtitle = "Global box office hits"),
+                FeedDef("Popular TV Shows", appendApiKey("$BASE_URL/tv/popular", apiKey), resolveLogos = true, eyebrow = "SERIES", subtitle = "Top television & web series"),
+                FeedDef("Top Rated Movies", appendApiKey("$BASE_URL/movie/top_rated", apiKey), resolveLogos = false, eyebrow = "TOP RATED", subtitle = "Highest rated by audiences"),
+                FeedDef("Binge-Worthy TV Series", appendApiKey("$BASE_URL/trending/tv/week", apiKey), resolveLogos = false, eyebrow = "BINGE", subtitle = "Trending series this week")
+            )
+        } else if (preset == ContentRegionPreset.SOUTH_INDIA_ALL) {
+            val feeds = mutableListOf<FeedDef>()
+            val teTaMlKn = "te|ta|ml|kn"
+            feeds.add(FeedDef("Trending in South India", appendApiKey("$BASE_URL/discover/movie?with_original_language=$teTaMlKn&region=IN&sort_by=popularity.desc&primary_release_date.lte=$todayStr", apiKey), resolveLogos = true, eyebrow = "SPOTLIGHT", subtitle = "Trending regional blockbusters"))
+            feeds.add(FeedDef("Telugu Cinema", appendApiKey("$BASE_URL/discover/movie?with_original_language=te&sort_by=popularity.desc&primary_release_date.lte=$todayStr", apiKey), resolveLogos = false, eyebrow = "TOLLYWOOD", subtitle = "Tollywood blockbusters & releases"))
+            feeds.add(FeedDef("Tamil Cinema", appendApiKey("$BASE_URL/discover/movie?with_original_language=ta&sort_by=popularity.desc&primary_release_date.lte=$todayStr", apiKey), resolveLogos = false, eyebrow = "KOLLYWOOD", subtitle = "Kollywood celebrated cinema"))
+            feeds.add(FeedDef("Malayalam Cinema", appendApiKey("$BASE_URL/discover/movie?with_original_language=ml&sort_by=popularity.desc&primary_release_date.lte=$todayStr", apiKey), resolveLogos = false, eyebrow = "MOLLYWOOD", subtitle = "Critically acclaimed Malayalam films"))
+            feeds.add(FeedDef("Kannada Cinema", appendApiKey("$BASE_URL/discover/movie?with_original_language=kn&sort_by=popularity.desc&primary_release_date.lte=$todayStr", apiKey), resolveLogos = false, eyebrow = "SANDALWOOD", subtitle = "Sandalwood hits & mass cinema"))
+            val streamingOttNetworks = "213|1024|3919|2739|3422|2590|4768|2162|3698|2235|3144|2420|2552"
+            feeds.add(FeedDef("Popular South Indian Web Series", appendApiKey("$BASE_URL/discover/tv?with_original_language=$teTaMlKn&with_networks=$streamingOttNetworks&without_genres=10766&sort_by=popularity.desc", apiKey), resolveLogos = true, eyebrow = "WEB SERIES", subtitle = "Regional OTT originals & streaming series"))
+            feeds.add(FeedDef("South Indian Television Serials", appendApiKey("$BASE_URL/discover/tv?with_original_language=$teTaMlKn&sort_by=popularity.desc&first_air_date.lte=$todayStr", apiKey), resolveLogos = false, eyebrow = "TV SERIALS", subtitle = "Daily broadcast serials & television shows"))
+            feeds.add(FeedDef("Top Rated South Indian Cinema", appendApiKey("$BASE_URL/discover/movie?with_original_language=$teTaMlKn&sort_by=vote_average.desc&vote_count.gte=30", apiKey), resolveLogos = false, eyebrow = "TOP RATED", subtitle = "Highest rated South Indian movies"))
+            feeds.add(FeedDef("South Indian Action Hits", appendApiKey("$BASE_URL/discover/movie?with_original_language=$teTaMlKn&with_genres=28,12&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "ACTION", subtitle = "High-octane mass action"))
+            feeds.add(FeedDef("South Indian Thrillers", appendApiKey("$BASE_URL/discover/movie?with_original_language=$teTaMlKn&with_genres=53&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "THRILLER", subtitle = "Edge-of-the-seat suspense & crime"))
+            feeds.add(FeedDef("South Indian Comedy Hits", appendApiKey("$BASE_URL/discover/movie?with_original_language=$teTaMlKn&with_genres=35&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "COMEDY", subtitle = "Laugh-out-loud regional entertainers"))
+            feeds.add(FeedDef("South Indian Romantic Stories", appendApiKey("$BASE_URL/discover/movie?with_original_language=$teTaMlKn&with_genres=10749&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "ROMANCE", subtitle = "Heartwarming love & romance"))
+            feeds.add(FeedDef("South Indian Family Entertainment", appendApiKey("$BASE_URL/discover/movie?with_original_language=$teTaMlKn&with_genres=10751,18&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "FAMILY", subtitle = "Clean family drama & emotional stories"))
+            feeds.add(FeedDef("South Indian Crime & Mystery", appendApiKey("$BASE_URL/discover/tv?with_original_language=$teTaMlKn&with_genres=80,9648&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "CRIME", subtitle = "Detective stories & investigations"))
+            feeds
+        } else if (preset == ContentRegionPreset.INDIA_ALL) {
+            val feeds = mutableListOf<FeedDef>()
+            val allIndiaLangs = "hi|te|ta|ml|kn|bn|mr|pa"
+            feeds.add(FeedDef("Trending in India", appendApiKey("$BASE_URL/discover/movie?with_original_language=$allIndiaLangs&region=IN&sort_by=popularity.desc&primary_release_date.lte=$todayStr", apiKey), resolveLogos = true, eyebrow = "SPOTLIGHT", subtitle = "Pan-India trending releases"))
+            feeds.add(FeedDef("Bollywood Hits", appendApiKey("$BASE_URL/discover/movie?with_original_language=hi&sort_by=popularity.desc&primary_release_date.lte=$todayStr", apiKey), resolveLogos = false, eyebrow = "BOLLYWOOD", subtitle = "Bollywood & Hindi blockbusters"))
+            feeds.add(FeedDef("Telugu Blockbusters", appendApiKey("$BASE_URL/discover/movie?with_original_language=te&sort_by=popularity.desc&primary_release_date.lte=$todayStr", apiKey), resolveLogos = false, eyebrow = "TOLLYWOOD", subtitle = "Top Telugu cinema & action hits"))
+            feeds.add(FeedDef("Tamil Cinema", appendApiKey("$BASE_URL/discover/movie?with_original_language=ta&sort_by=popularity.desc&primary_release_date.lte=$todayStr", apiKey), resolveLogos = false, eyebrow = "KOLLYWOOD", subtitle = "Kollywood blockbusters & stories"))
+            feeds.add(FeedDef("Malayalam Cinema", appendApiKey("$BASE_URL/discover/movie?with_original_language=ml&sort_by=popularity.desc&primary_release_date.lte=$todayStr", apiKey), resolveLogos = false, eyebrow = "MOLLYWOOD", subtitle = "Critically acclaimed Malayalam cinema"))
+            feeds.add(FeedDef("Kannada Cinema", appendApiKey("$BASE_URL/discover/movie?with_original_language=kn&sort_by=popularity.desc&primary_release_date.lte=$todayStr", apiKey), resolveLogos = false, eyebrow = "SANDALWOOD", subtitle = "Sandalwood hits & mass cinema"))
+            val streamingOttNetworks = "213|1024|3919|2739|3422|2590|4768|2162|3698|2235|3144|2420|2552"
+            feeds.add(FeedDef("Popular Indian Web Series", appendApiKey("$BASE_URL/discover/tv?with_original_language=$allIndiaLangs&with_networks=$streamingOttNetworks&without_genres=10766&sort_by=popularity.desc", apiKey), resolveLogos = true, eyebrow = "WEB SERIES", subtitle = "Trending Indian OTT originals & web series"))
+            feeds.add(FeedDef("Indian Television Serials", appendApiKey("$BASE_URL/discover/tv?with_original_language=$allIndiaLangs&sort_by=popularity.desc&first_air_date.lte=$todayStr", apiKey), resolveLogos = false, eyebrow = "TV SERIALS", subtitle = "Popular broadcast television serials & daily soaps"))
+            feeds.add(FeedDef("Top Rated Indian Cinema", appendApiKey("$BASE_URL/discover/movie?with_original_language=$allIndiaLangs&sort_by=vote_average.desc&vote_count.gte=40", apiKey), resolveLogos = false, eyebrow = "TOP RATED", subtitle = "All-time highest rated Indian films"))
+            feeds.add(FeedDef("Indian Action & Masala", appendApiKey("$BASE_URL/discover/movie?with_original_language=$allIndiaLangs&with_genres=28,12&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "ACTION", subtitle = "High energy action entertainers"))
+            feeds.add(FeedDef("Indian Thrillers & Mysteries", appendApiKey("$BASE_URL/discover/movie?with_original_language=$allIndiaLangs&with_genres=53,80&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "THRILLER", subtitle = "Suspense & crime investigations"))
+            feeds.add(FeedDef("Indian Comedy Hits", appendApiKey("$BASE_URL/discover/movie?with_original_language=$allIndiaLangs&with_genres=35&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "COMEDY", subtitle = "Popular comedy movies"))
+            feeds.add(FeedDef("Indian Romantic Hits", appendApiKey("$BASE_URL/discover/movie?with_original_language=$allIndiaLangs&with_genres=10749&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "ROMANCE", subtitle = "Memorable love stories & romantic cinema"))
+            feeds.add(FeedDef("Indian Family Drama", appendApiKey("$BASE_URL/discover/movie?with_original_language=$allIndiaLangs&with_genres=10751,18&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "DRAMA", subtitle = "Family sagas & emotional drama"))
+            feeds
+        } else {
+            val feeds = mutableListOf<FeedDef>()
+            val cleanName = preset.cleanName
+            val langParam = preset.originalLanguages?.let { "with_original_language=$it&" } ?: ""
+            val regionParam = preset.regionCode?.let { "region=$it&" } ?: ""
+
+            feeds.add(FeedDef("Trending in $cleanName", appendApiKey("$BASE_URL/discover/movie?${langParam}${regionParam}sort_by=popularity.desc&primary_release_date.lte=$todayStr", apiKey), resolveLogos = true, eyebrow = "SPOTLIGHT", subtitle = "Top trending $cleanName releases"))
+            feeds.add(FeedDef("Popular $cleanName Movies", appendApiKey("$BASE_URL/discover/movie?${langParam}sort_by=popularity.desc&primary_release_date.lte=$todayStr", apiKey), resolveLogos = false, eyebrow = "MOVIES", subtitle = "Most watched $cleanName films"))
+            val streamingOttNetworks = "213|1024|3919|2739|3422|2590|4768|2162|3698|2235|3144|2420|2552"
+            if (preset.isIndianRegion) {
+                feeds.add(FeedDef("Popular $cleanName Web Series", appendApiKey("$BASE_URL/discover/tv?${langParam}with_networks=$streamingOttNetworks&without_genres=10766&sort_by=popularity.desc", apiKey), resolveLogos = true, eyebrow = "WEB SERIES", subtitle = "Top rated $cleanName OTT originals & web series"))
+                feeds.add(FeedDef("$cleanName Television Serials", appendApiKey("$BASE_URL/discover/tv?${langParam}sort_by=popularity.desc&first_air_date.lte=$todayStr", apiKey), resolveLogos = false, eyebrow = "TV SERIALS", subtitle = "Daily broadcast serials & television shows"))
+            } else {
+                feeds.add(FeedDef("Popular $cleanName Series", appendApiKey("$BASE_URL/discover/tv?${langParam}sort_by=popularity.desc&first_air_date.lte=$todayStr", apiKey), resolveLogos = true, eyebrow = "SERIES", subtitle = "Top rated $cleanName television & series"))
+            }
+            feeds.add(FeedDef("Top Rated $cleanName Cinema", appendApiKey("$BASE_URL/discover/movie?${langParam}sort_by=vote_average.desc&vote_count.gte=20", apiKey), resolveLogos = false, eyebrow = "TOP RATED", subtitle = "Critically acclaimed $cleanName titles"))
+            feeds.add(FeedDef("$cleanName Action Blockbusters", appendApiKey("$BASE_URL/discover/movie?${langParam}with_genres=28,12&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "ACTION", subtitle = "Action & thrillers from $cleanName"))
+            feeds.add(FeedDef("$cleanName Thrillers & Suspense", appendApiKey("$BASE_URL/discover/movie?${langParam}with_genres=53&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "THRILLER", subtitle = "Suspenseful mysteries & investigations"))
+            feeds.add(FeedDef("$cleanName Comedy Hits", appendApiKey("$BASE_URL/discover/movie?${langParam}with_genres=35&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "COMEDY", subtitle = "Best comedies & lighthearted entertainment"))
+            feeds.add(FeedDef("$cleanName Romantic Stories", appendApiKey("$BASE_URL/discover/movie?${langParam}with_genres=10749&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "ROMANCE", subtitle = "Love & romantic relationships"))
+            feeds.add(FeedDef("$cleanName Drama", appendApiKey("$BASE_URL/discover/movie?${langParam}with_genres=18&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "DRAMA", subtitle = "Powerful narratives & character drama"))
+            feeds.add(FeedDef("$cleanName Family Entertainment", appendApiKey("$BASE_URL/discover/movie?${langParam}with_genres=10751&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "FAMILY", subtitle = "Entertaining stories for everyone"))
+            feeds.add(FeedDef("$cleanName Crime & Mystery", appendApiKey("$BASE_URL/discover/tv?${langParam}with_genres=80,9648&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "CRIME", subtitle = "Dark mysteries & detective cases"))
+            feeds.add(FeedDef("$cleanName Sci-Fi & Fantasy", appendApiKey("$BASE_URL/discover/movie?${langParam}with_genres=878,14&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "SCI-FI", subtitle = "Speculative fiction & adventures"))
+            feeds
+        }
+    }
+
+    /**
      * Fetches standard TMDB home catalog feeds concurrently for the Home Carousel and content rows.
      * Uses memory cache to guarantee instant (< 50ms) catalog loads on repeat navigation.
      */
     suspend fun fetchHomeCatalog(
         client: OkHttpClient,
+        preset: ContentRegionPreset = activeRegionPreset,
         apiKey: String = DEFAULT_API_KEY
     ): List<CatalogRow> = withContext(Dispatchers.IO) {
         val now = System.currentTimeMillis()
-        cachedHomeCatalog?.let { (cachedTime, list) ->
+        cachedHomeCatalog[preset.id]?.let { (cachedTime, list) ->
             if (now - cachedTime < 15 * 60 * 1000L && list.isNotEmpty()) {
                 return@withContext list
             }
         }
 
-        val coreFeeds = listOf(
-            Triple("Trending Today", appendApiKey("$BASE_URL/trending/all/day", apiKey), true),
-            Triple("Trending Movies", appendApiKey("$BASE_URL/trending/movie/week", apiKey), true),
-            Triple("Popular Movies", appendApiKey("$BASE_URL/movie/popular", apiKey), true),
-            Triple("Popular TV Shows", appendApiKey("$BASE_URL/tv/popular", apiKey), true),
-            Triple("Top Rated Movies", appendApiKey("$BASE_URL/movie/top_rated", apiKey), false),
-            Triple("Binge-Worthy TV Series", appendApiKey("$BASE_URL/trending/tv/week", apiKey), false)
-        )
+        val today = java.time.LocalDate.now()
+        val todayStr = today.toString()
 
-        val discoverFeeds = PROGRESSIVE_RAIL_DEFINITIONS.map { (title, url) ->
-            val fullUrl = appendApiKey(url, apiKey)
-            Triple(title, fullUrl, false)
+        val coreFeeds = buildRegionalCoreFeeds(preset, todayStr, apiKey)
+
+        val allFeeds: List<FeedDef> = if (preset == ContentRegionPreset.GLOBAL) {
+            val discoverFeeds = PROGRESSIVE_RAIL_DEFINITIONS.map { (title, url) ->
+                val fullUrl = appendApiKey(url, apiKey)
+                val eyebrow = deriveProgressiveEyebrow(title)
+                FeedDef(title = title, url = fullUrl, resolveLogos = false, eyebrow = eyebrow, subtitle = null)
+            }
+            coreFeeds + discoverFeeds
+        } else {
+            coreFeeds
         }
-
-        val allFeeds = coreFeeds + discoverFeeds
 
         val result = try {
             coroutineScope {
-                allFeeds.map { (title, url, resolveLogos) ->
+                allFeeds.map { feed ->
                     async {
-                        fetchCatalogRow(client, title, url, providerName = "tmdb", resolveLogos = resolveLogos, apiKey = apiKey)
+                        fetchCatalogRow(
+                            client = client,
+                            title = feed.title,
+                            url = feed.url,
+                            providerName = "tmdb",
+                            resolveLogos = feed.resolveLogos,
+                            apiKey = apiKey,
+                            eyebrow = feed.eyebrow,
+                            subtitle = feed.subtitle
+                        )
                     }
                 }.awaitAll().filterNotNull()
             }
@@ -1931,7 +2207,7 @@ object TmdbBridge {
         }
 
         if (result.isNotEmpty()) {
-            cachedHomeCatalog = Pair(now, result)
+            cachedHomeCatalog[preset.id] = Pair(now, result)
         }
         result
     }
@@ -1945,13 +2221,26 @@ object TmdbBridge {
         limit: Int = 4,
         apiKey: String = DEFAULT_API_KEY
     ): List<CatalogRow> = withContext(Dispatchers.IO) {
+        if (activeRegionPreset != ContentRegionPreset.GLOBAL) {
+            return@withContext emptyList()
+        }
         val targets = PROGRESSIVE_RAIL_DEFINITIONS.drop(offset).take(limit)
         if (targets.isEmpty()) return@withContext emptyList()
         coroutineScope {
             targets.map { (title, url) ->
                 async {
                     val fullUrl = appendApiKey(url, apiKey)
-                    fetchCatalogRow(client, title, fullUrl, providerName = "tmdb", resolveLogos = false, apiKey = apiKey)
+                    val eyebrow = deriveProgressiveEyebrow(title)
+                    fetchCatalogRow(
+                        client = client,
+                        title = title,
+                        url = fullUrl,
+                        providerName = "tmdb",
+                        resolveLogos = false,
+                        apiKey = apiKey,
+                        eyebrow = eyebrow,
+                        subtitle = null
+                    )
                 }
             }.awaitAll().filterNotNull()
         }
@@ -2000,6 +2289,7 @@ object TmdbBridge {
                     val year = dateStr?.take(4)?.toIntOrNull()
                     val vote = obj["vote_average"]?.jsonPrimitive?.doubleOrNull
 
+                    val relStatus = resolveReleaseStatus(id, isTv, dateStr, null)
                     items.add(
                         MediaItem(
                             id = id,
@@ -2011,7 +2301,9 @@ object TmdbBridge {
                             year = year,
                             rating = vote?.let { String.format(Locale.US, "%.1f", it) },
                             quality = "1080p",
-                            provider = "tmdb"
+                            provider = "tmdb",
+                            releaseDate = dateStr,
+                            releaseStatus = relStatus
                         )
                     )
                 }

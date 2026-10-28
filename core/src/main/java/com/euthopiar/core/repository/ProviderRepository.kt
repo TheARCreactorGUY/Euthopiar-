@@ -37,7 +37,11 @@ open class ProviderRepository(
             emptyList<CatalogRow>()
         }
 
-        val stremioRows = fetchStremioCatalogRails(offset = 0, limit = 6)
+        val stremioRows = if (TmdbBridge.activeRegionPreset == com.euthopiar.core.model.ContentRegionPreset.GLOBAL) {
+            fetchStremioCatalogRails(offset = 0, limit = 6)
+        } else {
+            emptyList()
+        }
         val combined = tmdbRows + stremioRows
         if (combined.isNotEmpty()) combined else tmdbRows
     }
@@ -47,6 +51,9 @@ open class ProviderRepository(
      * Supports both progressive TMDB genres and Stremio catalog pagination.
      */
     suspend fun getProgressiveHomeRails(offset: Int, limit: Int = 4): List<CatalogRow> = withContext(Dispatchers.IO) {
+        if (TmdbBridge.activeRegionPreset != com.euthopiar.core.model.ContentRegionPreset.GLOBAL) {
+            return@withContext emptyList()
+        }
         val tmdbRails = try {
             TmdbBridge.fetchProgressiveRails(DohDns.metadataClient, offset, limit)
         } catch (_: Exception) {

@@ -6,9 +6,16 @@ import androidx.datastore.preferences.core.*
 import com.euthopiar.app.plugin.PluginRepositoryService
 import com.euthopiar.core.addons.AddonRepository
 import com.euthopiar.core.addons.ManagedAddon
+import com.euthopiar.core.model.ContentRegionPreset
+import com.euthopiar.core.util.TmdbBridge
+import com.euthopiar.data.local.AppDatabase
+import com.euthopiar.data.local.PlaybackHistoryEntity
+import com.euthopiar.data.local.WatchlistEntity
 import com.euthopiar.data.preferences.preferencesDataStore
 import com.euthopiar.data.profile.ProfileManager
 import com.euthopiar.data.profile.UserProfile
+import com.euthopiar.data.repository.Playlist
+import com.euthopiar.data.repository.PlaylistRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
@@ -26,7 +33,12 @@ data class BackupSummary(
     val preferencesCount: Int,
     val profilesCount: Int,
     val repositoriesCount: Int,
-    val addonsCount: Int
+    val addonsCount: Int,
+    val playlistsCount: Int = 0,
+    val savedContentCount: Int = 0,
+    val historyCount: Int = 0,
+    val deviceModel: String? = null,
+    val appVersion: String? = null
 )
 
 /**
@@ -43,26 +55,25 @@ data class BackupInspectionResult(
  * Enterprise-grade Configuration Backup & Restore Manager for Euthopiar.
  *
  * Architectural Guarantees:
- * 1. Type-Safe Preferences Coercion: Enforces strict data types matching PreferencesRepository keys
+ * 1. Comprehensive State Coverage: Backs up Preferences, User Profiles & Passwords (PINs & pinHash),
+ *    Per-profile Search Histories, User Playlists, Saved Watchlist, and Playback History / Continue Watching.
+ * 2. Type-Safe Preferences Coercion: Enforces strict data types matching PreferencesRepository keys
  *    to prevent DataStore ClassCastException.
- * 2. Complete State Coverage: Backs up Preferences, User Profiles (ProfileManager),
- *    Stremio Addons (AddonRepository), and Plugin Repositories.
- * 3. Sanitized Security: Omits raw tokens/passwords/API keys while sanitizing orphan states
- *    (disabling debrid/scrobble if underlying credentials are absent; stripping plaintext PINs).
+ * 3. Region Synchronization: Restores selected ContentRegionPreset and immediately updates TmdbBridge.
  * 4. Stream Safety: Mode "wt" prevents trailing garbage overwrite corruption.
- * 5. Memory Boundedness: Enforces strict 5MB file cap to prevent OOM vulnerabilities.
+ * 5. Memory Boundedness: Enforces 15MB file cap to prevent OOM vulnerabilities while supporting extensive libraries.
  * 6. Module Synchronization: Coordinates DataStore, SharedPreferences fallback, ProfileManager,
- *    AddonRepository, and triggers automatic background repository plugin sync.
+ *    AddonRepository, PlaylistRepository, Room Database, and background plugin sync.
  */
 class ConfigurationBackupManager(private val context: Context) {
 
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
 
     companion object {
-        const val BACKUP_VERSION = 2
-        const val MAX_BACKUP_SIZE_BYTES = 5 * 1024 * 1024 // 5 MB ceiling
+        const val BACKUP_VERSION = 3
+        const val MAX_BACKUP_SIZE_BYTES = 15 * 1024 * 1024 // 15 MB ceiling
 
-        private enum class KeyType { STRING, BOOLEAN, INT, STRING_SET }
+        private enum class KeyType { STRING, BOOLEAN, INT, LONG, STRING_SET }
 
         private val PREFERENCES_SCHEMA: Map<String, KeyType> = mapOf(
             // String preferences
@@ -70,6 +81,7 @@ class ConfigurationBackupManager(private val context: Context) {
             "subtitle_color" to KeyType.STRING,
             "custom_download_dir" to KeyType.STRING,
             "active_provider" to KeyType.STRING,
+            "content_region_preset" to KeyType.STRING,
             "card_scale_mode" to KeyType.STRING,
             "navbar_style" to KeyType.STRING,
             "recent_searches_csv" to KeyType.STRING,
@@ -81,6 +93,8 @@ class ConfigurationBackupManager(private val context: Context) {
             "media_reactions" to KeyType.STRING,
             "active_debrid_provider" to KeyType.STRING,
             "trakt_username" to KeyType.STRING,
+            "skipped_update_version" to KeyType.STRING,
+            "last_app_version" to KeyType.STRING,
 
             // Boolean preferences
             "auto_play_next_episode" to KeyType.BOOLEAN,
@@ -101,6 +115,8 @@ class ConfigurationBackupManager(private val context: Context) {
             "amoled_mode" to KeyType.BOOLEAN,
             "smart_failover_enabled" to KeyType.BOOLEAN,
             "audio_passthrough_enabled" to KeyType.BOOLEAN,
+            "auto_check_updates" to KeyType.BOOLEAN,
+            "include_prereleases" to KeyType.BOOLEAN,
 
             // Int preferences
             "seek_interval_seconds" to KeyType.INT,
@@ -110,6 +126,11 @@ class ConfigurationBackupManager(private val context: Context) {
             "skip_outro_duration_seconds" to KeyType.INT,
             "countdown_next_episode_seconds" to KeyType.INT,
             "playback_buffer_size_mb" to KeyType.INT,
+            "last_app_version_code" to KeyType.INT,
+
+            // Long preferences
+            "last_update_check_timestamp" to KeyType.LONG,
+            "last_donation_prompt_timestamp" to KeyType.LONG,
 
             // StringSet preferences
             "repository_urls" to KeyType.STRING_SET,
@@ -118,14 +139,12 @@ class ConfigurationBackupManager(private val context: Context) {
 
         fun isSensitiveKey(key: String): Boolean {
             val lower = key.lowercase()
-            return lower.contains("token") || lower.contains("secret") ||
-                    lower.contains("api_key") || lower.contains("apikey") ||
-                    lower.contains("pin") || lower.contains("password")
+            return lower.contains("token") || lower.contains("secret")
         }
     }
 
     /**
-     * Serializes complete application configuration to a sanitized JSON structure and writes to [uri].
+     * Serializes complete application configuration to a comprehensive JSON snapshot and writes to [uri].
      */
     suspend fun exportConfiguration(uri: Uri): Result<String> = withContext(Dispatchers.IO) {
         try {
@@ -137,11 +156,12 @@ class ConfigurationBackupManager(private val context: Context) {
                 val keyName = key.name
                 if (isSensitiveKey(keyName)) continue
 
-                // Check orphan credential states
+                // Check orphan credential states for external sync accounts
                 when (keyName) {
                     "debrid_enabled" -> {
-                        // Debrid keys are excluded, so default debrid_enabled to false in export
-                        jsonPrefs.put(keyName, false)
+                        // If no debrid key is stored, export as false to prevent unauthenticated network calls
+                        val hasDebridKey = allPrefs.keys.any { it.name.contains("debrid_api_key") }
+                        jsonPrefs.put(keyName, if (hasDebridKey) value else false)
                         continue
                     }
                     "trakt_username" -> {
@@ -168,42 +188,84 @@ class ConfigurationBackupManager(private val context: Context) {
                 }
             }
 
-            // 2. Gather User Profiles
+            // 2. Gather User Profiles (including passwords/PINs and pinHash)
             val profileManager = ProfileManager.getInstance(context)
             val rawProfiles = profileManager.profiles.value
-            val sanitizedProfiles = rawProfiles.map { profile ->
-                // Plaintext PIN is purged, cryptographic pinHash is securely retained
-                profile.copy(pin = null)
-            }
-            val profilesJsonString = json.encodeToString(sanitizedProfiles)
+            val profilesJsonString = json.encodeToString(rawProfiles)
             val jsonProfilesArray = JSONArray(profilesJsonString)
 
-            // 3. Gather Repositories
+            // 3. Gather Per-Profile Search Histories
+            val searchHistoryJson = JSONObject()
+            val globalRecents = allPrefs[stringPreferencesKey("recent_searches_csv")] as? String ?: ""
+            if (globalRecents.isNotBlank()) {
+                val arr = JSONArray()
+                globalRecents.split("\u001F").filter { it.isNotBlank() }.forEach { arr.put(it) }
+                searchHistoryJson.put("__global__", arr)
+            }
+            for (profile in rawProfiles) {
+                val profileRecents = allPrefs[stringPreferencesKey("recent_searches_csv_${profile.id}")] as? String ?: ""
+                if (profileRecents.isNotBlank()) {
+                    val arr = JSONArray()
+                    profileRecents.split("\u001F").filter { it.isNotBlank() }.forEach { arr.put(it) }
+                    searchHistoryJson.put(profile.id, arr)
+                }
+            }
+
+            // 4. Gather Playlists
+            val playlistRepo = PlaylistRepository.getInstance(context)
+            val userPlaylists = playlistRepo.getUserPlaylists()
+            val playlistsJsonString = json.encodeToString(userPlaylists)
+            val jsonPlaylistsArray = JSONArray(playlistsJsonString)
+
+            // 5. Gather Saved Content (Watchlist)
+            val db = AppDatabase.getInstance(context)
+            val allWatchlist = db.watchlistDao().getAllWatchlist()
+            val watchlistJsonString = json.encodeToString(allWatchlist)
+            val jsonSavedContentArray = JSONArray(watchlistJsonString)
+
+            // 6. Gather Playback History & Continue Watching with Timestamps
+            val allHistory = db.playbackHistoryDao().getAllHistory()
+            val historyJsonString = json.encodeToString(allHistory)
+            val jsonHistoryArray = JSONArray(historyJsonString)
+
+            // 7. Gather Repositories
             val rawRepos = allPrefs[stringSetPreferencesKey("repository_urls")] as? Set<*>
             val repoUrls: List<String> = rawRepos?.map { it.toString() } ?: emptyList()
             val jsonReposArray = JSONArray().apply {
                 repoUrls.forEach { put(it) }
             }
 
-            // 4. Gather Stremio Addons
+            // 8. Gather Stremio Addons
             val addonRepository = AddonRepository.getInstance(context)
             val currentAddons = addonRepository.uiState.value.addons
             val addonsJsonString = json.encodeToString(currentAddons)
             val jsonAddonsArray = JSONArray(addonsJsonString)
 
-            // 5. Construct Root Backup Envelope
+            // 9. Gather App & Device Metadata
+            val appVersion = try {
+                context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "1.0.0"
+            } catch (_: Exception) { "1.0.0" }
+            val deviceModel = "${android.os.Build.MANUFACTURER.replaceFirstChar { it.uppercase() }} ${android.os.Build.MODEL}"
+
+            // 10. Construct Root Backup Envelope
             val root = JSONObject().apply {
                 put("app", "Euthopiar")
                 put("version", BACKUP_VERSION)
                 put("exportedAt", System.currentTimeMillis())
+                put("appVersion", appVersion)
+                put("deviceModel", deviceModel)
                 put("preferences", jsonPrefs)
                 put("profiles", jsonProfilesArray)
                 put("activeProfileId", profileManager.activeProfileId.value)
+                put("searchHistory", searchHistoryJson)
+                put("playlists", jsonPlaylistsArray)
+                put("savedContent", jsonSavedContentArray)
+                put("playbackHistory", jsonHistoryArray)
                 put("repositories", jsonReposArray)
                 put("addons", jsonAddonsArray)
             }
 
-            // 6. Write with "wt" mode (Write + Truncate) to prevent trailing garbage
+            // 11. Write with "wt" mode (Write + Truncate) to prevent trailing garbage
             val outputStream = context.contentResolver.openOutputStream(uri, "wt")
                 ?: context.contentResolver.openOutputStream(uri)
                 ?: throw IllegalStateException("Unable to open output stream for export")
@@ -235,7 +297,7 @@ class ConfigurationBackupManager(private val context: Context) {
             if (declaredSize > MAX_BACKUP_SIZE_BYTES) {
                 return@withContext BackupInspectionResult(
                     isValid = false,
-                    errorMessage = "Backup file exceeds maximum allowed size (5 MB)"
+                    errorMessage = "Backup file exceeds maximum allowed size (15 MB)"
                 )
             }
 
@@ -256,7 +318,7 @@ class ConfigurationBackupManager(private val context: Context) {
                     if (total > MAX_BACKUP_SIZE_BYTES) {
                         return@withContext BackupInspectionResult(
                             isValid = false,
-                            errorMessage = "Backup file exceeds maximum allowed size (5 MB)"
+                            errorMessage = "Backup file exceeds maximum allowed size (15 MB)"
                         )
                     }
                     out.write(buffer, 0, read)
@@ -291,14 +353,24 @@ class ConfigurationBackupManager(private val context: Context) {
             val profilesArr = root.optJSONArray("profiles")
             val reposArr = root.optJSONArray("repositories")
             val addonsArr = root.optJSONArray("addons")
+            val playlistsArr = root.optJSONArray("playlists")
+            val savedContentArr = root.optJSONArray("savedContent") ?: root.optJSONArray("watchlist")
+            val historyArr = root.optJSONArray("playbackHistory") ?: root.optJSONArray("continueWatching")
             val exportedAt = root.optLong("exportedAt", 0L)
+            val deviceModel = root.optString("deviceModel").takeIf { it.isNotBlank() }
+            val appVersion = root.optString("appVersion").takeIf { it.isNotBlank() }
 
             val summary = BackupSummary(
                 exportedAt = exportedAt,
                 preferencesCount = jsonPrefs?.length() ?: 0,
                 profilesCount = profilesArr?.length() ?: 0,
                 repositoriesCount = reposArr?.length() ?: 0,
-                addonsCount = addonsArr?.length() ?: 0
+                addonsCount = addonsArr?.length() ?: 0,
+                playlistsCount = playlistsArr?.length() ?: 0,
+                savedContentCount = savedContentArr?.length() ?: 0,
+                historyCount = historyArr?.length() ?: 0,
+                deviceModel = deviceModel,
+                appVersion = appVersion
             )
 
             BackupInspectionResult(
@@ -317,8 +389,13 @@ class ConfigurationBackupManager(private val context: Context) {
     /**
      * Applies the validated backup payload:
      * - Coerces DataStore types safely matching [PREFERENCES_SCHEMA].
-     * - Restores User Profiles to ProfileManager.
+     * - Restores User Profiles & Passwords (PINs & pinHash) to ProfileManager.
+     * - Restores Per-Profile Search Histories.
+     * - Restores Playlists to PlaylistRepository.
+     * - Restores Saved Watchlist items to Room Database.
+     * - Restores Playback History & Continue Watching to Room Database.
      * - Restores Stremio Addons to AddonRepository.
+     * - Synchronizes ContentRegionPreset in TmdbBridge.
      * - Syncs SharedPreferences fallback.
      * - Triggers background repository plugin installation.
      */
@@ -329,6 +406,10 @@ class ConfigurationBackupManager(private val context: Context) {
             val activeProfileId = root.optString("activeProfileId").takeIf { it.isNotBlank() }
             val reposArr = root.optJSONArray("repositories")
             val addonsArr = root.optJSONArray("addons")
+            val searchHistoryObj = root.optJSONObject("searchHistory")
+            val playlistsArr = root.optJSONArray("playlists")
+            val savedContentArr = root.optJSONArray("savedContent") ?: root.optJSONArray("watchlist")
+            val historyArr = root.optJSONArray("playbackHistory") ?: root.optJSONArray("continueWatching")
 
             // 1. Restore DataStore Preferences with Type Coercion
             if (jsonPrefs != null) {
@@ -360,6 +441,14 @@ class ConfigurationBackupManager(private val context: Context) {
                                     }
                                     prefsMap[intPreferencesKey(keyName)] = coerced
                                 }
+                                KeyType.LONG -> {
+                                    val coerced = when (rawValue) {
+                                        is Number -> rawValue.toLong()
+                                        is String -> rawValue.toLongOrNull() ?: 0L
+                                        else -> 0L
+                                    }
+                                    prefsMap[longPreferencesKey(keyName)] = coerced
+                                }
                                 KeyType.STRING -> {
                                     prefsMap[stringPreferencesKey(keyName)] = rawValue.toString()
                                 }
@@ -376,7 +465,7 @@ class ConfigurationBackupManager(private val context: Context) {
                                 }
                             }
                         } else {
-                            // Dynamic fallback for any custom or new keys
+                            // Dynamic fallback for custom or new keys
                             when (rawValue) {
                                 is Boolean -> prefsMap[booleanPreferencesKey(keyName)] = rawValue
                                 is Int -> prefsMap[intPreferencesKey(keyName)] = rawValue
@@ -394,8 +483,7 @@ class ConfigurationBackupManager(private val context: Context) {
                         }
                     }
 
-                    // Enforce safe credentials consistency
-                    prefsMap[booleanPreferencesKey("debrid_enabled")] = false
+                    // Enforce safe credentials consistency for external scrobbler
                     prefsMap.remove(stringPreferencesKey("trakt_username"))
                     prefsMap[booleanPreferencesKey("trakt_scrobble_enabled")] = false
                 }
@@ -409,7 +497,7 @@ class ConfigurationBackupManager(private val context: Context) {
                     .apply()
             } catch (_: Exception) {}
 
-            // 3. Restore User Profiles
+            // 3. Restore User Profiles (including passwords/PINs and pinHash)
             if (profilesArr != null && profilesArr.length() > 0) {
                 try {
                     val profilesList = json.decodeFromString<List<UserProfile>>(profilesArr.toString())
@@ -419,7 +507,63 @@ class ConfigurationBackupManager(private val context: Context) {
                 }
             }
 
-            // 4. Restore Stremio Addons
+            // 4. Restore Per-Profile Search Histories
+            if (searchHistoryObj != null) {
+                try {
+                    context.preferencesDataStore.edit { prefsMap ->
+                        val keys = searchHistoryObj.keys()
+                        while (keys.hasNext()) {
+                            val profId = keys.next()
+                            val arr = searchHistoryObj.optJSONArray(profId) ?: continue
+                            val list = mutableListOf<String>()
+                            for (i in 0 until arr.length()) {
+                                val q = arr.optString(i)
+                                if (q.isNotBlank()) list.add(q)
+                            }
+                            val joined = list.joinToString("\u001F")
+                            if (profId == "__global__") {
+                                prefsMap[stringPreferencesKey("recent_searches_csv")] = joined
+                            } else {
+                                prefsMap[stringPreferencesKey("recent_searches_csv_$profId")] = joined
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w("ConfigBackupManager", "Failed to restore search histories: ${e.message}")
+                }
+            }
+
+            // 5. Restore User Playlists
+            if (playlistsArr != null && playlistsArr.length() > 0) {
+                try {
+                    val playlistsList = json.decodeFromString<List<Playlist>>(playlistsArr.toString())
+                    PlaylistRepository.getInstance(context).restorePlaylists(playlistsList)
+                } catch (e: Exception) {
+                    android.util.Log.e("ConfigBackupManager", "Failed to restore playlists: ${e.message}", e)
+                }
+            }
+
+            // 6. Restore Saved Content (Watchlist) to Room Database
+            if (savedContentArr != null && savedContentArr.length() > 0) {
+                try {
+                    val items = json.decodeFromString<List<WatchlistEntity>>(savedContentArr.toString())
+                    AppDatabase.getInstance(context).watchlistDao().insertBatch(items)
+                } catch (e: Exception) {
+                    android.util.Log.e("ConfigBackupManager", "Failed to restore watchlist: ${e.message}", e)
+                }
+            }
+
+            // 7. Restore Playback History & Continue Watching to Room Database
+            if (historyArr != null && historyArr.length() > 0) {
+                try {
+                    val historyItems = json.decodeFromString<List<PlaybackHistoryEntity>>(historyArr.toString())
+                    AppDatabase.getInstance(context).playbackHistoryDao().upsertBatch(historyItems)
+                } catch (e: Exception) {
+                    android.util.Log.e("ConfigBackupManager", "Failed to restore playback history: ${e.message}", e)
+                }
+            }
+
+            // 8. Restore Stremio Addons
             if (addonsArr != null && addonsArr.length() > 0) {
                 try {
                     val addonsList = json.decodeFromString<List<ManagedAddon>>(addonsArr.toString())
@@ -429,7 +573,7 @@ class ConfigurationBackupManager(private val context: Context) {
                 }
             }
 
-            // 5. Sync and Download Repositories in Background
+            // 9. Sync and Download Repositories in Background
             val repoUrls = mutableSetOf<String>()
             if (reposArr != null) {
                 for (i in 0 until reposArr.length()) {
@@ -451,6 +595,14 @@ class ConfigurationBackupManager(private val context: Context) {
                         android.util.Log.w("ConfigBackupManager", "Could not sync repo $url: ${e.message}")
                     }
                 }
+            }
+
+            // 10. Synchronize Content Region Preset in TmdbBridge
+            val restoredPresetId = jsonPrefs?.optString("content_region_preset", "")
+            if (!restoredPresetId.isNullOrBlank()) {
+                val preset = ContentRegionPreset.fromId(restoredPresetId)
+                TmdbBridge.activeRegionPreset = preset
+                TmdbBridge.clearHomeCatalogCache()
             }
 
             Result.success(Unit)

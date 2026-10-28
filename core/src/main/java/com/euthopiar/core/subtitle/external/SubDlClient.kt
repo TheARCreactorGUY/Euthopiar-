@@ -81,7 +81,7 @@ class SubDlClient(
     }
 
     companion object {
-        const val DEFAULT_API_KEY = "GgQfX6B-ZqJ7j1aP9wKm4sY3cE0vR8tL"
+        const val DEFAULT_API_KEY = "YOUR_API_KEY_HERE"
 
         @Volatile
         private var instance: SubDlClient? = null

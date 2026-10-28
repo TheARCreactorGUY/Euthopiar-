@@ -696,14 +696,20 @@ private fun BackupInspectionPreviewCard(summary: BackupSummary?) {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
+            val headerTitle = if (!summary.deviceModel.isNullOrBlank()) {
+                "BACKUP SNAPSHOT · ${summary.deviceModel.uppercase()}"
+            } else {
+                "BACKUP SNAPSHOT"
+            }
             Text(
-                text = "BACKUP SNAPSHOT",
+                text = headerTitle,
                 style = TextStyle(
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Medium,
                     letterSpacing = 0.12.em,
                     color = Color.White.copy(alpha = 0.45f)
-                )
+                ),
+                maxLines = 1
             )
             Text(
                 text = formattedDate,
@@ -730,6 +736,24 @@ private fun BackupInspectionPreviewCard(summary: BackupSummary?) {
             BackupStatItem(label = "Profiles", count = summary.profilesCount)
             BackupStatItem(label = "Sources", count = summary.repositoriesCount)
             BackupStatItem(label = "Addons", count = summary.addonsCount)
+        }
+
+        if (summary.playlistsCount > 0 || summary.savedContentCount > 0 || summary.historyCount > 0) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(0.5.dp)
+                    .background(Color.White.copy(alpha = 0.08f))
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceAround
+            ) {
+                BackupStatItem(label = "Playlists", count = summary.playlistsCount)
+                BackupStatItem(label = "Saved", count = summary.savedContentCount)
+                BackupStatItem(label = "History", count = summary.historyCount)
+            }
         }
     }
 }

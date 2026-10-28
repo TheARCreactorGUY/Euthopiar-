@@ -5,6 +5,7 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
+import com.euthopiar.core.model.ContentRegionPreset
 import com.euthopiar.ui.longpress.LongPressSheetStyle
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -91,6 +92,7 @@ class PreferencesRepository private constructor(private val context: Context) {
         val ACTIVE_PROVIDER = stringPreferencesKey("active_provider")
         val DISABLED_PLUGINS = stringSetPreferencesKey("disabled_plugins")
         val EXTRA_CONTENT_ENABLED = booleanPreferencesKey("extra_content_enabled")
+        val CONTENT_REGION_PRESET = stringPreferencesKey("content_region_preset")
         val CARD_SCALE_MODE = stringPreferencesKey("card_scale_mode")
         val NAVBAR_STYLE = stringPreferencesKey("navbar_style")
         val FIRST_RUN_COMPLETED = booleanPreferencesKey("first_run_completed")
@@ -252,6 +254,21 @@ class PreferencesRepository private constructor(private val context: Context) {
             preferences[PreferencesKeys.EXTRA_CONTENT_ENABLED] ?: false
         }
 
+    val contentRegionPreset: Flow<ContentRegionPreset> = context.preferencesDataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            ContentRegionPreset.fromId(preferences[PreferencesKeys.CONTENT_REGION_PRESET])
+        }
+        .distinctUntilChanged()
+
+    suspend fun setContentRegionPreset(preset: ContentRegionPreset) {
+        context.preferencesDataStore.edit { preferences ->
+            preferences[PreferencesKeys.CONTENT_REGION_PRESET] = preset.id
+        }
+    }
+
     val cardScaleMode: Flow<CardScaleMode> = context.preferencesDataStore.data
         .catch { exception ->
             if (exception is IOException) emit(emptyPreferences()) else throw exception
@@ -332,6 +349,63 @@ class PreferencesRepository private constructor(private val context: Context) {
     suspend fun restoreRecentSearches(items: List<String>) {
         context.preferencesDataStore.edit { preferences ->
             preferences[PreferencesKeys.RECENT_SEARCHES] = items.joinToString("\u001F")
+        }
+    }
+
+    /**
+     * Profile-aware recent searches stream.
+     * Falls back to default recent searches if profile-specific recents do not exist yet.
+     */
+    fun recentSearchesForProfile(profileId: String): Flow<List<String>> = context.preferencesDataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            val profileKey = stringPreferencesKey("recent_searches_csv_$profileId")
+            val raw = preferences[profileKey] ?: preferences[PreferencesKeys.RECENT_SEARCHES] ?: ""
+            if (raw.isBlank()) emptyList()
+            else raw.split("\u001F").filter { it.isNotBlank() }
+        }
+
+    suspend fun addRecentSearchForProfile(profileId: String, query: String) {
+        val trimmed = query.trim()
+        if (trimmed.isBlank()) return
+        context.preferencesDataStore.edit { preferences ->
+            val profileKey = stringPreferencesKey("recent_searches_csv_$profileId")
+            val raw = preferences[profileKey] ?: preferences[PreferencesKeys.RECENT_SEARCHES] ?: ""
+            val current = raw.split("\u001F").filter { it.isNotBlank() && !it.equals(trimmed, ignoreCase = true) }
+            val updated = listOf(trimmed) + current.take(9)
+            val joined = updated.joinToString("\u001F")
+            preferences[profileKey] = joined
+            preferences[PreferencesKeys.RECENT_SEARCHES] = joined
+        }
+    }
+
+    suspend fun removeRecentSearchForProfile(profileId: String, query: String) {
+        context.preferencesDataStore.edit { preferences ->
+            val profileKey = stringPreferencesKey("recent_searches_csv_$profileId")
+            val raw = preferences[profileKey] ?: preferences[PreferencesKeys.RECENT_SEARCHES] ?: ""
+            val current = raw.split("\u001F").filter { it.isNotBlank() && !it.equals(query.trim(), ignoreCase = true) }
+            val joined = current.joinToString("\u001F")
+            preferences[profileKey] = joined
+            preferences[PreferencesKeys.RECENT_SEARCHES] = joined
+        }
+    }
+
+    suspend fun clearRecentSearchesForProfile(profileId: String) {
+        context.preferencesDataStore.edit { preferences ->
+            val profileKey = stringPreferencesKey("recent_searches_csv_$profileId")
+            preferences[profileKey] = ""
+            preferences[PreferencesKeys.RECENT_SEARCHES] = ""
+        }
+    }
+
+    suspend fun restoreRecentSearchesForProfile(profileId: String, items: List<String>) {
+        context.preferencesDataStore.edit { preferences ->
+            val profileKey = stringPreferencesKey("recent_searches_csv_$profileId")
+            val joined = items.joinToString("\u001F")
+            preferences[profileKey] = joined
+            preferences[PreferencesKeys.RECENT_SEARCHES] = joined
         }
     }
 

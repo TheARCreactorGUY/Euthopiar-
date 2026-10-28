@@ -45,7 +45,7 @@ class TopTenRepositoryTest {
         val now = System.currentTimeMillis()
         fakeDao.insertOrUpdate(
             TopTenEntity(
-                cacheKey = "movie_day_en-us",
+                cacheKey = "movie_day_en-us_global",
                 itemsJson = json.encodeToString(cachedMedia),
                 fetchedAtEpochMs = now // fresh cache
             )

@@ -299,6 +299,30 @@ class PlaylistRepository private constructor(private val context: Context) {
         }
     }
 
+    /**
+     * Returns all user-created custom playlists.
+     */
+    fun getUserPlaylists(): List<Playlist> = _userPlaylists.value
+
+    /**
+     * Restores playlists from a configuration snapshot, preserving existing unique entries.
+     */
+    suspend fun restorePlaylists(playlists: List<Playlist>) {
+        if (playlists.isEmpty()) return
+        _userPlaylists.update { current ->
+            val currentIds = current.map { it.id }.toSet()
+            val newItems = playlists.filterNot { it.id in currentIds }
+            current + newItems
+        }
+        try {
+            jsonStore.update { diskList ->
+                val diskIds = diskList.map { it.id }.toSet()
+                val newItems = playlists.filterNot { it.id in diskIds }
+                diskList + newItems
+            }
+        } catch (_: Exception) {}
+    }
+
     companion object {
         @Volatile
         private var instance: PlaylistRepository? = null

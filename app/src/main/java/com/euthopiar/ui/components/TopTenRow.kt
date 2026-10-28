@@ -339,6 +339,14 @@ private fun TopTenRankCardPosterTinted(
                 titleForFallback = item.title,
                 modifier = Modifier.fillMaxSize()
             )
+
+            ReleaseStatusBadge(
+                status = item.releaseStatus,
+                releaseDate = item.releaseDate,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(9.dp)
+            )
         }
     }
 }
@@ -459,6 +467,14 @@ private fun TopTenRankCardGlassTab(
                 contentScale = ContentScale.Crop,
                 titleForFallback = item.title,
                 modifier = Modifier.fillMaxSize()
+            )
+
+            ReleaseStatusBadge(
+                status = item.releaseStatus,
+                releaseDate = item.releaseDate,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(9.dp)
             )
         }
     }

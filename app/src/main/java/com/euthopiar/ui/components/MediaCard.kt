@@ -14,7 +14,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -88,6 +90,14 @@ fun MediaCard(
                 contentScale = ContentScale.Crop,
                 titleForFallback = cleanTitle,
                 modifier = Modifier.fillMaxSize()
+            )
+
+            ReleaseStatusBadge(
+                status = item.releaseStatus,
+                releaseDate = item.releaseDate,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(9.dp)
             )
         }
 

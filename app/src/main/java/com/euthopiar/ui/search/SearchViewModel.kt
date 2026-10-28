@@ -7,8 +7,10 @@ import com.euthopiar.core.model.MediaItem
 import com.euthopiar.core.model.MediaType
 import com.euthopiar.core.repository.ProviderRepository
 import com.euthopiar.data.preferences.PreferencesRepository
+import com.euthopiar.data.profile.ProfileManager
 import com.euthopiar.ui.util.UserError
 import com.euthopiar.ui.util.toUserError
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,6 +18,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -45,11 +48,18 @@ class SearchViewModel(
     constructor(application: Application) : this(application, ProviderRepository.Default)
 
     private val preferencesRepository = PreferencesRepository.getInstance(application)
-    val recentSearches: StateFlow<List<String>> = preferencesRepository.recentSearches.stateIn(
-        viewModelScope,
-        SharingStarted.WhileSubscribed(5000),
-        emptyList()
-    )
+    private val profileManager = ProfileManager.getInstance(application)
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val recentSearches: StateFlow<List<String>> = profileManager.activeProfile
+        .flatMapLatest { profile ->
+            preferencesRepository.recentSearchesForProfile(profile.id)
+        }
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5000),
+            emptyList()
+        )
 
     val availableProviders: StateFlow<List<String>> = combine(
         repository.registry.plugins,
@@ -136,14 +146,16 @@ class SearchViewModel(
         val clean = query.trim()
         if (clean.length >= 2) {
             viewModelScope.launch {
-                preferencesRepository.addRecentSearch(clean)
+                val profileId = profileManager.activeProfile.value.id
+                preferencesRepository.addRecentSearchForProfile(profileId, clean)
             }
         }
     }
 
     fun removeRecentSearch(query: String) {
         viewModelScope.launch {
-            preferencesRepository.removeRecentSearch(query)
+            val profileId = profileManager.activeProfile.value.id
+            preferencesRepository.removeRecentSearchForProfile(profileId, query)
         }
     }
 
@@ -156,14 +168,16 @@ class SearchViewModel(
 
     fun clearRecentSearches() {
         viewModelScope.launch {
-            preferencesRepository.clearRecentSearches()
+            val profileId = profileManager.activeProfile.value.id
+            preferencesRepository.clearRecentSearchesForProfile(profileId)
         }
     }
 
     fun undoClearRecentSearches(items: List<String>) {
         if (items.isEmpty()) return
         viewModelScope.launch {
-            preferencesRepository.restoreRecentSearches(items)
+            val profileId = profileManager.activeProfile.value.id
+            preferencesRepository.restoreRecentSearchesForProfile(profileId, items)
         }
     }
 

@@ -53,6 +53,8 @@ fun PosterCard(
     year: Int? = null,
     type: String? = null,
     id: String? = null,
+    releaseStatus: com.euthopiar.core.model.ReleaseStatus? = null,
+    releaseDate: String? = null,
     onLongClick: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
@@ -93,6 +95,14 @@ fun PosterCard(
                 contentScale = ContentScale.Crop,
                 titleForFallback = cleanTitle,
                 modifier = Modifier.fillMaxSize()
+            )
+
+            ReleaseStatusBadge(
+                status = releaseStatus,
+                releaseDate = releaseDate,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(9.dp)
             )
 
             // Optional bottom progress bar for continue-watching items

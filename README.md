@@ -163,7 +163,7 @@ flowchart LR
 
 <div align="center">
 
-[![Download Latest](https://img.shields.io/badge/⬇%20%20GET%20v1.0.4--Stable-E50914?style=for-the-badge)](https://github.com/TheARCreactorGUY/Euthopiar-/releases/latest)
+[![Download Latest](https://img.shields.io/badge/⬇%20%20GET%20v1.0.5--Stable-E50914?style=for-the-badge)](https://github.com/TheARCreactorGUY/Euthopiar-/releases/latest)
 
 </div>
 

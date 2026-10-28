@@ -5,6 +5,13 @@ import kotlinx.serialization.Serializable
 
 enum class MediaType { MOVIE, TV_SERIES, ANIME, LIVE_TV }
 
+@Serializable
+enum class ReleaseStatus {
+    IN_CINEMAS,
+    UPCOMING,
+    RELEASED
+}
+
 @Immutable
 @Serializable
 data class MediaItem(
@@ -22,6 +29,8 @@ data class MediaItem(
     val contentRating: String? = null,
     val rottenTomatoesRating: String? = null,
     val genres: List<String> = emptyList(),
+    val releaseDate: String? = null,
+    val releaseStatus: ReleaseStatus? = null,
 ) {
     fun withEnrichment(
         logoUrl: String? = this.logoUrl,
@@ -31,7 +40,9 @@ data class MediaItem(
         year: Int? = this.year,
         contentRating: String? = this.contentRating,
         rottenTomatoesRating: String? = this.rottenTomatoesRating,
-        genres: List<String> = this.genres
+        genres: List<String> = this.genres,
+        releaseDate: String? = this.releaseDate,
+        releaseStatus: ReleaseStatus? = this.releaseStatus
     ): MediaItem {
         return this.copy(
             logoUrl = logoUrl ?: this.logoUrl,
@@ -41,7 +52,9 @@ data class MediaItem(
             year = year ?: this.year,
             contentRating = contentRating ?: this.contentRating,
             rottenTomatoesRating = rottenTomatoesRating ?: this.rottenTomatoesRating,
-            genres = if (genres.isNotEmpty()) genres else this.genres
+            genres = if (genres.isNotEmpty()) genres else this.genres,
+            releaseDate = releaseDate ?: this.releaseDate,
+            releaseStatus = releaseStatus ?: this.releaseStatus
         )
     }
 }

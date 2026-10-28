@@ -95,12 +95,14 @@ class HomeViewModel(
 
     @OptIn(ExperimentalCoroutinesApi::class)
     val universalTopTen: StateFlow<List<MediaItem>> =
-        _selectedTab.flatMapLatest { tab ->
+        combine(_selectedTab, preferencesRepository.contentRegionPreset) { tab, preset ->
+            tab to preset
+        }.flatMapLatest { (tab, preset) ->
             val mediaType = when (tab) {
                 HomeFilterTab.TV_SHOWS, HomeFilterTab.ANIME -> com.euthopiar.core.model.MediaType.TV_SERIES
                 else -> com.euthopiar.core.model.MediaType.MOVIE
             }
-            topTenRepository.observeTopTen(mediaType)
+            topTenRepository.observeTopTen(mediaType, preset = preset)
         }.stateIn(
             viewModelScope,
             SharingStarted.WhileSubscribed(5000),
@@ -297,9 +299,19 @@ class HomeViewModel(
     }
 
     init {
+        var lastPluginName: String? = null
         viewModelScope.launch {
-            repository.activePlugin.collect {
-                _selectedTab.value = HomeFilterTab.ALL
+            combine(
+                repository.activePlugin,
+                preferencesRepository.contentRegionPreset
+            ) { plugin, preset ->
+                plugin.name to preset
+            }.collect { (pluginName, preset) ->
+                if (lastPluginName != pluginName) {
+                    lastPluginName = pluginName
+                    _selectedTab.value = HomeFilterTab.ALL
+                }
+                com.euthopiar.core.util.TmdbBridge.activeRegionPreset = preset
                 loadCatalog()
             }
         }
@@ -438,10 +450,24 @@ class HomeViewModel(
                 val combinedSeed = (providerHash * 37L) xor (sessionIdx * 10007L)
                 val providerRandom = kotlin.random.Random(combinedSeed)
 
-                // 3. Select hero candidates with high-res artwork (backdrops or posters)
-                val candidates = rows.flatMap { it.items }
+                // 3. Select hero candidates from the top regional/core rows so regional presets never get diluted by global progressive rails
+                val activePreset = com.euthopiar.core.util.TmdbBridge.activeRegionPreset
+                val pinnedCoreCount = when (activePreset) {
+                    com.euthopiar.core.model.ContentRegionPreset.GLOBAL -> 4
+                    com.euthopiar.core.model.ContentRegionPreset.SOUTH_INDIA_ALL -> 9
+                    else -> 5
+                }.coerceAtMost(rows.size)
+
+                val heroSourceRows = rows.take(pinnedCoreCount).ifEmpty { rows }
+                val rawCandidates = heroSourceRows.flatMap { it.items }
                     .filter { !it.backdropUrl.isNullOrBlank() || !it.posterUrl.isNullOrBlank() }
                     .distinctBy { it.id }
+
+                val candidates = if (activePreset.isIndianRegion) {
+                    rawCandidates.filterNot { com.euthopiar.core.util.TmdbBridge.isIndianTvSerial(it) }
+                } else {
+                    rawCandidates
+                }
 
                 val candidatesWithLogos = candidates.filter { !it.logoUrl.isNullOrBlank() }.shuffled(providerRandom)
                 val otherCandidates = candidates.filter { it.logoUrl.isNullOrBlank() }.shuffled(providerRandom)
@@ -467,18 +493,23 @@ class HomeViewModel(
                 }
 
                 // Prioritize items that have verified studio clear logos (up to 6 in carousel)
-                val heroWithLogos = resolvedHeroes.filter { !it.logoUrl.isNullOrBlank() }
+                val heroCandidatesPool = if (activePreset.isIndianRegion) {
+                    resolvedHeroes.filterNot { com.euthopiar.core.util.TmdbBridge.isIndianTvSerial(it) }
+                } else {
+                    resolvedHeroes
+                }
+                val heroWithLogos = heroCandidatesPool.filter { !it.logoUrl.isNullOrBlank() }
                 val heroItems = if (heroWithLogos.size >= 4) {
                     heroWithLogos.take(6)
                 } else {
-                    (heroWithLogos + resolvedHeroes.filter { it.logoUrl.isNullOrBlank() }).take(6)
+                    (heroWithLogos + heroCandidatesPool.filter { it.logoUrl.isNullOrBlank() }).take(6)
                 }
 
-                // 5. Permute secondary rows and rotate item offsets per provider/session so each provider feels unique
-                val processedRows = if (rows.size > 2) {
-                    val firstRow = rows.first()
-                    val otherRows = rows.drop(1).shuffled(providerRandom)
-                    listOf(firstRow) + otherRows.map { row ->
+                // 5. Keep regional/core rows pinned at the top; permute secondary discovery rows and rotate item offsets
+                val processedRows = if (rows.size > pinnedCoreCount) {
+                    val pinnedRows = rows.take(pinnedCoreCount)
+                    val otherRows = rows.drop(pinnedCoreCount).shuffled(providerRandom)
+                    pinnedRows + otherRows.map { row ->
                         if (row.items.size > 4) {
                             val offset = providerRandom.nextInt(row.items.size)
                             row.copy(items = row.items.drop(offset) + row.items.take(offset))

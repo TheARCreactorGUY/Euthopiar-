@@ -29,8 +29,14 @@ interface WatchlistDao {
     @Query("UPDATE watchlist SET status = :status WHERE profileId = :profileId AND mediaId = :mediaId")
     suspend fun updateStatus(mediaId: String, status: String, profileId: String = "default_user")
 
+    @Query("SELECT * FROM watchlist ORDER BY addedTimestamp DESC")
+    suspend fun getAllWatchlist(): List<WatchlistEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(item: WatchlistEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertBatch(items: List<WatchlistEntity>)
 
     @Query("DELETE FROM watchlist WHERE profileId = :profileId AND mediaId = :mediaId")
     suspend fun delete(mediaId: String, profileId: String = "default_user")

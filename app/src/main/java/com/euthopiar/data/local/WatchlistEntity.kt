@@ -2,7 +2,9 @@ package com.euthopiar.data.local
 
 import androidx.room.Entity
 import androidx.room.Index
+import kotlinx.serialization.Serializable
 
+@Serializable
 @Entity(
     tableName = "watchlist",
     primaryKeys = ["mediaId", "profileId"],

@@ -2,6 +2,7 @@ package com.euthopiar.data.repository
 
 import android.content.Context
 import com.euthopiar.core.model.MediaItem
+import com.euthopiar.core.model.ContentRegionPreset
 import com.euthopiar.core.model.MediaType
 import com.euthopiar.core.util.TmdbBridge
 import com.euthopiar.data.local.AppDatabase
@@ -28,8 +29,12 @@ class TopTenRepository(
     private val cacheTtlMs = TimeUnit.HOURS.toMillis(6)
     private val refreshMutex = Mutex()
 
-    fun observeTopTen(type: MediaType, language: String = "en-US"): Flow<List<MediaItem>> = channelFlow {
-        val cacheKey = "${type.name.lowercase()}_day_${language.lowercase()}"
+    fun observeTopTen(
+        type: MediaType,
+        language: String = "en-US",
+        preset: ContentRegionPreset = TmdbBridge.activeRegionPreset
+    ): Flow<List<MediaItem>> = channelFlow {
+        val cacheKey = "${type.name.lowercase()}_day_${language.lowercase()}_${preset.id}"
 
         // 1. Emit cached data immediately from Room if available
         val cached = dao.getByKey(cacheKey)
@@ -51,7 +56,7 @@ class TopTenRepository(
                 // Double check cache timestamp inside mutex
                 val latestCached = dao.getByKey(cacheKey)
                 if (latestCached == null || (System.currentTimeMillis() - latestCached.fetchedAtEpochMs > cacheTtlMs)) {
-                    val freshItems = TmdbBridge.fetchTrendingTopTen(type, language)
+                    val freshItems = TmdbBridge.fetchTrendingTopTen(type, language, preset)
                     if (freshItems.isNotEmpty()) {
                         val entity = TopTenEntity(
                             cacheKey = cacheKey,

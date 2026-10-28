@@ -3,7 +3,9 @@ package com.euthopiar.data.local
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import kotlinx.serialization.Serializable
 
+@Serializable
 @Entity(
     tableName = "playback_history",
     indices = [

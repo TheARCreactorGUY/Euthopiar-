@@ -102,6 +102,8 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import coil3.request.error
 import coil3.request.fallback
+import com.euthopiar.core.model.ContentRegionPreset
+import com.euthopiar.core.util.TmdbBridge
 import com.euthopiar.data.preferences.CardScaleMode
 import com.euthopiar.data.preferences.NavbarStyle
 import com.euthopiar.data.preferences.PreferencesRepository
@@ -168,6 +170,9 @@ fun OnboardingScreen(
     var profilePinHash by remember { mutableStateOf<String?>(null) }
     var profilePlainPin by remember { mutableStateOf<String?>(null) }
 
+    val initialRegionPreset by preferencesRepository.contentRegionPreset.collectAsState(initial = ContentRegionPreset.GLOBAL)
+    var selectedRegionPreset by remember(initialRegionPreset) { mutableStateOf(initialRegionPreset) }
+
     // Page 3: Customize State
     var selectedCardScale by remember(initialCardScale) { mutableStateOf(initialCardScale) }
     var isAmoledActive by remember(preferenceAmoled) { mutableStateOf(preferenceAmoled) }
@@ -205,6 +210,8 @@ fun OnboardingScreen(
             preferencesRepository.setNavbarStyle(NavbarStyle.FLOATING)
             preferencesRepository.setCardScaleMode(selectedCardScale)
             preferencesRepository.setAmoledMode(isAmoledActive)
+            preferencesRepository.setContentRegionPreset(selectedRegionPreset)
+            TmdbBridge.activeRegionPreset = selectedRegionPreset
 
             // 3. Mark first run completed in DataStore
             preferencesRepository.setFirstRunCompleted(true)
@@ -372,6 +379,8 @@ fun OnboardingScreen(
                                 preferencesRepository.setAmoledMode(enabled)
                             }
                         },
+                        selectedRegionPreset = selectedRegionPreset,
+                        onRegionPresetChanged = { selectedRegionPreset = it },
                         isSubmitting = isSubmitting,
                         previewItems = postersState.previewPosters,
                         isLoadingPosters = postersState.isLoading,
@@ -1274,6 +1283,8 @@ private fun OnboardingPage3Customize(
     onCardScaleChanged: (CardScaleMode) -> Unit,
     isAmoled: Boolean,
     onAmoledChanged: (Boolean) -> Unit,
+    selectedRegionPreset: ContentRegionPreset,
+    onRegionPresetChanged: (ContentRegionPreset) -> Unit,
     isSubmitting: Boolean,
     onEnterSanctuary: () -> Unit,
     hazeState: HazeState,
@@ -1446,6 +1457,79 @@ private fun OnboardingPage3Customize(
                         hazeState = hazeState,
                         isAmoled = isAmoled,
                     )
+                }
+
+                HorizontalDivider(
+                    thickness = OnboardingTokens.HairlineWidth,
+                    color = OnboardingTokens.HairlineDivider,
+                )
+
+                // CHOICE BLOCK 3: CONTENT REGION
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 18.dp),
+                ) {
+                    Text(
+                        text = "Content Region",
+                        style = TextStyle(
+                            fontFamily = AppFontFamily,
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 15.sp,
+                            lineHeight = 19.sp,
+                            color = Color.White,
+                        ),
+                    )
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    Text(
+                        text = selectedRegionPreset.subtitle,
+                        style = TextStyle(
+                            fontFamily = AppFontFamily,
+                            fontWeight = FontWeight.Normal,
+                            fontSize = 12.sp,
+                            lineHeight = 16.sp,
+                            color = OnboardingTokens.TextMuted50,
+                        ),
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    androidx.compose.foundation.lazy.LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        items(ContentRegionPreset.entries.size) { idx ->
+                            val preset = ContentRegionPreset.entries[idx]
+                            val isSelected = preset == selectedRegionPreset
+                            val chipBg = if (isSelected) Color.White else Color.White.copy(alpha = 0.08f)
+                            val chipTextColor = if (isSelected) Color.Black else Color.White.copy(alpha = 0.85f)
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(chipBg)
+                                    .border(
+                                        0.5.dp,
+                                        if (isSelected) Color.White else Color.White.copy(alpha = 0.12f),
+                                        RoundedCornerShape(12.dp)
+                                    )
+                                    .clickable { onRegionPresetChanged(preset) }
+                                    .padding(horizontal = 14.dp, vertical = 9.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = preset.displayName,
+                                    style = TextStyle(
+                                        fontFamily = AppFontFamily,
+                                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                        fontSize = 13.sp,
+                                        color = chipTextColor
+                                    )
+                                )
+                            }
+                        }
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(88.dp)) // Extra space for pinned button

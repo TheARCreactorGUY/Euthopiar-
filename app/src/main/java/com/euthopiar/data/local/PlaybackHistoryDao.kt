@@ -50,6 +50,9 @@ interface PlaybackHistoryDao {
     @Query("SELECT * FROM playback_history WHERE profileId = :profileId AND isCompleted = 1 AND (:provider IS NULL OR LOWER(provider) = LOWER(:provider)) ORDER BY lastWatchedTimestamp DESC")
     fun observeCompleted(provider: String? = null, profileId: String = "default_user"): Flow<List<PlaybackHistoryEntity>>
 
+    @Query("SELECT * FROM playback_history ORDER BY lastWatchedTimestamp DESC")
+    suspend fun getAllHistory(): List<PlaybackHistoryEntity>
+
     @Query("SELECT * FROM playback_history WHERE id = :id LIMIT 1")
     suspend fun getProgress(id: String): PlaybackHistoryEntity?
 
