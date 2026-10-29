@@ -110,6 +110,7 @@ class PreferencesRepository private constructor(private val context: Context) {
         val TRAKT_SCROBBLE_ENABLED = booleanPreferencesKey("trakt_scrobble_enabled")
         val SIMKL_ACCESS_TOKEN = stringPreferencesKey("simkl_access_token")
         val SIMKL_SCROBBLE_ENABLED = booleanPreferencesKey("simkl_scrobble_enabled")
+        val SIMKL_CODE_VERIFIER = stringPreferencesKey("simkl_code_verifier")
         val REAL_DEBRID_API_KEY = stringPreferencesKey("real_debrid_api_key")
         val ALL_DEBRID_API_KEY = stringPreferencesKey("all_debrid_api_key")
         val TORBOX_API_KEY = stringPreferencesKey("torbox_api_key")
@@ -545,6 +546,16 @@ class PreferencesRepository private constructor(private val context: Context) {
 
     suspend fun setSimklScrobbleEnabled(enabled: Boolean) {
         context.preferencesDataStore.edit { it[PreferencesKeys.SIMKL_SCROBBLE_ENABLED] = enabled }
+    }
+
+    val simklCodeVerifier: Flow<String> = context.preferencesDataStore.data.map { it[PreferencesKeys.SIMKL_CODE_VERIFIER] ?: "" }.distinctUntilChanged()
+
+    suspend fun setSimklCodeVerifier(verifier: String) {
+        context.preferencesDataStore.edit { it[PreferencesKeys.SIMKL_CODE_VERIFIER] = verifier }
+    }
+
+    suspend fun clearSimklCodeVerifier() {
+        context.preferencesDataStore.edit { it.remove(PreferencesKeys.SIMKL_CODE_VERIFIER) }
     }
 
     // Debrid Preferences

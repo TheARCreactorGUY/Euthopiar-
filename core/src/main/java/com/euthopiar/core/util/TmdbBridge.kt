@@ -1,5 +1,7 @@
 package com.euthopiar.core.util
 
+import com.euthopiar.core.BuildConfig
+
 import com.euthopiar.core.matcher.MatchScorer
 import com.euthopiar.core.model.*
 import com.euthopiar.core.network.DohDns
@@ -38,7 +40,7 @@ typealias TmdbEnrichedData = TmdbBridge.EnrichedMetadata
 object TmdbBridge {
 
     const val BASE_URL: String = "https://euthopiar-vault.sehgalvansh716.workers.dev/3"
-    const val DEFAULT_API_KEY: String = ""
+    val DEFAULT_API_KEY: String = BuildConfig.TMDB_API_KEY
     const val DEFAULT_USER_AGENT: String =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
@@ -2105,6 +2107,8 @@ object TmdbBridge {
             feeds.add(FeedDef("South Indian Romantic Stories", appendApiKey("$BASE_URL/discover/movie?with_original_language=$teTaMlKn&with_genres=10749&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "ROMANCE", subtitle = "Heartwarming love & romance"))
             feeds.add(FeedDef("South Indian Family Entertainment", appendApiKey("$BASE_URL/discover/movie?with_original_language=$teTaMlKn&with_genres=10751,18&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "FAMILY", subtitle = "Clean family drama & emotional stories"))
             feeds.add(FeedDef("South Indian Crime & Mystery", appendApiKey("$BASE_URL/discover/tv?with_original_language=$teTaMlKn&with_genres=80,9648&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "CRIME", subtitle = "Detective stories & investigations"))
+            feeds.add(FeedDef("South Indian Sci-Fi & Fantasy", appendApiKey("$BASE_URL/discover/movie?with_original_language=$teTaMlKn&with_genres=878,14&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "SCI-FI", subtitle = "Speculative fiction & visual spectacles"))
+            feeds.add(FeedDef("South Indian Horror & Supernatural", appendApiKey("$BASE_URL/discover/movie?with_original_language=$teTaMlKn&with_genres=27&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "HORROR", subtitle = "Spine-chilling thrillers & paranormal stories"))
             feeds
         } else if (preset == ContentRegionPreset.INDIA_ALL) {
             val feeds = mutableListOf<FeedDef>()
@@ -2124,6 +2128,8 @@ object TmdbBridge {
             feeds.add(FeedDef("Indian Comedy Hits", appendApiKey("$BASE_URL/discover/movie?with_original_language=$allIndiaLangs&with_genres=35&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "COMEDY", subtitle = "Popular comedy movies"))
             feeds.add(FeedDef("Indian Romantic Hits", appendApiKey("$BASE_URL/discover/movie?with_original_language=$allIndiaLangs&with_genres=10749&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "ROMANCE", subtitle = "Memorable love stories & romantic cinema"))
             feeds.add(FeedDef("Indian Family Drama", appendApiKey("$BASE_URL/discover/movie?with_original_language=$allIndiaLangs&with_genres=10751,18&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "DRAMA", subtitle = "Family sagas & emotional drama"))
+            feeds.add(FeedDef("Indian Crime & Detective Series", appendApiKey("$BASE_URL/discover/tv?with_original_language=$allIndiaLangs&with_genres=80,9648&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "CRIME", subtitle = "Dark crime sagas & investigative thrillers"))
+            feeds.add(FeedDef("Indian Sci-Fi & Mythology", appendApiKey("$BASE_URL/discover/movie?with_original_language=$allIndiaLangs&with_genres=878,14&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "SCI-FI", subtitle = "Epic mythologies & speculative science fiction"))
             feeds
         } else {
             val feeds = mutableListOf<FeedDef>()
@@ -2149,6 +2155,9 @@ object TmdbBridge {
             feeds.add(FeedDef("$cleanName Family Entertainment", appendApiKey("$BASE_URL/discover/movie?${langParam}with_genres=10751&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "FAMILY", subtitle = "Entertaining stories for everyone"))
             feeds.add(FeedDef("$cleanName Crime & Mystery", appendApiKey("$BASE_URL/discover/tv?${langParam}with_genres=80,9648&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "CRIME", subtitle = "Dark mysteries & detective cases"))
             feeds.add(FeedDef("$cleanName Sci-Fi & Fantasy", appendApiKey("$BASE_URL/discover/movie?${langParam}with_genres=878,14&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "SCI-FI", subtitle = "Speculative fiction & adventures"))
+            feeds.add(FeedDef("$cleanName Horror & Supernatural", appendApiKey("$BASE_URL/discover/movie?${langParam}with_genres=27&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "HORROR", subtitle = "Spine-chilling terror & supernatural mysteries"))
+            feeds.add(FeedDef("$cleanName Adventure & Epic Stories", appendApiKey("$BASE_URL/discover/movie?${langParam}with_genres=12&sort_by=popularity.desc", apiKey), resolveLogos = false, eyebrow = "ADVENTURE", subtitle = "Exciting journeys & quest sagas"))
+            feeds.add(FeedDef("All-Time $cleanName Classics", appendApiKey("$BASE_URL/discover/movie?${langParam}sort_by=vote_count.desc&primary_release_date.lte=2021-01-01", apiKey), resolveLogos = false, eyebrow = "CLASSICS", subtitle = "Timeless cinematic masterworks"))
             feeds
         }
     }

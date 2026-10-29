@@ -1,5 +1,7 @@
 package com.euthopiar.core.js.host
 
+import com.euthopiar.core.BuildConfig
+
 import android.util.Log
 import com.dokar.quickjs.QuickJs
 import com.dokar.quickjs.binding.asyncFunction
@@ -52,7 +54,8 @@ class HostFunctions(
 
         runtime.function("__get_scraper_id") { scraperId }
         runtime.function("__get_scraper_settings") { scraperSettingsJson }
-        runtime.function("__get_tmdb_api_key") { tmdbApiKey }
+        runtime.function("__get_tmdb_api_key") { tmdbApiKey.ifBlank { BuildConfig.TMDB_API_KEY } }
+        runtime.function("__get_freekz_key_token") { BuildConfig.FREEKZ_KEY_TOKEN }
         runtime.function("__get_call_args") { callArgsJson }
         runtime.function("__capture_result") { args ->
             onResult(args.getOrNull(0)?.toString() ?: "[]")

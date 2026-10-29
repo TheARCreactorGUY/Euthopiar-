@@ -5,8 +5,11 @@ object JsBindings {
             globalThis.SCRAPER_ID = __get_scraper_id();
             globalThis.SCRAPER_SETTINGS = JSON.parse(__get_scraper_settings());
             try { globalThis.__CALL_ARGS__ = JSON.parse(__get_call_args()); } catch(e) { globalThis.__CALL_ARGS__ = {}; }
-            if (typeof TMDB_API_KEY === 'undefined') {
+            if (typeof TMDB_API_KEY === 'undefined' && typeof __get_tmdb_api_key === 'function') {
                 globalThis.TMDB_API_KEY = __get_tmdb_api_key();
+            }
+            if (typeof FREEKZ_KEY_TOKEN === 'undefined' && typeof __get_freekz_key_token === 'function') {
+                globalThis.FREEKZ_KEY_TOKEN = __get_freekz_key_token();
             }
             if (typeof globalThis.global === 'undefined') globalThis.global = globalThis;
             if (typeof globalThis.window === 'undefined') globalThis.window = globalThis;
@@ -46,12 +49,12 @@ object JsBindings {
                     var effectiveType = args.mediaType;
                     var result;
                     try {
-                        result = await getStreams(effectiveTmdbId, effectiveType, season, episode);
+                        result = await getStreams(effectiveTmdbId, effectiveType, season, episode, args);
                     } catch (firstErr) {
                         if (effectiveType === 'tv' || effectiveType === 'anime') {
                             var fallbackType = (effectiveType === 'tv') ? 'anime' : 'tv';
                             try {
-                                result = await getStreams(effectiveTmdbId, fallbackType, season, episode);
+                                result = await getStreams(effectiveTmdbId, fallbackType, season, episode, args);
                             } catch (_fallbackErr) {
                                 throw firstErr;
                             }
@@ -62,7 +65,7 @@ object JsBindings {
                     if ((!result || (Array.isArray(result) && result.length === 0)) && (effectiveType === 'tv' || effectiveType === 'anime')) {
                         var fallbackType = (effectiveType === 'tv') ? 'anime' : 'tv';
                         try {
-                            var altResult = await getStreams(effectiveTmdbId, fallbackType, season, episode);
+                            var altResult = await getStreams(effectiveTmdbId, fallbackType, season, episode, args);
                             if (altResult && Array.isArray(altResult) && altResult.length > 0) {
                                 result = altResult;
                             }

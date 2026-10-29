@@ -550,5 +550,25 @@ class MatchScorerTest {
         org.junit.Assert.assertTrue("Generic host title with arbitrary description text should pass", result.isAccepted)
         org.junit.Assert.assertTrue("Score should be >= 0.75, was ${result.score}", result.score >= 0.75)
     }
-}
 
+    @Test
+    fun testStreamMaskedTitleWithContradictoryRawTitleRejected() {
+        val hints = MatchHints(
+            tmdbId = 19995,
+            type = ContentType.MOVIE,
+            titles = setOf("Avatar"),
+            year = 2009
+        )
+        val stream = com.euthopiar.core.streams.StreamItem(
+            name = "Avatar (2009) [1080p] [Multi]",
+            title = "Avatar (2009) [1080p] [Multi]",
+            description = "VegaMovies • Google CDN",
+            filename = "Avatar.The.Way.of.Water.2022.1080p.WEB-DL.DDP5.1.Atmos.H.264",
+            addonName = "VegaMovies",
+            addonId = "vegamovies"
+        )
+        val result = MatchScorer.scoreStream(hints, stream)
+        org.junit.Assert.assertFalse("Stream with contradictory raw scraped title must be rejected", result.isAccepted)
+        assertEquals(0.0, result.score, 0.001)
+    }
+}

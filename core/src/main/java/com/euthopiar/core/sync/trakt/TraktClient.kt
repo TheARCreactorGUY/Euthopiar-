@@ -1,5 +1,7 @@
 package com.euthopiar.core.sync.trakt
 
+import com.euthopiar.core.BuildConfig
+
 import com.euthopiar.core.network.DohDns
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -157,8 +159,8 @@ class TraktClient(
     companion object {
         const val BASE_URL = "https://api.trakt.tv"
         // Public open-source Trakt app client credentials
-        const val DEFAULT_CLIENT_ID = "YOUR_API_KEY_HERE"
-        const val DEFAULT_CLIENT_SECRET = "YOUR_API_KEY_HERE"
+        val DEFAULT_CLIENT_ID: String = BuildConfig.TRAKT_CLIENT_ID
+        val DEFAULT_CLIENT_SECRET: String = BuildConfig.TRAKT_CLIENT_SECRET
 
         @Volatile
         private var instance: TraktClient? = null

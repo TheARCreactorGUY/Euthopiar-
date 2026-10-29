@@ -53,6 +53,7 @@ import dev.chrisbanes.haze.rememberHazeState
 import dev.chrisbanes.haze.hazeSource
 import com.euthopiar.ui.longpress.LocalLongPressHazeState
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.euthopiar.core.model.CatalogRow
 import com.euthopiar.core.model.MediaItem
 import com.euthopiar.core.registry.PluginRegistry
 import androidx.compose.material.icons.Icons
@@ -358,15 +359,20 @@ fun HomeScreen(
                             row.items.size >= 5
                         }
                     }
-                    val displayContentRows = remember(state.filteredRows, rankedTop10Row) {
-                        if (rankedTop10Row != null) {
+                    val topTenDisplayItems = remember(universalTopTen, rankedTop10Row) {
+                        if (universalTopTen.isNotEmpty()) universalTopTen.take(10) else rankedTop10Row?.items?.take(10) ?: emptyList()
+                    }
+                    val displayContentRows = remember(state.filteredRows, rankedTop10Row, topTenDisplayItems) {
+                        val base = if (rankedTop10Row != null) {
                             state.filteredRows.filter { it.title != rankedTop10Row.title }
                         } else {
                             state.filteredRows
                         }
-                    }
-                    val topTenDisplayItems = remember(universalTopTen, rankedTop10Row) {
-                        if (universalTopTen.isNotEmpty()) universalTopTen.take(10) else rankedTop10Row?.items?.take(10) ?: emptyList()
+                        deduplicateProminentRows(
+                            topTenItems = topTenDisplayItems,
+                            rows = base,
+                            maxRowsToFilter = 3
+                        )
                     }
 
                     val heroStretchState = rememberHeroStretchState(
@@ -399,20 +405,25 @@ fun HomeScreen(
                             row.items.size >= 5
                         }
                     }
-                    val contentRowsForTab = remember(rowsForTab, rankedTop10) {
-                        val base = if (rankedTop10 != null) {
-                            rowsForTab.filter { it.title != rankedTop10.title }
-                        } else {
-                            rowsForTab
-                        }
-                        base.distinctBy { "${it.title}_${it.subtitle.orEmpty()}_${it.eyebrow.orEmpty()}" }
-                    }
                     val topTenForTab = remember(selectedTab, universalTopTen, rankedTop10) {
                         if (universalTopTen.isNotEmpty()) {
                             universalTopTen.take(10)
                         } else {
                             rankedTop10?.items?.take(10) ?: emptyList()
                         }
+                    }
+                    val contentRowsForTab = remember(rowsForTab, rankedTop10, topTenForTab) {
+                        val base = if (rankedTop10 != null) {
+                            rowsForTab.filter { it.title != rankedTop10.title }
+                        } else {
+                            rowsForTab
+                        }
+                        val distinctRows = base.distinctBy { "${it.title}_${it.subtitle.orEmpty()}_${it.eyebrow.orEmpty()}" }
+                        deduplicateProminentRows(
+                            topTenItems = topTenForTab,
+                            rows = distinctRows,
+                            maxRowsToFilter = 3
+                        )
                     }
 
                     Box(
@@ -896,3 +907,55 @@ private fun Modifier.staggeredEntrance(
     }
 }
 
+
+/**
+ * Deduplicates content cards across the Top 10 row and the first [maxRowsToFilter] catalog rows.
+ * Prevents prominent repetitive cards while leaving subsequent/genre rows untouched.
+ */
+private fun deduplicateProminentRows(
+    topTenItems: List<MediaItem>,
+    rows: List<CatalogRow>,
+    maxRowsToFilter: Int = 3
+): List<CatalogRow> {
+    if (rows.isEmpty()) return rows
+
+    val seenIds = HashSet<String>()
+    val seenNormalizedTitles = HashSet<String>()
+
+    fun normTitle(t: String): String = t.lowercase().filter { it.isLetterOrDigit() }
+    fun normId(id: String): String = id.trim().removePrefix("movie_").removePrefix("tv_")
+
+    for (item in topTenItems) {
+        val cleanId = normId(item.id)
+        if (cleanId.isNotEmpty()) seenIds.add(cleanId)
+        val cleanTitle = normTitle(item.title)
+        if (cleanTitle.isNotEmpty()) seenNormalizedTitles.add(cleanTitle)
+    }
+
+    return rows.mapIndexed { index, row ->
+        if (index < maxRowsToFilter) {
+            val uniqueItems = row.items.filter { item ->
+                val cleanId = normId(item.id)
+                val cleanTitle = normTitle(item.title)
+
+                val isDuplicate = (cleanId.isNotEmpty() && cleanId in seenIds) ||
+                        (cleanTitle.isNotEmpty() && cleanTitle in seenNormalizedTitles)
+
+                if (!isDuplicate) {
+                    if (cleanId.isNotEmpty()) seenIds.add(cleanId)
+                    if (cleanTitle.isNotEmpty()) seenNormalizedTitles.add(cleanTitle)
+                    true
+                } else {
+                    false
+                }
+            }
+            if (uniqueItems.size >= 3) {
+                row.copy(items = uniqueItems)
+            } else {
+                row
+            }
+        } else {
+            row
+        }
+    }
+}

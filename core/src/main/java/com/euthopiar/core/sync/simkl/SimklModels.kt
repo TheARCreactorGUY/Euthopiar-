@@ -9,6 +9,15 @@ data class SimklUser(
 )
 
 @Serializable
+data class SimklTokenResponse(
+    @SerialName("access_token") val accessToken: String = "",
+    @SerialName("token_type") val tokenType: String = "",
+    val scope: String = "",
+    @SerialName("expires_in") val expiresIn: Long = 0L,
+    @SerialName("refresh_token") val refreshToken: String = ""
+)
+
+@Serializable
 data class SimklUserDetails(
     val name: String = "",
     val id: Long = 0L,

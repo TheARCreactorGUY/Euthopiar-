@@ -19,6 +19,12 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.launch
+import com.euthopiar.core.sync.simkl.SimklClient
+import com.euthopiar.data.preferences.PreferencesRepository
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -92,6 +98,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        handleDeepLink(intent)
         enableEdgeToEdge()
 
         val pipSupported = packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
@@ -272,6 +279,44 @@ class MainActivity : ComponentActivity() {
         }
 
         return builder.build()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleDeepLink(intent)
+    }
+
+    private fun handleDeepLink(intent: Intent?) {
+        val uri = intent?.data ?: return
+        if (uri.scheme?.equals("Euthopiar", ignoreCase = true) == true &&
+            uri.host.equals("auth", ignoreCase = true) &&
+            uri.path?.startsWith("/simkl") == true
+        ) {
+            val code = uri.getQueryParameter("code")
+            if (!code.isNullOrBlank()) {
+                lifecycleScope.launch(Dispatchers.IO) {
+                    try {
+                        val prefs = PreferencesRepository.getInstance(applicationContext)
+                        val storedVerifier = prefs.simklCodeVerifier.firstOrNull()?.ifBlank { null }
+                        val verifier = storedVerifier ?: SimklClient.getInstance().pendingCodeVerifier
+                        val result = SimklClient.getInstance().exchangeCodeForToken(code, codeVerifier = verifier)
+                        result.fold(
+                            onSuccess = { tokenResp ->
+                                prefs.setSimklAuth(tokenResp.accessToken)
+                                prefs.setSimklScrobbleEnabled(true)
+                                prefs.clearSimklCodeVerifier()
+                            },
+                            onFailure = { err ->
+                                android.util.Log.e("MainActivity", "Simkl token exchange failed: ${err.message}", err)
+                            }
+                        )
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainActivity", "Simkl OAuth error: ${e.message}", e)
+                    }
+                }
+            }
+        }
     }
 
     override fun onDestroy() {

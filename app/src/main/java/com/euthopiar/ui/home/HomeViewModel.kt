@@ -230,6 +230,38 @@ class HomeViewModel(
         }
     }
 
+    /**
+     * Deduplicates items across the first [maxRows] catalog rows among themselves.
+     * Subsequent rows (index >= maxRows) are preserved untouched to avoid starving genre rails.
+     */
+    private fun deduplicateProminentCatalogItems(rows: List<CatalogRow>, maxRows: Int = 3): List<CatalogRow> {
+        if (rows.isEmpty()) return rows
+        val seenIds = HashSet<String>()
+        val seenTitles = HashSet<String>()
+
+        fun normTitle(t: String): String = t.lowercase().filter { it.isLetterOrDigit() }
+        fun normId(id: String): String = id.trim().removePrefix("movie_").removePrefix("tv_")
+
+        return rows.mapIndexed { index, row ->
+            if (index < maxRows) {
+                val uniqueItems = row.items.filter { item ->
+                    val cleanId = normId(item.id)
+                    val cleanTitle = normTitle(item.title)
+                    val isDup = (cleanId.isNotEmpty() && cleanId in seenIds) ||
+                            (cleanTitle.isNotEmpty() && cleanTitle in seenTitles)
+                    if (!isDup) {
+                        if (cleanId.isNotEmpty()) seenIds.add(cleanId)
+                        if (cleanTitle.isNotEmpty()) seenTitles.add(cleanTitle)
+                        true
+                    } else false
+                }
+                if (uniqueItems.size >= 3) row.copy(items = uniqueItems) else row
+            } else {
+                row
+            }
+        }
+    }
+
     fun selectTab(tab: HomeFilterTab) {
         _selectedTab.value = tab
         updateSuccessState()
@@ -536,7 +568,8 @@ class HomeViewModel(
                     }
                 }
 
-                rawCatalogRows = deduplicateCatalogRows(enrichedRows)
+                val distinctRowHeaders = deduplicateCatalogRows(enrichedRows)
+                rawCatalogRows = deduplicateProminentCatalogItems(distinctRowHeaders, maxRows = 3)
                 rawHeroItems = heroItems
 
                 // Compute bulletproof self-pruning tabs

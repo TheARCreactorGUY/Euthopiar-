@@ -26,12 +26,26 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:supportsPictureInPicture="true"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden"
             android:theme="@style/Theme.Euthopiar">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="Euthopiar"
+                    android:host="auth"
+                    android:pathPrefix="/simkl" />
+                <data
+                    android:scheme="euthopiar"
+                    android:host="auth"
+                    android:pathPrefix="/simkl" />
             </intent-filter>
         </activity>
 

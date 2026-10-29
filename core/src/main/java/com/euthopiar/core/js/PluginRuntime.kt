@@ -241,6 +241,7 @@ object PluginRuntime {
                     val rawLabel = obj.string("label")
                     val rawDesc = obj.string("description")
                     val rawFilename = obj.string("filename")
+                    val explicitRawTitle = obj.string("rawTitle") ?: obj.string("raw_title") ?: rawFilename
 
                     val inferredTitle = rawTitle
                         ?: rawName
@@ -472,7 +473,8 @@ object PluginRuntime {
                         format = format?.trim(),
                         trackers = if (extractedTrackers.isNotEmpty()) extractedTrackers.distinct() else null,
                         drm = drmConfig,
-                        manifestContent = manifestContent?.trim()
+                        manifestContent = manifestContent?.trim(),
+                        rawTitle = explicitRawTitle?.trim()
                     )
                 } catch (e: Exception) {
                     android.util.Log.w("PluginRuntime", "Skipping malformed stream item from $scraperId: ${e.message}")

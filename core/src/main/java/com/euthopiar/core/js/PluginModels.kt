@@ -174,7 +174,8 @@ data class PluginRuntimeResult(
     val format: String? = null,
     val trackers: List<String>? = null,
     val drm: DrmConfig? = null,
-    val manifestContent: String? = null
+    val manifestContent: String? = null,
+    val rawTitle: String? = null
 ) {
     fun inferContainer(scraperFormats: List<String>? = null): StreamContainer {
         val explicit = (format ?: type)?.lowercase()?.trim()

@@ -1,5 +1,7 @@
 package com.euthopiar.core.subtitle.external
 
+import com.euthopiar.core.BuildConfig
+
 import com.euthopiar.core.model.SubtitleTrack
 import com.euthopiar.core.network.DohDns
 import kotlinx.coroutines.Dispatchers
@@ -81,7 +83,7 @@ class SubDlClient(
     }
 
     companion object {
-        const val DEFAULT_API_KEY = "YOUR_API_KEY_HERE"
+        val DEFAULT_API_KEY: String = BuildConfig.SUBDL_API_KEY
 
         @Volatile
         private var instance: SubDlClient? = null

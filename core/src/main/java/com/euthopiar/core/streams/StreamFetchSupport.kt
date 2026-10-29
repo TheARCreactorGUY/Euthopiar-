@@ -99,6 +99,7 @@ fun PluginRuntimeResult.toStreamItem(
         name = name ?: title,
         title = title,
         description = subtitleParts.joinToString(" • ").ifBlank { null },
+        filename = rawTitle,
         url = cleanStreamUrl,
         infoHash = infoHash,
         fileIdx = fileIdx,

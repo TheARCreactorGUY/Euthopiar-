@@ -260,7 +260,8 @@ object MatchScorer {
         val ct = when (item.type) {
             MediaType.MOVIE -> ContentType.MOVIE
             MediaType.TV_SERIES -> ContentType.TV_SERIES
-            MediaType.ANIME -> ContentType.ANIME
+            MediaType.ANIME -> ContentType.ANIME
+
             MediaType.LIVE_TV -> ContentType.TV_SERIES
         }
         return score(hints, item.title, item.year, ct)
@@ -312,7 +313,8 @@ object MatchScorer {
             streamDescription = item.description,
             streamUrl = item.url,
             magnetUrl = item.magnetUrl,
-            scraperName = item.addonName.ifBlank { item.sourceName }
+            scraperName = item.addonName.ifBlank { item.sourceName },
+            rawReleaseTitle = item.filename
         )
     }
 
@@ -322,7 +324,8 @@ object MatchScorer {
         streamDescription: String? = null,
         streamUrl: String? = null,
         magnetUrl: String? = null,
-        scraperName: String? = null
+        scraperName: String? = null,
+        rawReleaseTitle: String? = null
     ): StreamVerificationResult {
         // 1. Extract magnet dn parameter if present
         var magnetDn: String? = null
@@ -349,7 +352,7 @@ object MatchScorer {
         }.toSet()
 
         // 1b. Separate filename / release candidate from UI metadata description
-        var filenameHint: String? = magnetDn?.takeIf { it.isNotBlank() }
+        var filenameHint: String? = (rawReleaseTitle ?: magnetDn)?.takeIf { it.isNotBlank() }
         if (filenameHint == null) {
             val descLines = listOfNotNull(streamTitle, streamDescription).flatMap { it.lines() }
             val mediaLine = descLines.firstOrNull { line ->

@@ -343,6 +343,7 @@ class PlayerViewModel(
     )
     private var activeRefreshableSource: com.euthopiar.core.streams.RefreshableSource? = null
     private var bufferingStallStartTime: Long? = null
+    private var transientIoRetryCount: Int = 0
     private var userExplicitServerSelection: Boolean = false
     private var isCurrentLiveStream: Boolean = false
     private var hasStartedPlayback: Boolean = false
@@ -943,6 +944,7 @@ class PlayerViewModel(
                                 errorMessage = null
                             )
                         }
+                        transientIoRetryCount = 0
                         probeAllPendingServers()
                         updateMediaFormatInfo()
                         resetAutoHideTimer()
@@ -967,6 +969,7 @@ class PlayerViewModel(
             override fun onRenderedFirstFrame() {
                 android.util.Log.d("PlayerViewModel", "onRenderedFirstFrame: First video frame rendered successfully")
                 videoFrameRendered = true
+                transientIoRetryCount = 0
                 _uiState.update { it.copy(userError = null, errorMessage = null) }
                 updateMediaFormatInfo()
             }
@@ -1250,6 +1253,29 @@ class PlayerViewModel(
                                 fallbackToNextServer(currentServer, error)
                             }
                         }
+                    }
+                    return
+                }
+
+                // 3.5. Transient IO / EOF / Interrupted Seek Auto-Recovery on Active Server
+                val isTransientIo = error.errorCode == PlaybackException.ERROR_CODE_IO_UNSPECIFIED ||
+                        error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
+                        error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ||
+                        error.cause is java.io.EOFException ||
+                        error.cause is java.net.SocketException ||
+                        error.cause is java.net.SocketTimeoutException ||
+                        error.message?.contains("EOFException", ignoreCase = true) == true ||
+                        error.cause?.message?.contains("EOFException", ignoreCase = true) == true
+
+                if (isTransientIo && currentServer != null && transientIoRetryCount < 3) {
+                    transientIoRetryCount++
+                    val resumePos = (pendingDeferredSeekMs ?: exoPlayer?.currentPosition?.takeIf { it > 0L } ?: _uiState.value.currentPositionMs).coerceAtLeast(0L)
+                    android.util.Log.i("PlayerViewModel", "Transient playback IO error ($transientIoRetryCount/3) on ${currentServer.serverName}. Auto-recovering at ${resumePos}ms...")
+                    viewModelScope.launch {
+                        kotlinx.coroutines.delay(200L)
+                        exoPlayer?.seekTo(resumePos)
+                        exoPlayer?.prepare()
+                        exoPlayer?.play()
                     }
                     return
                 }
@@ -2314,7 +2340,14 @@ class PlayerViewModel(
         return when {
             // HLS (Adaptive Master Playlists & Media Playlists)
             source.container == com.euthopiar.core.model.StreamContainer.HLS || isHlsDetected || mediaItem.localConfiguration?.mimeType == MimeTypes.APPLICATION_M3U8 -> {
+                val loadErrorPolicy = object : androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy() {
+                    override fun getRetryDelayMsFor(loadErrorInfo: androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo): Long {
+                        return if (loadErrorInfo.errorCount <= 3) 300L else androidx.media3.common.C.TIME_UNSET
+                    }
+                    override fun getMinimumLoadableRetryCount(dataType: Int): Int = 3
+                }
                 HlsMediaSource.Factory(DisguisedHlsDataSource.Factory(dataSourceFactory, cleanStreamUrl, requestHeaders))
+                    .setLoadErrorHandlingPolicy(loadErrorPolicy)
                     .createMediaSource(mediaItem)
             }
             // MPEG-DASH
@@ -4012,6 +4045,7 @@ class PlayerViewModel(
         fastStartJob?.cancel()
         fastStartJob = null
         bufferingStallStartTime = null
+        transientIoRetryCount = 0
         userExplicitServerSelection = isUserExplicit
         if (isUserExplicit) {
             hasStartedPlayback = true

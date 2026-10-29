@@ -100,6 +100,7 @@ fun IntegrationsSettingsPage(
 
     val coroutineScope = rememberCoroutineScope()
     val uriHandler = LocalUriHandler.current
+    val context = LocalContext.current
 
     // Trakt Device Flow states
     var showTraktAuthDialog by remember { mutableStateOf(false) }
@@ -180,6 +181,12 @@ fun IntegrationsSettingsPage(
         simklAuthError = null
         isSimklValidating = false
         showSimklConnectDialog = true
+    }
+
+    LaunchedEffect(simklToken) {
+        if (simklToken.isNotBlank()) {
+            showSimklConnectDialog = false
+        }
     }
 
     val debridOptions = remember {
@@ -891,13 +898,30 @@ fun IntegrationsSettingsPage(
                             }
                         }
 
-                        // Direct link to Simkl developer dashboard
+                        // OAuth authorization button and manual token dashboard link
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.Start
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             SettingsPillButton(
-                                text = "Get token from simkl.com",
+                                text = "Authorize with Simkl",
+                                isSolidWhite = true,
+                                onClick = {
+                                    try {
+                                        val authUrl = com.euthopiar.core.sync.simkl.SimklClient.getInstance().getAuthorizationUrl()
+                                        val verifier = com.euthopiar.core.sync.simkl.SimklClient.getInstance().pendingCodeVerifier
+                                        if (!verifier.isNullOrBlank()) {
+                                            coroutineScope.launch {
+                                                com.euthopiar.data.preferences.PreferencesRepository.getInstance(context).setSimklCodeVerifier(verifier)
+                                            }
+                                        }
+                                        uriHandler.openUri(authUrl)
+                                    } catch (_: Exception) {}
+                                }
+                            )
+
+                            SettingsPillButton(
+                                text = "Manual token (simkl.com)",
                                 isSolidWhite = false,
                                 onClick = {
                                     try {

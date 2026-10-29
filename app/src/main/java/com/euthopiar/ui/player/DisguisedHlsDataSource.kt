@@ -167,15 +167,22 @@ class DisguisedHlsDataSource(
     override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
         if (!headerInspected) {
             headerInspected = true
+            val uri = currentDataSpec?.uri ?: upstream.uri
+            val uriStr = uri?.toString()?.lowercase() ?: ""
+            val path = uri?.path?.lowercase() ?: ""
+            val isExplicitFmp4 = path.endsWith(".m4s") || path.endsWith(".mp4") || uriStr.contains(".m4s?") || uriStr.contains(".mp4?")
+
             // Read initial probe chunk to inspect for decoy header bytes
             val probeBuf = ByteArray(2048)
             val bytesRead = upstream.read(probeBuf, 0, probeBuf.size)
             if (bytesRead > 0) {
+                val fourcc = if (bytesRead >= 8) String(probeBuf, 4, 4, Charsets.US_ASCII) else ""
                 // If it starts with 0x47, it's already standard MPEG-TS
-                // If it starts with #EXTM3U or fMP4 (ftyp/moof), leave untouched
+                // If it starts with #EXTM3U or fMP4 (ftyp/styp/moof/moov/sidx), leave untouched
                 val isStandardTs = probeBuf[0] == 0x47.toByte()
-                val isPlaylistOrFmp4 = (bytesRead >= 7 && String(probeBuf, 0, 7, Charsets.US_ASCII).startsWith("#EXTM3U")) ||
-                        (bytesRead >= 8 && (String(probeBuf, 4, 4, Charsets.US_ASCII) == "ftyp" || String(probeBuf, 4, 4, Charsets.US_ASCII) == "moof"))
+                val isPlaylistOrFmp4 = isExplicitFmp4 ||
+                        (bytesRead >= 7 && String(probeBuf, 0, 7, Charsets.US_ASCII).startsWith("#EXTM3U")) ||
+                        (fourcc in setOf("ftyp", "styp", "moof", "moov", "sidx", "emsg", "prft"))
 
                 var syncOffset = 0
                 if (!isStandardTs && !isPlaylistOrFmp4 && bytesRead >= 188 * 2) {
