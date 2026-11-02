@@ -2,6 +2,7 @@ package com.euthopiar.ui.home
 
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
@@ -14,6 +15,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -142,6 +146,15 @@ fun HomeScreen(
     val skippedUpdateVersion by preferencesRepository.skippedUpdateVersion.collectAsState(initial = "")
     var showUpdateDialog by remember { mutableStateOf(false) }
     var showDonationDialog by remember { mutableStateOf(false) }
+
+    // Notify AppLaunchCoordinator when Home catalog data is ready for dynamic early release
+    LaunchedEffect(uiState) {
+        if (uiState is HomeUiState.Success) {
+            com.euthopiar.ui.splash.AppLaunchCoordinator.notifyHomeDataReady()
+        } else if (uiState is HomeUiState.Error) {
+            com.euthopiar.ui.splash.AppLaunchCoordinator.notifyHomeDataReady()
+        }
+    }
 
     // Automatic update check on app launch
     LaunchedEffect(autoCheckUpdates) {
@@ -303,8 +316,15 @@ fun HomeScreen(
         ) { state ->
             when (state) {
                 is HomeUiState.Loading -> {
-                    ProvideShimmerScope {
-                        HomeScreenSkeleton(modifier = Modifier.fillMaxSize())
+                    val isIgnitionActive by com.euthopiar.ui.splash.AppLaunchCoordinator.isIgnitionActive.collectAsState()
+                    val hasCompletedInitialLaunch = com.euthopiar.ui.splash.AppLaunchCoordinator.hasCompletedInitialLaunch
+                    if (isIgnitionActive || !hasCompletedInitialLaunch) {
+                        // During initial launch, keep canvas quiet obsidian; never flash wireframe skeleton
+                        Box(modifier = Modifier.fillMaxSize().background(screenBg))
+                    } else {
+                        ProvideShimmerScope {
+                            HomeScreenSkeleton(modifier = Modifier.fillMaxSize())
+                        }
                     }
                 }
 
@@ -435,6 +455,7 @@ fun HomeScreen(
                         } else {
                             0.dp
                         }
+                        val navBarBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
 
                         @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
                         androidx.compose.runtime.CompositionLocalProvider(
@@ -614,7 +635,7 @@ fun HomeScreen(
                                 // 5. Multi-Category Content Rows (Progressively Loaded & Virtualized)
                                 itemsIndexed(
                                     items = contentRowsForTab,
-                                    key = { index, row -> "stremio_${row.title}_${row.subtitle.orEmpty()}_${row.eyebrow.orEmpty()}_$index" },
+                                    key = { _, row -> "stremio_${row.title}_${row.subtitle.orEmpty()}_${row.eyebrow.orEmpty()}" },
                                     contentType = { _, _ -> "catalog_row" }
                                 ) { index, row ->
                                     val stagger = index + 3
@@ -666,11 +687,11 @@ fun HomeScreen(
                                 }
                             }
 
-                            // Bottom Spacer for Navigation Bar clearance (phone only)
+                            // Bottom Spacer for Navigation Bar clearance (dynamic system insets)
                             val bottomSpacerHeight = if (windowDimensions.isPhone) {
-                                Dimens.navBarHeight + Dimens.spacing32
+                                Dimens.navBarHeight + navBarBottom + Dimens.spacing16
                             } else {
-                                Dimens.spacing32
+                                navBarBottom + Dimens.spacing24
                             }
                             item(key = "home_bottom_spacer", contentType = "spacer") {
                                 Spacer(modifier = Modifier.height(bottomSpacerHeight))
@@ -886,23 +907,23 @@ private fun Modifier.staggeredEntrance(
     isFirstComposition: Boolean,
     reduceMotion: Boolean
 ): Modifier {
-    if (isFirstComposition || reduceMotion || !isEntering || rowIndex >= 4) return this
+    if (reduceMotion || !isEntering || rowIndex >= 6) return this
 
     val animatable = remember(tabKey, rowIndex) { Animatable(0f) }
     LaunchedEffect(tabKey, rowIndex) {
-        delay(rowIndex * 20L)
+        delay(rowIndex * 35L)
         animatable.animateTo(
             targetValue = 1f,
-            animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)
+            animationSpec = tween(durationMillis = 240, easing = CubicBezierEasing(0.23f, 1f, 0.32f, 1f))
         )
     }
 
     val density = androidx.compose.ui.platform.LocalDensity.current
-    val translateYPx = with(density) { 8.dp.toPx() }
+    val translateYPx = with(density) { 10.dp.toPx() }
 
     return this.graphicsLayer {
         val progress = animatable.value
-        alpha = 0.5f + 0.5f * progress
+        alpha = progress
         translationY = (1f - progress) * translateYPx
     }
 }

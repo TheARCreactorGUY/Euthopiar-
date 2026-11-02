@@ -25,6 +25,7 @@ import com.euthopiar.data.update.AppUpdateConfig
 import com.euthopiar.data.update.AppUpdateManager
 import com.euthopiar.data.update.ReleaseInfo
 import com.euthopiar.data.update.UpdateCheckState
+import com.euthopiar.ui.components.DemoUpdateDialog
 import com.euthopiar.ui.components.UpdateInfoDialog
 import com.euthopiar.ui.settings.components.*
 import com.euthopiar.ui.theme.AppFontFamily
@@ -36,6 +37,7 @@ import java.util.Locale
 @Composable
 fun UpdateSettingsPage(
     onBack: () -> Unit,
+    onNavigateHome: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -51,6 +53,7 @@ fun UpdateSettingsPage(
 
     val currentVersion = remember(context) { updateManager.getCurrentVersionName() }
     var showUpdateDialog by remember { mutableStateOf(false) }
+    var showDemoDialog by remember { mutableStateOf(false) }
     var activeDialogRelease by remember { mutableStateOf<ReleaseInfo?>(null) }
 
     val isChecking = updateState is UpdateCheckState.Checking
@@ -99,6 +102,12 @@ fun UpdateSettingsPage(
                         updateManager.skipVersion(ver)
                         showUpdateDialog = false
                     }
+                )
+            }
+            if (showDemoDialog) {
+                DemoUpdateDialog(
+                    hazeState = hazeState,
+                    onDismiss = { showDemoDialog = false }
                 )
             }
         }
@@ -356,6 +365,36 @@ fun UpdateSettingsPage(
                     contentDescription = null,
                     tint = SettingsTokens.TextWhite42,
                     modifier = Modifier.size(16.dp)
+                )
+            }
+        )
+
+        // Section 4: Design & UI Showcase
+        OpenSettingsSectionHeader(title = "Design & UI Showcase")
+
+        OpenSettingsRow(
+            title = "Preview Update Popup (Demo)",
+            subtitle = "Test dialog motion, photo carousel, and markdown styling",
+            onClick = { showDemoDialog = true },
+            trailingContent = {
+                SettingsMetadataChip(
+                    text = "Demo",
+                    hazeState = hazeState
+                )
+            }
+        )
+
+        OpenSettingsRow(
+            title = "Replay Setup Walkthrough",
+            subtitle = "Test the 3-step interactive spotlight guide",
+            onClick = {
+                onNavigateHome?.invoke() ?: onBack()
+                com.euthopiar.ui.walkthrough.WalkthroughCoordinator.instance.start(isFreshInstall = false)
+            },
+            trailingContent = {
+                SettingsMetadataChip(
+                    text = "Guide",
+                    hazeState = hazeState
                 )
             }
         )

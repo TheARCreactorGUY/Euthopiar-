@@ -21,7 +21,11 @@ import com.euthopiar.ui.util.UserError
 import com.euthopiar.ui.util.toUserError
 
 sealed interface MediaDetailsUiState {
-    data object Loading : MediaDetailsUiState
+    data class Loading(
+        val title: String? = null,
+        val posterUrl: String? = null,
+        val logoUrl: String? = null
+    ) : MediaDetailsUiState
     data class Success(val detail: MediaDetail) : MediaDetailsUiState
     data class Error(
         val error: UserError = UserError.Unknown,
@@ -33,10 +37,11 @@ class MediaDetailsViewModel(
     application: Application,
     private val repository: ProviderRepository,
     private val initialTitle: String? = null,
-    private val initialPosterUrl: String? = null
+    private val initialPosterUrl: String? = null,
+    private val initialLogoUrl: String? = null
 ) : AndroidViewModel(application) {
 
-    constructor(application: Application) : this(application, ProviderRepository.Default, null, null)
+    constructor(application: Application) : this(application, ProviderRepository.Default, null, null, null)
 
     private val libraryRepository = LibraryRepository.getInstance(application)
     private val playlistRepository = com.euthopiar.data.repository.PlaylistRepository.getInstance(application)
@@ -44,7 +49,7 @@ class MediaDetailsViewModel(
     private var playlistObserverJob: Job? = null
     private var playbackObserverJob: Job? = null
 
-    private val _uiState = MutableStateFlow<MediaDetailsUiState>(MediaDetailsUiState.Loading)
+    private val _uiState = MutableStateFlow<MediaDetailsUiState>(MediaDetailsUiState.Loading())
     val uiState: StateFlow<MediaDetailsUiState> = _uiState.asStateFlow()
 
     private val _selectedSeason = MutableStateFlow(1)
@@ -80,6 +85,7 @@ class MediaDetailsViewModel(
     private var currentType: MediaType? = null
     private var currentFallbackTitle: String? = null
     private var currentFallbackPosterUrl: String? = null
+    private var currentFallbackLogoUrl: String? = null
     private var hasUserManuallySelectedSeason = false
 
     fun loadDetails(
@@ -87,7 +93,8 @@ class MediaDetailsViewModel(
         provider: String? = null,
         type: MediaType? = null,
         fallbackTitle: String? = initialTitle,
-        fallbackPosterUrl: String? = initialPosterUrl
+        fallbackPosterUrl: String? = initialPosterUrl,
+        fallbackLogoUrl: String? = initialLogoUrl
     ) {
         hasUserManuallySelectedSeason = false
         watchlistObserverJob?.cancel()
@@ -138,8 +145,37 @@ class MediaDetailsViewModel(
         currentType = type
         currentFallbackTitle = fallbackTitle
         currentFallbackPosterUrl = fallbackPosterUrl
+        currentFallbackLogoUrl = fallbackLogoUrl
 
-        _uiState.value = MediaDetailsUiState.Loading
+        val isTv = type == MediaType.TV_SERIES || type == MediaType.ANIME
+        val preloadedLogo = fallbackLogoUrl ?: com.euthopiar.core.util.TmdbBridge.getCachedLogo(mediaId, isTv)
+        _uiState.value = MediaDetailsUiState.Loading(
+            title = fallbackTitle,
+            posterUrl = fallbackPosterUrl,
+            logoUrl = preloadedLogo
+        )
+
+        if (preloadedLogo.isNullOrBlank()) {
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    val mediaItem = com.euthopiar.core.model.MediaItem(
+                        id = mediaId,
+                        title = fallbackTitle ?: "",
+                        url = "",
+                        posterUrl = fallbackPosterUrl,
+                        type = type ?: MediaType.MOVIE,
+                        provider = provider
+                    )
+                    val resolvedLogo = repository.resolveLogo(mediaItem, provider)
+                    if (!resolvedLogo.isNullOrBlank()) {
+                        val current = _uiState.value
+                        if (current is MediaDetailsUiState.Loading) {
+                            _uiState.value = current.copy(logoUrl = resolvedLogo)
+                        }
+                    }
+                } catch (_: Throwable) {}
+            }
+        }
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -284,6 +320,6 @@ class MediaDetailsViewModel(
     }
 
     fun retry() {
-        currentMediaId?.let { loadDetails(it, currentProvider, currentType, currentFallbackTitle, currentFallbackPosterUrl) }
+        currentMediaId?.let { loadDetails(it, currentProvider, currentType, currentFallbackTitle, currentFallbackPosterUrl, currentFallbackLogoUrl) }
     }
 }

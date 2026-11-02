@@ -143,6 +143,7 @@ class PreferencesRepository private constructor(private val context: Context) {
         val LAST_DONATION_PROMPT_TIMESTAMP = longPreferencesKey("last_donation_prompt_timestamp")
         val LAST_APP_VERSION = stringPreferencesKey("last_app_version")
         val LAST_APP_VERSION_CODE = intPreferencesKey("last_app_version_code")
+        val WALKTHROUGH_COMPLETED_VERSION = stringPreferencesKey("walkthrough_completed_version")
     }
     val dohProvider: Flow<String> = context.preferencesDataStore.data
         .catch { exception ->
@@ -985,6 +986,21 @@ class PreferencesRepository private constructor(private val context: Context) {
     suspend fun setLastAppVersionCode(versionCode: Int) {
         context.preferencesDataStore.edit { preferences ->
             preferences[PreferencesKeys.LAST_APP_VERSION_CODE] = versionCode
+        }
+    }
+
+    val walkthroughCompletedVersion: Flow<String> = context.preferencesDataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            preferences[PreferencesKeys.WALKTHROUGH_COMPLETED_VERSION] ?: ""
+        }
+        .distinctUntilChanged()
+
+    suspend fun setWalkthroughCompletedVersion(version: String) {
+        context.preferencesDataStore.edit { preferences ->
+            preferences[PreferencesKeys.WALKTHROUGH_COMPLETED_VERSION] = version
         }
     }
 

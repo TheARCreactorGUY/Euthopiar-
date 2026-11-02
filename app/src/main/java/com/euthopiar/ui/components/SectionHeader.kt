@@ -96,11 +96,12 @@ fun SectionHeader(
                     modifier = Modifier.weight(1f, fill = false),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Vertical accent bar on the left (width 3dp, unrounded, height matches text block)
+                    // Vertical accent bar on the left (width 3dp, rounded, height matches text block)
                     Box(
                         modifier = Modifier
                             .width(3.dp)
                             .height(if (!subtitle.isNullOrBlank()) 38.dp else 22.dp)
+                            .clip(RoundedCornerShape(1.5.dp))
                             .background(Accent)
                     )
                     Spacer(modifier = Modifier.width(10.dp))
@@ -118,7 +119,7 @@ fun SectionHeader(
                             Text(
                                 text = subtitle,
                                 style = AppTypography.bodySmall.copy(fontSize = 12.sp),
-                                color = TextPrimary.copy(alpha = 0.50f),
+                                color = TextPrimary.copy(alpha = 0.70f),
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -141,7 +142,7 @@ fun SectionHeader(
                             style = AppTypography.labelSmall.copy(
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.SemiBold,
-                                letterSpacing = 0.16.em
+                                letterSpacing = 0.08.em
                             ),
                             color = Accent,
                             maxLines = 1,
@@ -162,7 +163,7 @@ fun SectionHeader(
                         Text(
                             text = subtitle,
                             style = AppTypography.bodySmall.copy(fontSize = 12.sp),
-                            color = TextPrimary.copy(alpha = 0.50f),
+                            color = TextPrimary.copy(alpha = 0.70f),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -195,7 +196,8 @@ fun SectionHeader(
                             modifier = Modifier
                                 .weight(1f)
                                 .height(1.dp)
-                                .background(Color.White.copy(alpha = 0.18f))
+                                .clip(RoundedCornerShape(0.5.dp))
+                                .background(Color.White.copy(alpha = 0.12f))
                         )
                         if (onSeeAll != null) {
                             Spacer(modifier = Modifier.width(12.dp))
@@ -207,7 +209,7 @@ fun SectionHeader(
                         Text(
                             text = subtitle,
                             style = AppTypography.bodySmall.copy(fontSize = 12.sp),
-                            color = TextPrimary.copy(alpha = 0.50f),
+                            color = TextPrimary.copy(alpha = 0.70f),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )

@@ -154,8 +154,8 @@ object PlayerMotionMath {
     // =========================================================================
 
     const val DELTA_S_MAX = 0.12f
-    const val SPRING_PINCH_K = 650f
-    const val SPRING_PINCH_ZETA = 0.92f
+    const val SPRING_PINCH_K = 700f
+    const val SPRING_PINCH_ZETA = 0.78f
 
     const val BADGE_ENTER_K = 900f
     const val BADGE_ENTER_ZETA = 0.72f

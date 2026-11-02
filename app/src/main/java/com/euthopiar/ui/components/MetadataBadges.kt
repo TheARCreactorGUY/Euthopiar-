@@ -30,9 +30,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.font.FontWeight
@@ -400,13 +405,13 @@ fun formatShortReleaseDate(rawDate: String?): String {
 /**
  * Neutral frosted-glass release status pill ("IN CINEMAS" or "UPCOMING").
  * Quiet, premium chrome with backdrop blur matching the UI design specification:
- * - Small pill, 5dp uniform corner radius.
- * - Backdrop blur using Haze when available, with fallback to translucent dark scrim rgba(20,20,22, 0.55).
- * - Border: 0.5dp, white at 22% opacity.
- * - Padding: 4dp vertical, 8dp horizontal.
- * - IN CINEMAS: 5dp solid red (#FF5C4D) dot gently pulsing opacity between 1.0f and 0.30f on a ~1.6s loop + "IN CINEMAS" text.
- * - UPCOMING: 9dp outline chevron-right icon + short release date (e.g. "OCT 31"), white, no pulsing dot.
- * - Typography: 9sp, weight 600, letter spacing 0.5sp, pure white.
+ * - Refined pill shape with ShapeFull / CircleShape geometry.
+ * - Backdrop blur using Haze when available, with fallback to deep translucent obsidian scrim rgba(14,15,20, 0.80).
+ * - Specular border: 0.5dp vertical gradient (32% -> 8% white) catching top ambient light.
+ * - Padding: 3.5dp vertical, 8dp horizontal.
+ * - IN CINEMAS: 6dp vivid red (#FF453A) beacon with physiological breathing aura + "IN CINEMAS" text.
+ * - UPCOMING: Sleek schedule icon + formatted release date (e.g. "OCT 31" or "COMING SOON").
+ * - Typography: 10.5sp, weight 600, letter spacing 0.03em, pure white.
  */
 @Composable
 fun ReleaseStatusBadge(
@@ -420,24 +425,46 @@ fun ReleaseStatusBadge(
     if (status != ReleaseStatus.IN_CINEMAS && status != ReleaseStatus.UPCOMING) return
 
     val isCinemas = status == ReleaseStatus.IN_CINEMAS
-    val pillShape = RoundedCornerShape(5.dp)
-    val fallbackScrim = Color(0x8C141416) // rgba(20, 20, 22, 0.55)
+    val pillShape = CircleShape
+    val fallbackScrim = Color(0xCC0E0F14) // Deep 80% obsidian scrim for 100% legibility on any poster
 
-    // IN CINEMAS gently pulsing live red dot (1.6s loop: 800ms tween reversed)
-    val dotAlpha = if (isCinemas) {
+    val specularBorder = remember {
+        Brush.verticalGradient(
+            listOf(
+                Color.White.copy(alpha = 0.32f),
+                Color.White.copy(alpha = 0.08f)
+            )
+        )
+    }
+
+    // IN CINEMAS organic physiological breathing loop (2.2s total cycle: 1100ms half-cycle)
+    val dotAlpha: Float
+    val dotScale: Float
+    if (isCinemas) {
         val infiniteTransition = rememberInfiniteTransition(label = "in_cinemas_dot_pulse")
         val alpha by infiniteTransition.animateFloat(
-            initialValue = 1.0f,
-            targetValue = 0.30f,
+            initialValue = 0.45f,
+            targetValue = 1.0f,
             animationSpec = infiniteRepeatable(
-                animation = tween(durationMillis = 800, easing = FastOutSlowInEasing),
+                animation = tween(durationMillis = 1100, easing = FastOutSlowInEasing),
                 repeatMode = RepeatMode.Reverse
             ),
             label = "dot_alpha"
         )
-        alpha
+        val scale by infiniteTransition.animateFloat(
+            initialValue = 0.88f,
+            targetValue = 1.12f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 1100, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "dot_scale"
+        )
+        dotAlpha = alpha
+        dotScale = scale
     } else {
-        1.0f
+        dotAlpha = 1.0f
+        dotScale = 1.0f
     }
 
     val formattedDate = remember(releaseDate) {
@@ -462,10 +489,10 @@ fun ReleaseStatusBadge(
         )
         .border(
             width = 0.5.dp,
-            color = Color.White.copy(alpha = 0.22f),
+            brush = specularBorder,
             shape = pillShape
         )
-        .padding(horizontal = 8.dp, vertical = 4.dp)
+        .padding(horizontal = 8.dp, vertical = 3.5.dp)
 
     Box(
         modifier = surfaceModifier,
@@ -473,46 +500,66 @@ fun ReleaseStatusBadge(
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+            horizontalArrangement = Arrangement.spacedBy(4.5.dp)
         ) {
             if (isCinemas) {
+                // Live cinematic pulse dot with soft breathing aura
                 Box(
-                    modifier = Modifier
-                        .size(5.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFFFF5C4D).copy(alpha = dotAlpha))
-                )
+                    modifier = Modifier.size(7.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    // Outer breathing glow aura
+                    Box(
+                        modifier = Modifier
+                            .size(7.dp)
+                            .graphicsLayer {
+                                scaleX = dotScale
+                                scaleY = dotScale
+                                this.alpha = dotAlpha * 0.40f
+                            }
+                            .clip(CircleShape)
+                            .background(Color(0xFFFF453A))
+                    )
+                    // Core solid beacon
+                    Box(
+                        modifier = Modifier
+                            .size(5.dp)
+                            .graphicsLayer {
+                                this.alpha = dotAlpha
+                            }
+                            .clip(CircleShape)
+                            .background(Color(0xFFFF453A))
+                    )
+                }
                 Text(
                     text = "IN CINEMAS",
-                    fontSize = 9.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    letterSpacing = 0.5.sp,
+                    style = TextStyle(
+                        fontFamily = AppFontFamily,
+                        fontSize = 10.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        letterSpacing = 0.03.em,
+                        platformStyle = PlatformTextStyle(includeFontPadding = false)
+                    ),
                     color = Color.White,
                     maxLines = 1
                 )
             } else {
-                // UPCOMING: small outline chevron-right arrow (~9dp)
-                androidx.compose.foundation.Canvas(modifier = Modifier.size(9.dp)) {
-                    val path = androidx.compose.ui.graphics.Path().apply {
-                        moveTo(size.width * 0.25f, size.height * 0.15f)
-                        lineTo(size.width * 0.75f, size.height * 0.50f)
-                        lineTo(size.width * 0.25f, size.height * 0.85f)
-                    }
-                    drawPath(
-                        path = path,
-                        color = Color.White,
-                        style = androidx.compose.ui.graphics.drawscope.Stroke(
-                            width = 1.25.dp.toPx(),
-                            cap = androidx.compose.ui.graphics.StrokeCap.Round,
-                            join = androidx.compose.ui.graphics.StrokeJoin.Round
-                        )
-                    )
-                }
+                // UPCOMING: Sleek schedule icon + clear date text
+                Icon(
+                    imageVector = Icons.Filled.Schedule,
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.90f),
+                    modifier = Modifier.size(10.5.dp)
+                )
                 Text(
-                    text = formattedDate,
-                    fontSize = 9.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    letterSpacing = 0.5.sp,
+                    text = if (formattedDate == "SOON") "COMING SOON" else formattedDate,
+                    style = TextStyle(
+                        fontFamily = AppFontFamily,
+                        fontSize = 10.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        letterSpacing = 0.03.em,
+                        platformStyle = PlatformTextStyle(includeFontPadding = false)
+                    ),
                     color = Color.White,
                     maxLines = 1
                 )

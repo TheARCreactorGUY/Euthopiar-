@@ -10,6 +10,9 @@ import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
@@ -17,6 +20,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -163,6 +167,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil3.compose.AsyncImage
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.text.TextStyle
 import com.euthopiar.R
 import com.euthopiar.ui.components.SecondaryButton
 import com.euthopiar.ui.components.tvFocusable
@@ -171,19 +179,23 @@ import com.euthopiar.ui.theme.HairlineWidth
 import com.euthopiar.ui.theme.LocalReduceMotion
 import com.euthopiar.ui.theme.pressScale
 import com.euthopiar.ui.theme.pressable
+import androidx.compose.runtime.DisposableEffect
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Formats milliseconds to "MM:SS" or "H:MM:SS" timecode.
+ * If forceHours is true or hours > 0, formats as "H:MM:SS" (or "0:MM:SS") to ensure stable character width.
  */
-fun formatTimecode(millis: Long): String {
+fun formatTimecode(millis: Long, forceHours: Boolean = false): String {
     val totalSeconds = (millis / 1000).coerceAtLeast(0)
     val hours = totalSeconds / 3600
     val minutes = (totalSeconds % 3600) / 60
     val seconds = totalSeconds % 60
-    return if (hours > 0) {
+    return if (hours > 0 || forceHours) {
         String.format("%d:%02d:%02d", hours, minutes, seconds)
     } else {
         String.format("%02d:%02d", minutes, seconds)
@@ -316,6 +328,7 @@ fun PlayerTopBar(
             modifier = Modifier
                 .fillMaxWidth()
                 .statusBarsPadding()
+                .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal))
                 .padding(horizontal = 24.dp, vertical = 14.dp)
                 .graphicsLayer { alpha = scrubAlpha },
             verticalAlignment = Alignment.CenterVertically
@@ -1025,12 +1038,18 @@ fun PlayerScrubber(
     val reduceMotion = LocalReduceMotion.current
     val trackHeight by animateDpAsState(
         targetValue = if (isDragging) 5.dp else 3.dp,
-        animationSpec = if (reduceMotion) snap() else tween(120),
+        animationSpec = if (reduceMotion) snap() else spring(
+            dampingRatio = 0.72f,
+            stiffness = Spring.StiffnessMedium
+        ),
         label = "timelineTrackHeight"
     )
     val knobSize by animateDpAsState(
-        targetValue = if (isDragging) 16.dp else 12.dp,
-        animationSpec = if (reduceMotion) snap() else tween(120),
+        targetValue = if (isDragging) 18.dp else 12.dp,
+        animationSpec = if (reduceMotion) snap() else spring(
+            dampingRatio = 0.68f,
+            stiffness = Spring.StiffnessMedium
+        ),
         label = "timelineKnobSize"
     )
 
@@ -1041,23 +1060,41 @@ fun PlayerScrubber(
         contentAlignment = Alignment.CenterStart
     ) {
         var componentWidthPx by remember { mutableFloatStateOf(0f) }
+        var bubbleWidthPx by remember { mutableFloatStateOf(0f) }
 
-        // Horizontal Scrub Badge (Section 3.7b) centered a bit above vertical middle
-        if (isDragging && componentWidthPx > 0f) {
+        // Dynamic Floating Seek Bubble: tracks thumb position horizontally
+        AnimatedVisibility(
+            visible = isDragging && componentWidthPx > 0f,
+            enter = fadeIn(tween(PlayerTokens.ScrubBadgeEnterMs)) + scaleIn(
+                initialScale = 0.85f,
+                animationSpec = spring(dampingRatio = 0.70f, stiffness = Spring.StiffnessMedium)
+            ),
+            exit = fadeOut(tween(PlayerTokens.ScrubBadgeExitMs)) + scaleOut(targetScale = 0.85f),
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .graphicsLayer {
+                    val halfWidth = if (bubbleWidthPx > 0f) bubbleWidthPx / 2f else 50.dp.toPx()
+                    val thumbXPx = activeFraction * componentWidthPx
+                    val minX = 0f
+                    val maxX = (componentWidthPx - (if (bubbleWidthPx > 0f) bubbleWidthPx else 100.dp.toPx())).coerceAtLeast(minX)
+                    translationX = (thumbXPx - halfWidth).coerceIn(minX, maxX)
+                    translationY = (-58).dp.toPx()
+                }
+        ) {
             val deltaMs = displayPositionMs - currentPositionMs
             val deltaSign = if (deltaMs >= 0) "+" else "-"
-            val deltaFormatted = "$deltaSign${formatTimecode(Math.abs(deltaMs))}"
+            val hasHours = effectiveDuration >= 3600_000L
+            val deltaFormatted = "$deltaSign${formatTimecode(Math.abs(deltaMs), forceHours = hasHours)}"
 
             Box(
                 modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .offset(y = (-56).dp)
+                    .onSizeChanged { bubbleWidthPx = it.width.toFloat() }
                     .videoOverlayGlass(shape = PlayerTokens.RadiusPill)
                     .padding(horizontal = 14.dp, vertical = 6.dp)
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
-                        text = formatTimecode(displayPositionMs),
+                        text = formatTimecode(displayPositionMs, forceHours = hasHours),
                         style = PlayerTokens.ScrubBadgeTime
                     )
                     Text(
@@ -1171,6 +1208,7 @@ fun PlayerActionDock(
     onOpenSubtitles: () -> Unit = {},
     onOpenAudioSubtitles: (() -> Unit)? = null,
     onOpenQuality: (() -> Unit)? = null,
+    selectedQuality: VideoQualityOption? = null,
     onOpenTuning: () -> Unit,
     onOpenPip: (() -> Unit)? = null,
     onOpenCast: (() -> Unit)? = null,
@@ -1196,11 +1234,7 @@ fun PlayerActionDock(
     // Timecode format: elapsed / total or elapsed / -remaining
     val effectiveDuration = durationMs.coerceAtLeast(1L)
     val remainingMs = (effectiveDuration - currentPositionMs).coerceAtLeast(0L)
-    val timecodeString = if (showRemainingTime) {
-        "${formatTimecode(currentPositionMs)} / -${formatTimecode(remainingMs)}"
-    } else {
-        "${formatTimecode(currentPositionMs)} / ${formatTimecode(effectiveDuration)}"
-    }
+    val hasHours = effectiveDuration >= 3600_000L
 
     Row(
         modifier = modifier
@@ -1240,8 +1274,9 @@ fun PlayerActionDock(
 
             // Video Quality Button
             if (onOpenQuality != null) {
+                val (qIcon, _) = resolveQualityIconAndLabel(selectedQuality)
                 DockBareIcon(
-                    iconRes = R.drawable.ic_quality_fhd,
+                    iconRes = qIcon,
                     contentDescription = "Video Quality",
                     hasDot = activeSidePanel == PlayerSidePanelType.VIDEO_QUALITY,
                     onClick = {
@@ -1402,12 +1437,28 @@ fun PlayerActionDock(
                 ),
             contentAlignment = Alignment.CenterEnd
         ) {
-            Text(
-                text = timecodeString,
-                style = PlayerTokens.Timecode,
-                textAlign = TextAlign.End,
-                maxLines = 1
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.End
+            ) {
+                Text(
+                    text = formatTimecode(currentPositionMs, forceHours = hasHours),
+                    style = PlayerTokens.Timecode,
+                    textAlign = TextAlign.End,
+                    maxLines = 1
+                )
+                Text(
+                    text = " / ",
+                    style = PlayerTokens.Timecode.copy(color = Color.White.copy(alpha = 0.50f)),
+                    maxLines = 1
+                )
+                Text(
+                    text = if (showRemainingTime) "-${formatTimecode(remainingMs, forceHours = hasHours)}" else formatTimecode(effectiveDuration, forceHours = hasHours),
+                    style = PlayerTokens.Timecode,
+                    textAlign = TextAlign.Start,
+                    maxLines = 1
+                )
+            }
         }
     }
 }
@@ -1517,6 +1568,10 @@ fun PlayerBottomControls(
     seasonNumber: Int? = null,
     episodeNumber: Int? = null,
     serverName: String? = null,
+    logoUrl: String? = null,
+    genres: List<String> = emptyList(),
+    rating: String? = null,
+    contentRating: String? = null,
     showRemainingTime: Boolean = true,
     aspectRatioMode: AspectRatioMode = AspectRatioMode.FIT,
     selectedServer: ServerSourceOption? = null,
@@ -1589,27 +1644,158 @@ fun PlayerBottomControls(
             modifier = Modifier
                 .fillMaxWidth()
                 .navigationBarsPadding()
+                .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal))
                 .padding(horizontal = 24.dp, vertical = 8.dp)
         ) {
-            // Quick Accordion row (Quality, Aspect Ratio & Speed)
+            val bottomScrubAlpha by animateFloatAsState(
+                targetValue = if (isScrubbing) 0.04f else 1f,
+                animationSpec = tween(150),
+                label = "bottomMetadataScrubAlpha"
+            )
+
+            // Top Row above Timeline: Content Custom Logo + Rating/Genre on LEFT, Quality/Aspect/Speed on RIGHT
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 4.dp, vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.End
+                verticalAlignment = Alignment.Bottom,
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
+                // LEFT: Content Logo / Fallback Title + Content Rating + TMDB Rating + Genres
+                Box(
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .padding(end = 12.dp)
+                        .graphicsLayer { alpha = bottomScrubAlpha },
+                    contentAlignment = Alignment.BottomStart
+                ) {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                        horizontalAlignment = Alignment.Start
+                    ) {
+                        // Title Logo or Typography Fallback (+50% boost)
+                        if (!logoUrl.isNullOrBlank()) {
+                            AsyncImage(
+                                model = logoUrl,
+                                contentDescription = mediaTitle,
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier
+                                    .heightIn(min = 24.dp, max = 52.dp)
+                                    .widthIn(max = 240.dp),
+                                alignment = Alignment.BottomStart
+                            )
+                        } else if (mediaTitle.isNotBlank()) {
+                            Text(
+                                text = mediaTitle,
+                                style = PlayerTokens.HeaderTitle.copy(
+                                    fontSize = 20.sp,
+                                    lineHeight = 24.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+
+                        // Metadata subline: [ContentRating] • ★ Rating • Genres (+50% boost)
+                        val hasRating = !rating.isNullOrBlank()
+                        val hasContentRating = !contentRating.isNullOrBlank()
+                        val topGenres = genres.filter { it.isNotBlank() }.take(2)
+                        val hasGenres = topGenres.isNotEmpty()
+
+                        if (hasContentRating || hasRating || hasGenres) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                // Content Rating Badge (e.g. "PG-13", "TV-MA")
+                                if (hasContentRating) {
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .border(0.5.dp, Color.White.copy(alpha = 0.40f), RoundedCornerShape(4.dp))
+                                            .background(Color.White.copy(alpha = 0.12f))
+                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            text = contentRating!!,
+                                            style = TextStyle(
+                                                fontSize = 13.sp,
+                                                fontWeight = FontWeight.Medium,
+                                                color = Color.White
+                                            )
+                                        )
+                                    }
+                                }
+
+                                // Community Rating (e.g. ★ 8.4)
+                                if (hasRating) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                    ) {
+                                        Text(
+                                            text = "★",
+                                            style = TextStyle(
+                                                fontSize = 14.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFFF5C518)
+                                            )
+                                        )
+                                        Text(
+                                            text = rating!!,
+                                            style = TextStyle(
+                                                fontSize = 14.sp,
+                                                fontWeight = FontWeight.Medium,
+                                                fontFeatureSettings = "tnum",
+                                                color = Color.White.copy(alpha = 0.90f)
+                                            )
+                                        )
+                                    }
+                                }
+
+                                // Mid-dot separator
+                                if ((hasContentRating || hasRating) && hasGenres) {
+                                    Text(
+                                        text = "•",
+                                        style = TextStyle(
+                                            fontSize = 12.sp,
+                                            color = Color.White.copy(alpha = 0.45f)
+                                        )
+                                    )
+                                }
+
+                                // Top Genres (e.g. "Action • Sci-Fi")
+                                if (hasGenres) {
+                                    Text(
+                                        text = topGenres.joinToString(" • "),
+                                        style = TextStyle(
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Normal,
+                                            color = Color.White.copy(alpha = 0.75f)
+                                        ),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // RIGHT: Quick Accordion row (Quality, Aspect Ratio & Speed)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.End
+                ) {
                 // Quick Video Quality Pill
                 if (onOpenQuality != null) {
-                    val qBadge = when {
-                        selectedQuality == null || selectedQuality.isAuto || selectedQuality.id == "auto" -> "Auto"
-                        selectedQuality.height != null -> "${selectedQuality.height}p"
-                        else -> selectedQuality.label
-                    }
+                    val (qIcon, qBadge) = resolveQualityIconAndLabel(selectedQuality)
                     Box(
                         modifier = Modifier
                             .height(32.dp)
                             .videoOverlayGlass(shape = PlayerTokens.RadiusPill)
+                            .animateContentSize(tween(durationMillis = 200, easing = PlayerTokens.EaseOut))
                             .playerPressable(
                                 role = Role.Button,
                                 onClickLabel = "Video Quality: $qBadge",
@@ -1620,12 +1806,12 @@ fun PlayerBottomControls(
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
-                                painter = painterResource(id = R.drawable.ic_quality_fhd),
+                                painter = painterResource(id = qIcon),
                                 contentDescription = "Video Quality",
                                 tint = Color.White,
                                 modifier = Modifier.size(16.dp)
                             )
-                            Spacer(modifier = Modifier.width(4.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = qBadge,
                                 color = Color.White,
@@ -1684,18 +1870,24 @@ fun PlayerBottomControls(
                                     modifier = Modifier
                                         .height(26.dp)
                                         .clip(PlayerTokens.RadiusPill)
-                                        .background(if (isSelected) Color.White.copy(alpha = 0.20f) else Color.Transparent)
-                                        .playerPressable(role = Role.Button, onClickLabel = label) {
+                                        .background(if (isSelected) Color.White else Color.Transparent)
+                                        .playerPressable(
+                                            isWhiteElement = isSelected,
+                                            role = Role.Button,
+                                            onClickLabel = label
+                                        ) {
                                             onSelectAspectRatio?.invoke(mode) ?: onCycleAspectRatio?.invoke()
                                             isAspectExpanded = false
                                         }
-                                        .padding(horizontal = 8.dp),
+                                        .padding(horizontal = 10.dp),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Text(
                                         text = label,
-                                        color = Color.White,
-                                        style = PlayerTokens.PillText
+                                        color = if (isSelected) PlayerTokens.LabelDark else Color.White.copy(alpha = 0.8f),
+                                        style = PlayerTokens.PillText.copy(
+                                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal
+                                        )
                                     )
                                 }
                             }
@@ -1723,7 +1915,7 @@ fun PlayerBottomControls(
                                 tint = Color.White,
                                 modifier = Modifier.size(16.dp)
                             )
-                            Spacer(modifier = Modifier.width(4.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = aspectLabel,
                                 color = Color.White,
@@ -1822,6 +2014,7 @@ fun PlayerBottomControls(
                     }
                 }
             }
+            }
             Spacer(modifier = Modifier.height(4.dp))
 
             // Timeline / Live Indicator (Section 3.4)
@@ -1881,6 +2074,7 @@ fun PlayerBottomControls(
                 onOpenEpisodes = { onOpenEpisodes?.invoke() },
                 onOpenSources = { onOpenSources?.invoke() },
                 onOpenQuality = onOpenQuality,
+                selectedQuality = selectedQuality,
                 onOpenAudio = { onOpenAudio?.invoke() ?: onOpenAudioSubtitles() },
                 onOpenSubtitles = { onOpenSubtitles?.invoke() ?: onOpenAudioSubtitles() },
                 onOpenTuning = onOpenSettings,
@@ -1967,12 +2161,14 @@ fun PlayerUnlockCircle(
 @Composable
 fun PinchAspectBadge(
     label: String?,
+    controlsVisible: Boolean = false,
+    onDismissed: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val density = LocalDensity.current
     var currentDisplayLabel by remember { mutableStateOf<String?>(null) }
     val badgeAlpha = remember { Animatable(0.0f) }
-    val badgeScale = remember { Animatable(0.85f) }
+    val badgeScale = remember { Animatable(0.92f) }
     val badgeOffsetY = remember { Animatable(-12f) }
     var dismissJob by remember { mutableStateOf<Job?>(null) }
 
@@ -1984,64 +2180,134 @@ fun PinchAspectBadge(
 
             if (isFirstEnter) {
                 badgeAlpha.snapTo(0.0f)
-                badgeScale.snapTo(0.85f)
+                badgeScale.snapTo(0.92f)
                 badgeOffsetY.snapTo(-12f)
                 launch {
-                    badgeAlpha.animateTo(1.0f, tween(120))
+                    badgeAlpha.animateTo(1.0f, tween(140, easing = FastOutSlowInEasing))
                 }
                 launch {
                     badgeOffsetY.animateTo(
                         targetValue = 0.0f,
-                        animationSpec = spring(dampingRatio = PlayerMotionMath.BADGE_ENTER_ZETA, stiffness = PlayerMotionMath.BADGE_ENTER_K)
+                        animationSpec = spring(dampingRatio = 0.76f, stiffness = 650f)
                     )
                 }
                 launch {
                     badgeScale.animateTo(
                         targetValue = 1.0f,
-                        animationSpec = spring(dampingRatio = PlayerMotionMath.BADGE_ENTER_ZETA, stiffness = PlayerMotionMath.BADGE_ENTER_K)
+                        animationSpec = spring(dampingRatio = 0.76f, stiffness = 650f)
                     )
                 }
             } else {
-                // Tactile badge pulse on mode change
-                badgeScale.snapTo(1.08f)
+                // Tactile smooth spring pulse on mode flip (Emil Kowalski physics - no hard snapping!)
                 launch {
                     badgeScale.animateTo(
+                        targetValue = 1.04f,
+                        animationSpec = spring(dampingRatio = 0.72f, stiffness = 750f)
+                    )
+                    badgeScale.animateTo(
                         targetValue = 1.0f,
-                        animationSpec = spring(dampingRatio = PlayerMotionMath.BADGE_ENTER_ZETA, stiffness = PlayerMotionMath.BADGE_ENTER_K)
+                        animationSpec = spring(dampingRatio = 0.76f, stiffness = 650f)
                     )
                 }
             }
 
-            // Start 1100ms debounce hold timer before exit
+            val holdDuration = when {
+                label.contains("4K", ignoreCase = true) ||
+                label.contains("1080", ignoreCase = true) ||
+                label.contains("720", ignoreCase = true) ||
+                label.contains("HD", ignoreCase = true) ||
+                label.contains("Auto", ignoreCase = true) ||
+                label.contains("SD", ignoreCase = true) -> 2400L
+                else -> PlayerMotionMath.BADGE_DEBOUNCE_HOLD_MS
+            }
+
+            // Hold timer before graceful exit
             dismissJob = launch {
-                delay(PlayerMotionMath.BADGE_DEBOUNCE_HOLD_MS)
-                launch {
-                    badgeScale.animateTo(
-                        targetValue = 0.90f,
+                delay(holdDuration)
+                try {
+                    launch {
+                        badgeScale.animateTo(
+                            targetValue = 0.92f,
+                            animationSpec = tween(
+                                durationMillis = 200,
+                                easing = CubicBezierEasing(0.40f, 0.0f, 1.0f, 1.0f)
+                            )
+                        )
+                    }
+                    launch {
+                        badgeOffsetY.animateTo(
+                            targetValue = -6f,
+                            animationSpec = tween(
+                                durationMillis = 200,
+                                easing = CubicBezierEasing(0.40f, 0.0f, 1.0f, 1.0f)
+                            )
+                        )
+                    }
+                    badgeAlpha.animateTo(
+                        targetValue = 0.0f,
                         animationSpec = tween(
-                            durationMillis = PlayerMotionMath.BADGE_EXIT_DURATION_MS,
+                            durationMillis = 200,
                             easing = CubicBezierEasing(0.40f, 0.0f, 1.0f, 1.0f)
                         )
                     )
+                } finally {
+                    withContext(NonCancellable) {
+                        badgeAlpha.snapTo(0.0f)
+                        currentDisplayLabel = null
+                        onDismissed()
+                    }
                 }
-                badgeAlpha.animateTo(
-                    targetValue = 0.0f,
-                    animationSpec = tween(
-                        durationMillis = PlayerMotionMath.BADGE_EXIT_DURATION_MS,
-                        easing = CubicBezierEasing(0.40f, 0.0f, 1.0f, 1.0f)
+            }
+        } else {
+            // Label cleared externally
+            dismissJob?.cancel()
+            if (badgeAlpha.value > 0.01f) {
+                try {
+                    badgeAlpha.animateTo(
+                        targetValue = 0.0f,
+                        animationSpec = tween(
+                            durationMillis = 160,
+                            easing = CubicBezierEasing(0.40f, 0.0f, 1.0f, 1.0f)
+                        )
                     )
-                )
+                } finally {
+                    withContext(NonCancellable) {
+                        badgeAlpha.snapTo(0.0f)
+                        currentDisplayLabel = null
+                        onDismissed()
+                    }
+                }
+            } else {
+                badgeAlpha.snapTo(0.0f)
                 currentDisplayLabel = null
             }
         }
     }
 
-    if (badgeAlpha.value > 0.001f && !currentDisplayLabel.isNullOrBlank()) {
+    DisposableEffect(Unit) {
+        onDispose {
+            dismissJob?.cancel()
+        }
+    }
+
+    if (badgeAlpha.value > 0.01f && !currentDisplayLabel.isNullOrBlank()) {
         val windowInsets = WindowInsets.displayCutout
         val statusInsets = WindowInsets.statusBars
-        val topInsetDp = with(density) {
-            maxOf(windowInsets.getTop(density), statusInsets.getTop(density), (16.dp).roundToPx()).toDp() + 16.dp
+        val baseTopPx = with(density) {
+            maxOf(windowInsets.getTop(density), statusInsets.getTop(density), (16.dp).roundToPx())
         }
+        val targetTopDp = with(density) {
+            if (controlsVisible) {
+                baseTopPx.toDp() + 74.dp
+            } else {
+                baseTopPx.toDp() + 16.dp
+            }
+        }
+        val animatedTopInsetDp by animateDpAsState(
+            targetValue = targetTopDp,
+            animationSpec = spring(stiffness = 650f, dampingRatio = 0.76f),
+            label = "badgeTopOffset"
+        )
         val horizontalShiftDp = with(density) {
             PlayerMotionMath.calculateBadgeCenterHorizontalShift(
                 windowInsets.getLeft(density, androidx.compose.ui.unit.LayoutDirection.Ltr).toFloat(),
@@ -2049,10 +2315,51 @@ fun PinchAspectBadge(
             ).toDp()
         }
 
+        val raw = currentDisplayLabel?.trim() ?: ""
+        val rawUpper = raw.uppercase()
+
+        val (badgeIconRes, formattedLabel) = when {
+            // Aspect Ratio options (Checked first to avoid any partial keyword collisions)
+            rawUpper.contains("FIT") -> {
+                R.drawable.ic_player_aspect to "Fit to Screen"
+            }
+            rawUpper.contains("FILL") || rawUpper.contains("ZOOM") -> {
+                R.drawable.ic_player_aspect to "Fill Screen"
+            }
+            rawUpper.contains("16:9") -> {
+                R.drawable.ic_player_aspect_styled to "16:9 Widescreen"
+            }
+            rawUpper.contains("STRETCH") -> {
+                R.drawable.ic_player_aspect to "Stretch to Fill"
+            }
+            // Quality options
+            rawUpper.contains("4K") || rawUpper.contains("2160") -> {
+                R.drawable.ic_quality_4k to raw
+            }
+            rawUpper.contains("1440") || rawUpper.contains("2K") -> {
+                R.drawable.ic_quality_2k to raw
+            }
+            rawUpper.contains("1080") || rawUpper.contains("FHD") -> {
+                R.drawable.ic_quality_fhd to raw
+            }
+            rawUpper.contains("720") || rawUpper.contains("HD") -> {
+                R.drawable.ic_quality_hd to raw
+            }
+            rawUpper.contains("480") || rawUpper.contains("SD") -> {
+                R.drawable.ic_quality_sd to raw
+            }
+            rawUpper.contains("AUTO") || rawUpper.contains("ADAPTIVE") -> {
+                R.drawable.ic_quality_all to raw
+            }
+            else -> {
+                R.drawable.ic_player_aspect to raw
+            }
+        }
+
         Box(
             modifier = modifier
                 .fillMaxWidth()
-                .padding(top = topInsetDp),
+                .padding(top = animatedTopInsetDp),
             contentAlignment = Alignment.TopCenter
         ) {
             Box(
@@ -2069,10 +2376,37 @@ fun PinchAspectBadge(
                     .padding(horizontal = 16.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = (currentDisplayLabel ?: "").uppercase(),
-                    style = PlayerTokens.AspectPillText
-                )
+                AnimatedContent(
+                    targetState = formattedLabel,
+                    transitionSpec = {
+                        (fadeIn(animationSpec = tween(140, easing = FastOutSlowInEasing)) +
+                         scaleIn(initialScale = 0.94f, animationSpec = tween(140, easing = FastOutSlowInEasing)))
+                            .togetherWith(
+                                fadeOut(animationSpec = tween(100, easing = LinearEasing)) +
+                                scaleOut(targetScale = 0.94f, animationSpec = tween(100, easing = LinearEasing))
+                            )
+                    },
+                    label = "UnifiedHudBadgeContent"
+                ) { textLabel ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            painter = painterResource(id = badgeIconRes),
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = textLabel,
+                            style = PlayerTokens.AspectPillText.copy(
+                                letterSpacing = 0.25.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        )
+                    }
+                }
             }
         }
     }

@@ -206,7 +206,7 @@ fun TopTenRow(
         ) {
             itemsIndexed(
                 items = topItems,
-                key = { index, item -> "top10_${index}_${item.id}_${item.provider ?: ""}" }
+                key = { _, item -> "top10_${item.id}_${item.provider ?: ""}" }
             ) { index, item ->
                 when (style) {
                     Top10Style.PosterTinted -> {
@@ -255,7 +255,8 @@ private fun TopTenRankCardPosterTinted(
     val glowBrush = remember(tintColor) {
         Brush.radialGradient(
             colors = listOf(
-                tintColor.copy(alpha = 0.28f),
+                tintColor.copy(alpha = 0.44f),
+                tintColor.copy(alpha = 0.22f),
                 Color.Transparent
             )
         )
@@ -264,8 +265,8 @@ private fun TopTenRankCardPosterTinted(
     val numberBrush = remember(tintColor) {
         Brush.verticalGradient(
             colors = listOf(
-                tintColor.copy(alpha = 0.95f),
-                tintColor.copy(alpha = 0.04f)
+                tintColor.copy(alpha = 0.96f),
+                tintColor.copy(alpha = 0.22f)
             )
         )
     }
@@ -281,12 +282,12 @@ private fun TopTenRankCardPosterTinted(
             .pressable(onClick = onClick, onLongClick = onLongClick)
             .tvFocusable(shape = ShapeS)
     ) {
-        // LAYER 1: GLOW (Radial gradient centered behind numeral, radius ~130dp, 28% alpha -> 0%, BlendMode.Plus)
+        // LAYER 1: GLOW (Luminous multi-stop radial diffusion centered behind numeral, radius ~140dp, BlendMode.Plus)
         val glowXOffset = if (isTwoDigit) (-18).dp else (-30).dp
         Box(
             modifier = Modifier
                 .align(Alignment.CenterStart)
-                .size(260.dp)
+                .size(280.dp)
                 .offset(x = glowXOffset)
                 .zIndex(0f)
                 .drawBehind {
@@ -330,7 +331,7 @@ private fun TopTenRankCardPosterTinted(
                 .zIndex(2f)
                 .clip(ShapeS)
                 .background(SurfaceLow)
-                .border(0.5.dp, Color.White.copy(alpha = 0.08f), ShapeS)
+                .border(0.5.dp, Color.White.copy(alpha = 0.03f), ShapeS)
         ) {
             AppAsyncImage(
                 model = item.posterUrl ?: item.backdropUrl,
@@ -371,6 +372,7 @@ private fun TopTenRankCardGlassTab(
         Brush.radialGradient(
             colors = listOf(
                 Accent.copy(alpha = 0.55f),
+                Accent.copy(alpha = 0.22f),
                 Color.Transparent
             )
         )
@@ -459,7 +461,7 @@ private fun TopTenRankCardGlassTab(
                 .zIndex(2f)
                 .clip(ShapeS)
                 .background(SurfaceLow)
-                .border(0.5.dp, Color.White.copy(alpha = 0.08f), ShapeS)
+                .border(0.5.dp, Color.White.copy(alpha = 0.03f), ShapeS)
         ) {
             AppAsyncImage(
                 model = item.posterUrl ?: item.backdropUrl,
@@ -589,7 +591,7 @@ private fun LegacyTopTenRankCard(
                 .zIndex(1f)
                 .clip(ShapeS)
                 .background(SurfaceLow)
-                .border(0.5.dp, Color.White.copy(alpha = 0.08f), ShapeS)
+                .border(0.5.dp, Color.White.copy(alpha = 0.03f), ShapeS)
         ) {
             AppAsyncImage(
                 model = item.posterUrl ?: item.backdropUrl,

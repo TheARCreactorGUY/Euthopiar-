@@ -8,6 +8,8 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -48,6 +50,7 @@ import com.euthopiar.ui.theme.AppFontFamily
 import com.euthopiar.ui.theme.HairlineWidth
 import com.euthopiar.ui.theme.LocalAmoledMode
 import com.euthopiar.ui.theme.LocalReduceMotion
+import com.euthopiar.R
 
 /**
  * Standard Design Tokens and Glass Recipes for the Euthopiar Video Player.
@@ -90,21 +93,31 @@ object PlayerTokens {
     val TrackPlayed = Color.White.copy(alpha = 0.90f)
 
     /** Scrim Gradients */
-    // Top scrim: black 55% at top fading to 0 by 30% of screen height
+    // Top scrim: multi-stop progressive smootherstep falloff from black 68% to 0%
     val TopScrim = Brush.verticalGradient(
         colorStops = arrayOf(
-            0.00f to Color.Black.copy(alpha = 0.55f),
-            0.30f to Color.Transparent,
+            0.00f to Color.Black.copy(alpha = 0.68f),
+            0.15f to Color.Black.copy(alpha = 0.58f),
+            0.32f to Color.Black.copy(alpha = 0.44f),
+            0.48f to Color.Black.copy(alpha = 0.30f),
+            0.64f to Color.Black.copy(alpha = 0.18f),
+            0.78f to Color.Black.copy(alpha = 0.08f),
+            0.90f to Color.Black.copy(alpha = 0.02f),
             1.00f to Color.Transparent
         )
     )
 
-    // Bottom scrim: black fading from 0 at 50% height to 78% at bottom edge
+    // Bottom scrim: multi-stop progressive smootherstep falloff from 0% to black 82%
     val BottomScrim = Brush.verticalGradient(
         colorStops = arrayOf(
             0.00f to Color.Transparent,
-            0.50f to Color.Transparent,
-            1.00f to Color.Black.copy(alpha = 0.78f)
+            0.18f to Color.Black.copy(alpha = 0.02f),
+            0.36f to Color.Black.copy(alpha = 0.08f),
+            0.52f to Color.Black.copy(alpha = 0.20f),
+            0.68f to Color.Black.copy(alpha = 0.38f),
+            0.82f to Color.Black.copy(alpha = 0.58f),
+            0.92f to Color.Black.copy(alpha = 0.72f),
+            1.00f to Color.Black.copy(alpha = 0.82f)
         )
     )
 
@@ -421,12 +434,18 @@ fun Modifier.playerPressable(
     val actualSource = interactionSource ?: remember { MutableInteractionSource() }
     val isPressed by actualSource.collectIsPressedAsState()
 
+    val targetScale = when {
+        !isPressed || !enabled || reduceMotion -> 1f
+        isWhiteElement -> 0.92f
+        else -> 0.95f
+    }
+
     val scale by animateFloatAsState(
-        targetValue = if (isPressed && enabled && !reduceMotion) PlayerTokens.PressScaleFactor else 1f,
+        targetValue = targetScale,
         animationSpec = if (isPressed) {
             tween(PlayerTokens.PressFeedbackInMs, easing = PlayerTokens.EaseOut)
         } else {
-            tween(PlayerTokens.PressFeedbackOutMs, easing = PlayerTokens.EaseOut)
+            spring(dampingRatio = 0.62f, stiffness = Spring.StiffnessMedium)
         },
         label = "playerPressScale"
     )
@@ -472,4 +491,123 @@ fun Modifier.playerPressable(
             } else Modifier
         )
         .then(clickModifier)
+}
+
+/**
+ * Resolves the quality icon drawable and concise badge label (e.g. 4K, 1080p, Auto).
+ */
+fun resolveQualityIconAndLabel(quality: VideoQualityOption?): Pair<Int, String> {
+    if (quality == null || quality.isAuto || quality.id == "auto") {
+        return R.drawable.ic_quality_all to "Auto"
+    }
+    val h = quality.height
+    val lbl = quality.label.lowercase(java.util.Locale.US)
+    return when {
+        h != null && h >= 2160 || lbl.contains("4k") || lbl.contains("2160") -> {
+            R.drawable.ic_quality_4k to "4K"
+        }
+        h != null && h >= 1440 || lbl.contains("2k") || lbl.contains("1440") -> {
+            R.drawable.ic_quality_2k to "1440p"
+        }
+        h != null && h >= 1080 || lbl.contains("1080") || lbl.contains("fhd") -> {
+            R.drawable.ic_quality_fhd to "1080p"
+        }
+        h != null && h >= 720 || lbl.contains("720") || lbl.contains("hd") -> {
+            R.drawable.ic_quality_hd to "720p"
+        }
+        h != null && h <= 480 || lbl.contains("480") || lbl.contains("360") || lbl.contains("sd") -> {
+            R.drawable.ic_quality_sd to "480p"
+        }
+        else -> {
+            val display = if (quality.height != null) "${quality.height}p" else quality.label.take(8)
+            R.drawable.ic_quality_fhd to display
+        }
+    }
+}
+
+/**
+ * Resolves the quality icon drawable and rich human-readable title (e.g. "4K Ultra HD", "1080p Full HD").
+ */
+fun resolveQualityFullTitle(quality: VideoQualityOption?): Pair<Int, String> {
+    if (quality == null || quality.isAuto || quality.id == "auto") {
+        return R.drawable.ic_quality_all to "Auto (Adaptive)"
+    }
+    val h = quality.height
+    val lbl = quality.label.lowercase(java.util.Locale.US)
+    return when {
+        h != null && h >= 2160 || lbl.contains("4k") || lbl.contains("2160") -> {
+            R.drawable.ic_quality_4k to "4K Ultra HD"
+        }
+        h != null && h >= 1440 || lbl.contains("2k") || lbl.contains("1440") -> {
+            R.drawable.ic_quality_2k to "1440p Quad HD"
+        }
+        h != null && h >= 1080 || lbl.contains("1080") || lbl.contains("fhd") -> {
+            R.drawable.ic_quality_fhd to "1080p Full HD"
+        }
+        h != null && h >= 720 || lbl.contains("720") || lbl.contains("hd") -> {
+            R.drawable.ic_quality_hd to "720p HD"
+        }
+        h != null && h <= 480 || lbl.contains("480") || lbl.contains("360") || lbl.contains("sd") -> {
+            R.drawable.ic_quality_sd to "480p SD"
+        }
+        else -> {
+            val display = if (quality.height != null) "${quality.height}p" else quality.label
+            R.drawable.ic_quality_fhd to display
+        }
+    }
+}
+
+
+/**
+ * Resolves the active playback resolution label for HUD hide / player state indicators.
+ * Follows clean streaming standards: "4K Ultra HD", "1080p Full HD", "720p HD", with HDR / Vision tags if present.
+ */
+fun resolvePlaybackResolutionLabel(
+    mediaFormatInfo: MediaFormatInfo?,
+    selectedQuality: VideoQualityOption?,
+    selectedServer: ServerSourceOption?
+): String {
+    val base = when {
+        selectedQuality != null && !selectedQuality.isAuto && selectedQuality.id != "auto" -> {
+            resolveQualityFullTitle(selectedQuality).second
+        }
+        !mediaFormatInfo?.resolutionBadge.isNullOrBlank() -> {
+            val upper = mediaFormatInfo.resolutionBadge.uppercase()
+            when {
+                upper.contains("4K") || upper.contains("2160") -> "4K Ultra HD"
+                upper.contains("1440") || upper.contains("2K") -> "1440p Quad HD"
+                upper.contains("1080") -> "1080p Full HD"
+                upper.contains("720") -> "720p HD"
+                upper.contains("480") || upper.contains("360") -> "480p SD"
+                else -> "${mediaFormatInfo.resolutionBadge} HD"
+            }
+        }
+        !selectedServer?.resolutionLabel.isNullOrBlank() -> {
+            val upper = selectedServer.resolutionLabel.uppercase()
+            when {
+                upper.contains("4K") || upper.contains("2160") -> "4K Ultra HD"
+                upper.contains("1440") || upper.contains("2K") -> "1440p Quad HD"
+                upper.contains("1080") -> "1080p Full HD"
+                upper.contains("720") -> "720p HD"
+                upper.contains("480") || upper.contains("360") -> "480p SD"
+                else -> selectedServer.resolutionLabel
+            }
+        }
+        selectedQuality?.isAuto == true -> "Auto (Adaptive)"
+        else -> "1080p Full HD"
+    }
+
+    val hdrTag = when {
+        mediaFormatInfo?.hasDolbyVision == true -> "Vision"
+        mediaFormatInfo?.dynamicRangeBadge?.contains("HDR10+", ignoreCase = true) == true -> "HDR10+"
+        mediaFormatInfo?.hasHdr == true -> "HDR"
+        selectedServer?.resolutionLabel?.contains("HDR", ignoreCase = true) == true -> "HDR"
+        else -> null
+    }
+
+    return if (hdrTag != null && !base.contains("HDR", ignoreCase = true) && !base.contains("Vision", ignoreCase = true)) {
+        "$base · $hdrTag"
+    } else {
+        base
+    }
 }

@@ -217,6 +217,23 @@ object TmdbBridge {
 
     private val imdbIdCache = java.util.concurrent.ConcurrentHashMap<String, String>()
 
+    /**
+     * Instantaneous O(1) in-memory cached logo lookup for media items.
+     */
+    fun getCachedLogo(rawId: String, isTv: Boolean = false): String? {
+        val rawClean = rawId.trim().removePrefix("tmdb:").removePrefix("tmdb/")
+        val clean = if (rawClean.startsWith("mal:", ignoreCase = true) ||
+            rawClean.startsWith("anilist:", ignoreCase = true) ||
+            rawClean.startsWith("jikan:", ignoreCase = true)
+        ) {
+            rawClean.substringAfter(':').substringBefore('/')
+        } else {
+            rawClean.substringBefore(':').substringBefore('/')
+        }
+        if (clean.isBlank()) return null
+        return logoCache[clean] ?: getCachedEnrichedDetails(rawId, isTv)?.logoUrl ?: getCachedEnrichedDetails(rawId, !isTv)?.logoUrl
+    }
+
     fun recordIdMapping(tmdbId: String, imdbId: String, isTv: Boolean) {
         val str1 = tmdbId.trim()
         val str2 = imdbId.trim()

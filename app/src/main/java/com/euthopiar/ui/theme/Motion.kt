@@ -8,6 +8,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import android.os.SystemClock
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -58,11 +59,10 @@ fun Modifier.pressScale(
     val isPressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(
         targetValue = if (isPressed && !reduceMotion) pressedScale else 1f,
-        animationSpec = if (isPressed) {
-            tween(durationMillis = 100, easing = FastOutSlowInEasing)
-        } else {
-            tween(durationMillis = 150, easing = FastOutSlowInEasing)
-        },
+        animationSpec = if (reduceMotion) snap() else spring(
+            dampingRatio = Spring.DampingRatioNoBouncy,
+            stiffness = Spring.StiffnessMedium
+        ),
         label = "pressScale"
     )
     graphicsLayer {
@@ -86,6 +86,7 @@ fun Modifier.pressable(
     role: Role? = Role.Button,
     onClickLabel: String? = null,
     interactionSource: MutableInteractionSource? = null,
+    debounceIntervalMs: Long = 500L,
     onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit
 ): Modifier = composed {
@@ -113,6 +114,17 @@ fun Modifier.pressable(
 
     val actualInteractionSource = interactionSource ?: remember { MutableInteractionSource() }
 
+    val lastClickTime = remember { longArrayOf(-100000L) }
+    val debouncedOnClick = remember(onClick, debounceIntervalMs) {
+        {
+            val now = SystemClock.elapsedRealtime()
+            if (debounceIntervalMs <= 0L || now - lastClickTime[0] >= debounceIntervalMs) {
+                lastClickTime[0] = now
+                onClick()
+            }
+        }
+    }
+
     val clickModifier = if (onLongClick != null) {
         Modifier.combinedClickable(
             interactionSource = actualInteractionSource,
@@ -120,18 +132,8 @@ fun Modifier.pressable(
             enabled = enabled,
             role = role,
             onClickLabel = onClickLabel,
-            onLongClick = {
-                try {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                } catch (_: Exception) {}
-                onLongClick()
-            },
-            onClick = {
-                try {
-                    haptic.performHapticFeedback(HapticFeedbackType.Confirm)
-                } catch (_: Exception) {}
-                onClick()
-            }
+            onLongClick = onLongClick,
+            onClick = debouncedOnClick
         )
     } else {
         Modifier.clickable(
@@ -140,12 +142,7 @@ fun Modifier.pressable(
             enabled = enabled,
             role = role,
             onClickLabel = onClickLabel,
-            onClick = {
-                try {
-                    haptic.performHapticFeedback(HapticFeedbackType.Confirm)
-                } catch (_: Exception) {}
-                onClick()
-            }
+            onClick = debouncedOnClick
         )
     }
 
@@ -161,6 +158,9 @@ fun Modifier.pressable(
             awaitEachGesture {
                 awaitFirstDown(requireUnconsumed = false)
                 isPressed = true
+                try {
+                    haptic.performHapticFeedback(HapticFeedbackType.Confirm)
+                } catch (_: Throwable) {}
                 waitForUpOrCancellation()
                 isPressed = false
             }
@@ -176,6 +176,7 @@ fun Modifier.playButtonSpringPress(
     enabled: Boolean = true,
     role: Role? = Role.Button,
     onClickLabel: String? = null,
+    debounceIntervalMs: Long = 500L,
     onClick: () -> Unit
 ): Modifier = composed {
     val reduceMotion = LocalReduceMotion.current
@@ -188,12 +189,23 @@ fun Modifier.playButtonSpringPress(
             tween(durationMillis = 70, easing = LinearEasing)
         } else {
             spring(
-                dampingRatio = 0.55f,
+                dampingRatio = 0.85f,
                 stiffness = Spring.StiffnessMedium
             )
         },
         label = "playSpring"
     )
+
+    val lastClickTime = remember { longArrayOf(-100000L) }
+    val debouncedOnClick = remember(onClick, debounceIntervalMs) {
+        {
+            val now = SystemClock.elapsedRealtime()
+            if (debounceIntervalMs <= 0L || now - lastClickTime[0] >= debounceIntervalMs) {
+                lastClickTime[0] = now
+                onClick()
+            }
+        }
+    }
 
     this
         .graphicsLayer {
@@ -206,7 +218,7 @@ fun Modifier.playButtonSpringPress(
             enabled = enabled,
             role = role,
             onClickLabel = onClickLabel,
-            onClick = onClick
+            onClick = debouncedOnClick
         )
         .pointerInput(enabled) {
             if (!enabled) return@pointerInput

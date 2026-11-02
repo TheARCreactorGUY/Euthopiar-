@@ -13,7 +13,10 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -23,6 +26,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.windowInsetsPadding
+import com.euthopiar.ui.theme.HairlineWidth
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -100,6 +110,7 @@ fun PlayerGestureOverlay(
     isGesturesPaused: Boolean = false,
     isScreenLocked: Boolean = false,
     currentAspectRatioMode: AspectRatioMode = AspectRatioMode.FIT,
+    fillScale: Float = 1.28f,
     onHold2xStart: () -> Unit,
     onHold2xEnd: () -> Unit,
     onSingleTap: () -> Unit,
@@ -107,6 +118,7 @@ fun PlayerGestureOverlay(
     onPinchAspect: (mode: AspectRatioMode, label: String) -> Unit = { _, _ -> },
     onPinchBadgeLabel: (label: String) -> Unit = {},
     onPinchScaleChanged: (scale: Float) -> Unit = {},
+    onPinchGestureActiveChanged: (Boolean) -> Unit = {},
     onLockedScreenTap: () -> Unit = {},
     seekIntervalSeconds: Int = 10,
     modifier: Modifier = Modifier
@@ -156,9 +168,11 @@ fun PlayerGestureOverlay(
     val currentOnDoubleTapSeek by rememberUpdatedState(onDoubleTapSeek)
     val currentOnHold2xStart by rememberUpdatedState(onHold2xStart)
     val currentOnHold2xEnd by rememberUpdatedState(onHold2xEnd)
+    val currentFillScale by rememberUpdatedState(fillScale)
     val currentOnPinchAspect by rememberUpdatedState(onPinchAspect)
     val currentOnPinchBadgeLabel by rememberUpdatedState(onPinchBadgeLabel)
     val currentOnPinchScaleChanged by rememberUpdatedState(onPinchScaleChanged)
+    val currentOnPinchGestureActiveChanged by rememberUpdatedState(onPinchGestureActiveChanged)
     val currentOnLockedScreenTap by rememberUpdatedState(onLockedScreenTap)
 
     var lastTapTime by remember { mutableLongStateOf(0L) }
@@ -179,7 +193,51 @@ fun PlayerGestureOverlay(
     var activePinchStartMode by remember { mutableStateOf(AspectRatioMode.FIT) }
     var pendingPinchMode by remember { mutableStateOf(AspectRatioMode.FIT) }
     var isPinchActive by remember { mutableStateOf(false) }
+    var isPinchGestureActive by remember { mutableStateOf(false) }
+    var justFinishedPinch by remember { mutableStateOf(false) }
     var interactiveSurfaceScale by remember { mutableFloatStateOf(1.0f) }
+
+    fun handlePinchRelease() {
+        if (!isPinchActive) return
+        isPinchActive = false
+        initialPinchDist = -1f
+        justFinishedPinch = true
+        scope.launch {
+            delay(350L)
+            justFinishedPinch = false
+        }
+        val finalMode = pendingPinchMode
+        val targetScale = if (finalMode == AspectRatioMode.ZOOM) currentFillScale else 1.0f
+        val isZoomingOut = finalMode == AspectRatioMode.FIT
+
+        // Critical damping (1.0f) for zoom out: lands squarely on 1.0f with zero overshoot or black-bar flicker!
+        // Organic damping (0.82f) for zoom in: confident outward unfurl where overshoot is clipped off-screen.
+        val springSpec = if (isZoomingOut) {
+            spring<Float>(
+                stiffness = 650f,
+                dampingRatio = Spring.DampingRatioNoBouncy
+            )
+        } else {
+            spring<Float>(
+                stiffness = 650f,
+                dampingRatio = 0.82f
+            )
+        }
+
+        scope.launch {
+            val anim = Animatable(interactiveSurfaceScale)
+            anim.animateTo(
+                targetValue = targetScale,
+                animationSpec = springSpec
+            ) {
+                interactiveSurfaceScale = this.value
+                currentOnPinchScaleChanged(this.value)
+            }
+            currentOnPinchAspect(finalMode, if (finalMode == AspectRatioMode.ZOOM) "Fill Screen" else "Fit to Screen")
+            currentOnPinchScaleChanged(targetScale)
+            currentOnPinchGestureActiveChanged(false)
+        }
+    }
 
     fun triggerHud(isVol: Boolean, percent: Int) {
         isVolumeHud = isVol
@@ -198,7 +256,7 @@ fun PlayerGestureOverlay(
         }
         if (threshold != -1 && threshold != lastHapticThreshold) {
             lastHapticThreshold = threshold
-            try { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) } catch (_: Exception) {}
+            try { haptic.performHapticFeedback(HapticFeedbackType.LongPress) } catch (_: Exception) {}
         } else if (threshold == -1) {
             lastHapticThreshold = -1
         }
@@ -362,40 +420,53 @@ fun PlayerGestureOverlay(
                                     activePinchStartMode = currentAspectRatioMode
                                     pendingPinchMode = activePinchStartMode
                                     isPinchActive = true
-                                    interactiveSurfaceScale = if (activePinchStartMode == AspectRatioMode.ZOOM) 1.33f else 1.0f
-                                    currentOnPinchBadgeLabel(if (pendingPinchMode == AspectRatioMode.ZOOM) "FILL" else "FIT")
+                                    currentOnPinchGestureActiveChanged(true)
+                                    val startScale = if (activePinchStartMode == AspectRatioMode.ZOOM) currentFillScale else 1.0f
+                                    interactiveSurfaceScale = startScale
+                                    currentOnPinchScaleChanged(startScale)
+                                    currentOnPinchBadgeLabel(if (activePinchStartMode == AspectRatioMode.ZOOM) "Fill Screen" else "Fit to Screen")
                                 }
                             } else {
                                 val r = if (initialPinchDist > 0f) dist / initialPinchDist else 1.0f
-                                val committedScale = if (activePinchStartMode == AspectRatioMode.ZOOM) 1.33f else 1.0f
-                                val surfaceScale = PlayerMotionMath.rubberBandedVideoScale(r, committedScale, sFit = 1.0f, sFill = 1.33f)
+                                val startScale = if (activePinchStartMode == AspectRatioMode.ZOOM) currentFillScale else 1.0f
+                                val rawScale = startScale * r
+                                val surfaceScale = if (activePinchStartMode == AspectRatioMode.ZOOM) {
+                                    // Squeezing IN from ZOOM: smoothly scale from currentFillScale down to 1.0f.
+                                    // Dock solidly at 1.0f so the video never collapses into an ugly floating rectangle!
+                                    if (rawScale < 1.0f) {
+                                        1.0f - 0.015f * kotlin.math.tanh((1.0f - rawScale) / 0.15f)
+                                    } else if (rawScale > currentFillScale) {
+                                        currentFillScale + PlayerMotionMath.DELTA_S_MAX * kotlin.math.tanh((rawScale - currentFillScale) / 0.35f)
+                                    } else {
+                                        rawScale
+                                    }
+                                } else {
+                                    PlayerMotionMath.rubberBandedVideoScale(
+                                        pinchRatio = r,
+                                        committedScale = startScale,
+                                        sFit = 1.0f,
+                                        sFill = currentFillScale
+                                    )
+                                }
                                 interactiveSurfaceScale = surfaceScale
                                 currentOnPinchScaleChanged(surfaceScale)
 
-                                val evaluatedMode = PlayerMotionMath.evaluatePinchHysteresis(pendingPinchMode, surfaceScale, r, sFit = 1.0f, sFill = 1.33f)
-                                if (evaluatedMode != pendingPinchMode) {
-                                    pendingPinchMode = evaluatedMode
+                                val targetMode = PlayerMotionMath.evaluatePinchHysteresis(
+                                    startMode = activePinchStartMode,
+                                    surfaceScale = surfaceScale,
+                                    pinchRatio = r,
+                                    sFit = 1.0f,
+                                    sFill = currentFillScale
+                                )
+
+                                if (targetMode != pendingPinchMode) {
+                                    pendingPinchMode = targetMode
                                     try { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) } catch (_: Exception) {}
-                                    currentOnPinchBadgeLabel(if (evaluatedMode == AspectRatioMode.ZOOM) "FILL" else "FIT")
+                                    currentOnPinchBadgeLabel(if (targetMode == AspectRatioMode.ZOOM) "Fill Screen" else "Fit to Screen")
                                 }
                             }
                         } else if (isPinchActive) {
-                            // Pointer release during pinch: trigger settling spring handoff immediately
-                            isPinchActive = false
-                            initialPinchDist = -1f
-                            val targetScale = if (pendingPinchMode == AspectRatioMode.ZOOM) 1.33f else 1.0f
-                            scope.launch {
-                                val anim = Animatable(interactiveSurfaceScale)
-                                anim.animateTo(
-                                    targetValue = targetScale,
-                                    animationSpec = spring(stiffness = PlayerMotionMath.SPRING_PINCH_K, dampingRatio = PlayerMotionMath.SPRING_PINCH_ZETA)
-                                ) {
-                                    interactiveSurfaceScale = this.value
-                                    currentOnPinchScaleChanged(this.value)
-                                }
-                                currentOnPinchAspect(pendingPinchMode, if (pendingPinchMode == AspectRatioMode.ZOOM) "FILL" else "FIT")
-                                currentOnPinchScaleChanged(targetScale)
-                            }
+                            handlePinchRelease()
                             break
                         }
 
@@ -415,25 +486,11 @@ fun PlayerGestureOverlay(
 
                             // Pinch Release Handoff (Section 4.2 Settling Spring)
                             if (isPinchActive) {
-                                isPinchActive = false
-                                initialPinchDist = -1f
-                                val targetScale = if (pendingPinchMode == AspectRatioMode.ZOOM) 1.33f else 1.0f
-                                scope.launch {
-                                    val anim = Animatable(interactiveSurfaceScale)
-                                    anim.animateTo(
-                                        targetValue = targetScale,
-                                        animationSpec = spring(stiffness = PlayerMotionMath.SPRING_PINCH_K, dampingRatio = PlayerMotionMath.SPRING_PINCH_ZETA)
-                                    ) {
-                                        interactiveSurfaceScale = this.value
-                                        currentOnPinchScaleChanged(this.value)
-                                    }
-                                    currentOnPinchAspect(pendingPinchMode, if (pendingPinchMode == AspectRatioMode.ZOOM) "FILL" else "FIT")
-                                    currentOnPinchScaleChanged(targetScale)
-                                }
+                                handlePinchRelease()
                                 break
                             }
 
-                            if (!isDragging) {
+                            if (!isDragging && !justFinishedPinch) {
                                 val now = System.currentTimeMillis()
                                 val tapX = change.position.x
                                 val isLeftHalf = tapX < (screenWidthPx * 0.5f)
@@ -607,13 +664,22 @@ fun PlayerGestureOverlay(
             }
         }
 
-        // Vertical Sliders (Brightness left, Volume right)
+        // Vertical Sliders (Brightness left, Volume right) with kinetic edge slide and cutout avoidance
         AnimatedVisibility(
             visible = hudVisible,
-            enter = fadeIn(tween(PlayerTokens.HudEnterMs)),
-            exit = fadeOut(tween(PlayerTokens.HudExitMs)),
+            enter = (if (isVolumeHud) {
+                slideInHorizontally(initialOffsetX = { it / 2 }, animationSpec = spring(stiffness = Spring.StiffnessMedium, dampingRatio = 0.72f))
+            } else {
+                slideInHorizontally(initialOffsetX = { -it / 2 }, animationSpec = spring(stiffness = Spring.StiffnessMedium, dampingRatio = 0.72f))
+            }) + fadeIn(tween(PlayerTokens.HudEnterMs)),
+            exit = (if (isVolumeHud) {
+                slideOutHorizontally(targetOffsetX = { it / 2 }, animationSpec = tween(PlayerTokens.HudExitMs))
+            } else {
+                slideOutHorizontally(targetOffsetX = { -it / 2 }, animationSpec = tween(PlayerTokens.HudExitMs))
+            }) + fadeOut(tween(PlayerTokens.HudExitMs)),
             modifier = Modifier
                 .align(if (isVolumeHud) Alignment.CenterEnd else Alignment.CenterStart)
+                .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal))
                 .padding(horizontal = 20.dp)
         ) {
             VerticalSliderCapsule(
@@ -691,16 +757,17 @@ fun VerticalSliderCapsule(
         modifier = Modifier
             .width(44.dp)
             .height(120.dp)
-            .videoOverlayGlass(shape = RoundedCornerShape(22.dp)),
+            .clip(RoundedCornerShape(22.dp))
+            .background(Color(0xD90B0B0F))
+            .border(HairlineWidth, PlayerTokens.VideoOverlayGlassBorder, RoundedCornerShape(22.dp)),
         contentAlignment = Alignment.BottomCenter
     ) {
-        // White 85% fill rising from the bottom
+        // Crisp liquid fill rising from the bottom (parent clips bottom corners cleanly, flat meniscus at top!)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .fillMaxHeight(animatedFill)
-                .clip(RoundedCornerShape(22.dp))
-                .background(Color.White.copy(alpha = 0.85f))
+                .background(Color.White.copy(alpha = 0.88f))
         )
 
         // Outline icon inside at bottom (18 dp)

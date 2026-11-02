@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -41,13 +42,17 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.euthopiar.R
 import com.euthopiar.core.model.MediaType
 import com.euthopiar.ui.theme.AppFontFamily
 import com.euthopiar.ui.theme.HairlineWidth
+import com.euthopiar.ui.theme.ImdbGold
 import com.euthopiar.ui.theme.LocalAmoledMode
 import com.euthopiar.ui.theme.LocalReduceMotion
+import com.euthopiar.ui.theme.RottenTomatoesFresh
+import com.euthopiar.ui.theme.RottenTomatoesRotten
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeTint
 import dev.chrisbanes.haze.hazeEffect
@@ -69,16 +74,18 @@ import androidx.compose.ui.unit.LayoutDirection
 private data class HeroChipData(
     val iconRes: Int,
     val text: String,
-    val contentDescription: String?
+    val contentDescription: String?,
+    val iconTint: Color = Color.White.copy(alpha = 0.90f),
+    val textWeight: FontWeight = FontWeight.Medium
 )
 
 /**
  * Hero Metadata Chips matching Part 3 item 3:
  *
  * Directly under the logo (about 12 px gap), a wrapping row of small glass chips:
- * - 24 px tall, 8 px radius, 11 sp medium, 6 px gaps, outline icons at 12 px.
+ * - 26 px tall, 7 px radius, 12 sp, 6 px gaps, outline icons at 13 px.
  * - Fill: white at 7% over dark background.
- * - Border: 0.5 px hairline, white at 16%.
+ * - Specular border: 0.5 px gradient, white at 30% -> 6%.
  * - Low-end fallback: 0xFF14151F at 94% opacity.
  * - Chips only appear when real data is present (missing fields are hidden, no blanks or fake defaults).
  * - Background layer shares a unified Haze blur pass to eliminate multi-node sampling overhead.
@@ -133,7 +140,8 @@ fun HeroMetadataChips(
             HeroChipData(
                 iconRes = qualityIconRes,
                 text = qualityLabel,
-                contentDescription = "$qualityLabel Quality"
+                contentDescription = "$qualityLabel Quality",
+                textWeight = FontWeight.SemiBold
             )
         )
     }
@@ -144,7 +152,8 @@ fun HeroMetadataChips(
             HeroChipData(
                 iconRes = R.drawable.ic_age_rating_shield,
                 text = contentRating.trim(),
-                contentDescription = "Content rating $contentRating"
+                contentDescription = "Content rating $contentRating",
+                textWeight = FontWeight.SemiBold
             )
         )
     }
@@ -156,7 +165,9 @@ fun HeroMetadataChips(
             HeroChipData(
                 iconRes = R.drawable.ic_rating_star_imdb,
                 text = formattedImdb,
-                contentDescription = "IMDb rating $formattedImdb"
+                contentDescription = "IMDb rating $formattedImdb",
+                iconTint = ImdbGold,
+                textWeight = FontWeight.SemiBold
             )
         )
     }
@@ -165,11 +176,15 @@ fun HeroMetadataChips(
     if (!rottenTomatoesRating.isNullOrBlank()) {
         val trimmedRt = rottenTomatoesRating.trim()
         val cleanRt = if (trimmedRt.endsWith("%")) trimmedRt else "$trimmedRt%"
+        val scoreInt = trimmedRt.replace("%", "").toIntOrNull() ?: 0
+        val rtColor = if (scoreInt >= 60) RottenTomatoesFresh else RottenTomatoesRotten
         items.add(
             HeroChipData(
                 iconRes = R.drawable.ic_rating_tomato,
                 text = cleanRt,
-                contentDescription = "Rotten Tomatoes score $cleanRt"
+                contentDescription = "Rotten Tomatoes score $cleanRt",
+                iconTint = rtColor,
+                textWeight = FontWeight.SemiBold
             )
         )
     }
@@ -256,6 +271,8 @@ private fun HeroMetadataChipsLayout(
                         icon = painterResource(chip.iconRes),
                         text = chip.text,
                         contentDescription = chip.contentDescription,
+                        iconTint = chip.iconTint,
+                        textWeight = chip.textWeight,
                         isUsingUnifiedHaze = isUsingHaze && chipRects.isNotEmpty(),
                         anchorColor = anchorColor,
                         fallbackColor = fallbackColor,
@@ -312,8 +329,8 @@ private fun HeroMetadataChipsLayout(
 }
 
 /**
- * Individual small glass chip (26 px tall, 8 px radius, 12 sp medium, 1 px specular border).
- * Anchored with 38% black tint + 6% white lift, 18 px background blur, 98% scale on press.
+ * Individual small glass chip (26 px tall, 7 px radius, 12 sp, 0.5 px specular border).
+ * Anchored with 38% black tint + 6% white lift, 18 px background blur.
  * Meets WCAG AAA 7:1+ contrast against 100% white text.
  */
 @Composable
@@ -321,6 +338,8 @@ private fun HeroGlassChip(
     icon: Painter,
     text: String,
     contentDescription: String? = null,
+    iconTint: Color = Color.White.copy(alpha = 0.90f),
+    textWeight: FontWeight = FontWeight.Medium,
     isUsingUnifiedHaze: Boolean = false,
     anchorColor: Color = Color.Black,
     fallbackColor: Color = Color(0xFF14151F).copy(alpha = 0.94f),
@@ -329,22 +348,14 @@ private fun HeroGlassChip(
     modifier: Modifier = Modifier
 ) {
     val reduceMotion = LocalReduceMotion.current
-    val chipShape = RoundedCornerShape(8.dp)
-
-    var isPressed by remember { mutableStateOf(false) }
-
-    val scale by animateFloatAsState(
-        targetValue = if (isPressed && !reduceMotion) 0.98f else 1f,
-        animationSpec = spring(dampingRatio = 0.65f, stiffness = Spring.StiffnessMediumLow),
-        label = "chipPressScale"
-    )
+    val chipShape = RoundedCornerShape(7.dp)
 
     val specularBorderBrush = remember {
         Brush.verticalGradient(
-            0.00f to Color.White.copy(alpha = 0.32f),
-            0.35f to Color.White.copy(alpha = 0.10f),
+            0.00f to Color.White.copy(alpha = 0.30f),
+            0.35f to Color.White.copy(alpha = 0.12f),
             0.65f to Color.White.copy(alpha = 0.06f),
-            1.00f to Color.White.copy(alpha = 0.16f)
+            1.00f to Color.White.copy(alpha = 0.14f)
         )
     }
 
@@ -352,66 +363,53 @@ private fun HeroGlassChip(
         Modifier // Handled by unified background layer
     } else {
         Modifier
-            .background(anchorColor.copy(alpha = anchorAlpha), chipShape)
+            .background(fallbackColor, chipShape)
             .background(Color.White.copy(alpha = whiteLiftAlpha), chipShape)
     }
 
     Box(
         modifier = modifier
-            .height(26.dp)
-            .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-            }
+            .heightIn(min = 26.dp)
             .clip(chipShape)
             .then(chipBgModifier)
             .border(
-                width = 1.dp,
+                width = 0.5.dp,
                 brush = specularBorderBrush,
                 shape = chipShape
             )
             .drawBehind {
-                // Subtle 1dp top inner highlight white at 10%
+                // Subtle 0.5dp top inner highlight white at 12%
                 drawLine(
-                    color = Color.White.copy(alpha = 0.10f),
-                    start = Offset(4.dp.toPx(), 1.dp.toPx()),
-                    end = Offset(size.width - 4.dp.toPx(), 1.dp.toPx()),
+                    color = Color.White.copy(alpha = 0.12f),
+                    start = Offset(4.dp.toPx(), 0.5.dp.toPx()),
+                    end = Offset(size.width - 4.dp.toPx(), 0.5.dp.toPx()),
                     strokeWidth = 1.dp.toPx()
                 )
-            }
-            .pointerInput(reduceMotion) {
-                if (!reduceMotion) {
-                    awaitEachGesture {
-                        awaitFirstDown(requireUnconsumed = false)
-                        isPressed = true
-                        waitForUpOrCancellation()
-                        isPressed = false
-                    }
-                }
             }
             .semantics(mergeDescendants = true) {
                 if (contentDescription != null) {
                     this.contentDescription = contentDescription
                 }
             }
-            .padding(horizontal = 8.dp),
+            .padding(horizontal = 8.5.dp, vertical = 3.dp),
         contentAlignment = Alignment.Center
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
         ) {
             Icon(
                 painter = icon,
                 contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.size(14.dp)
+                tint = iconTint,
+                modifier = Modifier.size(13.dp)
             )
             Text(
                 text = text,
                 fontFamily = AppFontFamily,
                 fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
+                fontWeight = textWeight,
+                letterSpacing = (-0.01).em,
                 color = Color.White,
                 maxLines = 1,
                 softWrap = false,

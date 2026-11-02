@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
@@ -443,6 +444,7 @@ fun SettingsHairlineRow(
     icon: ImageVector,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    contentPadding: PaddingValues = PaddingValues(horizontal = 22.dp, vertical = 14.dp),
     enabled: Boolean = true
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -469,7 +471,7 @@ fun SettingsHairlineRow(
                 enabled = enabled,
                 onClick = onClick
             )
-            .padding(horizontal = 22.dp, vertical = 14.dp)
+            .padding(contentPadding)
             .tvFocusable(shape = RoundedCornerShape(12.dp)),
         verticalAlignment = Alignment.CenterVertically
     ) {

@@ -221,6 +221,7 @@ data class PlayerUiState(
     val smartFailoverEnabled: Boolean = false,
     val isScreenLocked: Boolean = false,
     val pinchAspectToast: String? = null,
+    val qualityIndicatorToast: String? = null,
     val showUpNextCard: Boolean = false,
     val upNextCountdownSeconds: Int = 10,
     val upNextEpisode: EpisodeItem? = null,
@@ -241,7 +242,11 @@ data class PlayerUiState(
     val p2pBufferProgress: Float = 0f,
     val p2pPhaseLabel: String? = null,
     val isSearchingStreams: Boolean = false,
-    val isLiveStream: Boolean = false
+    val isLiveStream: Boolean = false,
+    val logoUrl: String? = null,
+    val genres: List<String> = emptyList(),
+    val rating: String? = null,
+    val contentRating: String? = null
 )
 
 data class MediaFormatInfo(
@@ -1578,6 +1583,10 @@ class PlayerViewModel(
                 isLiveStream = (type == MediaType.LIVE_TV),
                 mediaTitle = title ?: cachedEnriched?.title ?: mediaId,
                 backdropUrl = currentBackdropUrl ?: cachedEnriched?.backdropUrl,
+                logoUrl = cachedEnriched?.logoUrl,
+                genres = cachedEnriched?.genres ?: emptyList(),
+                rating = cachedEnriched?.rating,
+                contentRating = cachedEnriched?.contentRating,
                 episodeTitle = if (isTv) epTitle else null,
                 seasonNumber = if (isTv) season else null,
                 episodeNumber = if (isTv) episode else null,
@@ -1638,6 +1647,10 @@ class PlayerViewModel(
                             it.copy(
                                 mediaTitle = detail.title.ifBlank { it.mediaTitle },
                                 episodeTitle = currentEpItem?.title ?: it.episodeTitle,
+                                logoUrl = detail.logoUrl ?: cachedEnriched?.logoUrl ?: it.logoUrl,
+                                genres = if (detail.genres.isNotEmpty()) detail.genres else (cachedEnriched?.genres ?: it.genres),
+                                rating = detail.rating ?: cachedEnriched?.rating ?: it.rating,
+                                contentRating = detail.contentRating ?: cachedEnriched?.contentRating ?: it.contentRating,
                                 hasNextEpisode = nextEp != null,
                                 upNextEpisode = nextEp,
                                 hasPrevEpisode = prevEp != null,
@@ -1671,6 +1684,10 @@ class PlayerViewModel(
                             it.copy(
                                 mediaTitle = detail.title.ifBlank { it.mediaTitle },
                                 episodeTitle = null,
+                                logoUrl = detail.logoUrl ?: cachedEnriched?.logoUrl ?: it.logoUrl,
+                                genres = if (detail.genres.isNotEmpty()) detail.genres else (cachedEnriched?.genres ?: it.genres),
+                                rating = detail.rating ?: cachedEnriched?.rating ?: it.rating,
+                                contentRating = detail.contentRating ?: cachedEnriched?.contentRating ?: it.contentRating,
                                 seasonNumber = null,
                                 episodeNumber = null,
                                 hasNextEpisode = false,
@@ -4210,7 +4227,7 @@ class PlayerViewModel(
                 .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
                 .build()
             updateMediaFormatInfo()
-            showToast("Quality: Auto (Adaptive)")
+            showQualityIndicator(option)
         } else if (option.groupIndex >= 0 && option.trackIndex >= 0) {
             val group = player.currentTracks.groups.getOrNull(option.groupIndex)
             if (group != null && option.trackIndex in 0 until group.length) {
@@ -4228,7 +4245,7 @@ class PlayerViewModel(
                     .build()
             }
             updateMediaFormatInfo()
-            showToast("Quality: ${option.label}")
+            showQualityIndicator(option)
         } else if (option.height != null) {
             val targetHeight = option.height
             player.trackSelectionParameters = player.trackSelectionParameters
@@ -4238,7 +4255,7 @@ class PlayerViewModel(
                 .setMinVideoSize(0, (targetHeight - 100).coerceAtLeast(0))
                 .build()
             updateMediaFormatInfo()
-            showToast("Quality: ${option.label}")
+            showQualityIndicator(option)
         }
     }
 
@@ -4251,7 +4268,7 @@ class PlayerViewModel(
         }
         if (nextOption != null) {
             android.util.Log.w("PlayerViewModel", "Sub-bitrate starvation detected: stepping down from ${curOpt.label} to ${nextOption.label}")
-            showToast("Slow connection: adjusting quality to ${nextOption.label}")
+            showQualityIndicator(nextOption, isAutoStepDown = true)
             applyQuality(nextOption)
         }
     }
@@ -4608,6 +4625,49 @@ class PlayerViewModel(
         seekTo(positionMs)
     }
 
+    private var aspectToastDismissJob: Job? = null
+    private var qualityToastDismissJob: Job? = null
+
+    fun showQualityIndicator(option: VideoQualityOption, isAutoStepDown: Boolean = false) {
+        val (_, fullTitle) = resolveQualityFullTitle(option)
+        val text = if (isAutoStepDown) "Auto-Adjusted · $fullTitle" else fullTitle
+        _uiState.update { it.copy(qualityIndicatorToast = text) }
+        qualityToastDismissJob?.cancel()
+        qualityToastDismissJob = viewModelScope.launch {
+            delay(4000L)
+            _uiState.update {
+                if (it.qualityIndicatorToast == text) it.copy(qualityIndicatorToast = null) else it
+            }
+        }
+    }
+
+    fun dismissQualityIndicator() {
+        qualityToastDismissJob?.cancel()
+        _uiState.update { it.copy(qualityIndicatorToast = null) }
+    }
+
+    fun dismissAspectToast() {
+        aspectToastDismissJob?.cancel()
+        _uiState.update { it.copy(pinchAspectToast = null) }
+    }
+
+    fun showAspectIndicator(mode: AspectRatioMode) {
+        val label = when (mode) {
+            AspectRatioMode.FIT -> "Fit to Screen"
+            AspectRatioMode.ZOOM -> "Fill Screen"
+            AspectRatioMode.FIXED_16_9 -> "16:9 Widescreen"
+            AspectRatioMode.STRETCH -> "Stretch to Fill"
+        }
+        _uiState.update { it.copy(pinchAspectToast = label) }
+        aspectToastDismissJob?.cancel()
+        aspectToastDismissJob = viewModelScope.launch {
+            delay(4000L)
+            _uiState.update {
+                if (it.pinchAspectToast == label) it.copy(pinchAspectToast = null) else it
+            }
+        }
+    }
+
     fun cycleAspectRatio() {
         val nextMode = when (_uiState.value.aspectRatioMode) {
             AspectRatioMode.FIT -> AspectRatioMode.ZOOM
@@ -4616,7 +4676,7 @@ class PlayerViewModel(
             AspectRatioMode.STRETCH -> AspectRatioMode.FIT
         }
         _uiState.update { it.copy(aspectRatioMode = nextMode) }
-        showToast("Aspect Ratio: ${nextMode.label}")
+        showAspectIndicator(nextMode)
         resetAutoHideTimer()
     }
 
@@ -4809,17 +4869,16 @@ class PlayerViewModel(
     }
 
     fun showPinchBadge(label: String) {
-        _uiState.update { it.copy(pinchAspectToast = label) }
+        val cleanLabel = when (label.trim().uppercase()) {
+            "FIT" -> "Fit to Screen"
+            "FILL" -> "Fill Screen"
+            else -> label
+        }
+        _uiState.update { it.copy(pinchAspectToast = cleanLabel) }
     }
 
     fun triggerPinchAspect(mode: AspectRatioMode, label: String) {
-        _uiState.update { it.copy(aspectRatioMode = mode, pinchAspectToast = label) }
-        viewModelScope.launch {
-            delay(1100L)
-            _uiState.update {
-                if (it.pinchAspectToast == label) it.copy(pinchAspectToast = null) else it
-            }
-        }
+        showAspectIndicator(mode)
     }
 
     fun setPlaybackSpeed(speed: Float) {
@@ -4838,6 +4897,7 @@ class PlayerViewModel(
 
     fun setAspectRatio(mode: AspectRatioMode) {
         _uiState.update { it.copy(aspectRatioMode = mode) }
+        showAspectIndicator(mode)
         resetAutoHideTimer()
     }
 

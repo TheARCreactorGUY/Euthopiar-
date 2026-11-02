@@ -9,7 +9,9 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -37,6 +39,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
@@ -104,23 +107,73 @@ fun PlayerScreen(
     var unlockDismissJob by remember { mutableStateOf<Job?>(null) }
     var showCastPickerSheet by remember { mutableStateOf(false) }
     var showRemainingTime by remember { mutableStateOf(true) }
-    var videoSurfaceScale by remember { mutableFloatStateOf(1.0f) }
-    val targetAspectScale = 1.0f
-    LaunchedEffect(targetAspectScale) {
-        if (kotlin.math.abs(videoSurfaceScale - targetAspectScale) > 0.001f) {
-            val anim = androidx.compose.animation.core.Animatable(videoSurfaceScale)
-            anim.animateTo(
-                targetValue = targetAspectScale,
-                animationSpec = androidx.compose.animation.core.spring(
-                    stiffness = PlayerMotionMath.SPRING_PINCH_K,
-                    dampingRatio = PlayerMotionMath.SPRING_PINCH_ZETA
-                )
-            ) {
-                videoSurfaceScale = this.value
+    val playerFocusRequester = remember { FocusRequester() }
+
+    val exoPlayer = viewModel.getPlayer()
+    var videoWidth by remember { mutableIntStateOf(0) }
+    var videoHeight by remember { mutableIntStateOf(0) }
+
+    DisposableEffect(exoPlayer) {
+        if (exoPlayer == null) return@DisposableEffect onDispose {}
+        val listener = object : androidx.media3.common.Player.Listener {
+            override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+                if (videoSize.width > 0 && videoSize.height > 0) {
+                    videoWidth = videoSize.width
+                    videoHeight = videoSize.height
+                }
+            }
+        }
+        exoPlayer.addListener(listener)
+        val curSize = exoPlayer.videoSize
+        if (curSize.width > 0 && curSize.height > 0) {
+            videoWidth = curSize.width
+            videoHeight = curSize.height
+        }
+        onDispose {
+            exoPlayer.removeListener(listener)
+        }
+    }
+
+    val displayMetrics = androidx.compose.ui.platform.LocalContext.current.resources.displayMetrics
+    val screenW = displayMetrics.widthPixels.toFloat()
+    val screenH = displayMetrics.heightPixels.toFloat()
+    val screenAspect = if (screenH > 0f) maxOf(screenW, screenH) / minOf(screenW, screenH) else (16f / 9f)
+    val videoAspect = if (videoWidth > 0 && videoHeight > 0) videoWidth.toFloat() / videoHeight.toFloat() else (16f / 9f)
+    val fillScale = if (videoAspect > 0f && screenAspect > 0f) {
+        maxOf(screenAspect / videoAspect, videoAspect / screenAspect).coerceIn(1.08f, 2.2f)
+    } else {
+        1.28f
+    }
+
+    var isPinchGestureInProgress by remember { mutableStateOf(false) }
+    var videoSurfaceScale by remember {
+        mutableFloatStateOf(if (uiState.aspectRatioMode == AspectRatioMode.ZOOM) fillScale else 1.0f)
+    }
+
+    LaunchedEffect(uiState.aspectRatioMode, fillScale) {
+        if (!isPinchGestureInProgress) {
+            val targetScale = when (uiState.aspectRatioMode) {
+                AspectRatioMode.ZOOM -> fillScale
+                else -> 1.0f
+            }
+            if (kotlin.math.abs(videoSurfaceScale - targetScale) > 0.005f) {
+                val isZoomingOut = targetScale <= 1.01f
+                val anim = Animatable(videoSurfaceScale)
+                anim.animateTo(
+                    targetValue = targetScale,
+                    animationSpec = if (isZoomingOut) {
+                        spring<Float>(stiffness = 650f, dampingRatio = Spring.DampingRatioNoBouncy)
+                    } else {
+                        spring<Float>(stiffness = 650f, dampingRatio = 0.82f)
+                    }
+                ) {
+                    videoSurfaceScale = this.value
+                }
+            } else {
+                videoSurfaceScale = targetScale
             }
         }
     }
-    val playerFocusRequester = remember { FocusRequester() }
     val playPauseFocusRequester = remember { FocusRequester() }
     val windowDimensions = com.euthopiar.ui.theme.rememberWindowDimensions()
 
@@ -418,7 +471,6 @@ fun PlayerScreen(
         }
 
         // Layer 1: ExoPlayer Video Surface
-        val exoPlayer = viewModel.getPlayer()
         if (exoPlayer != null) {
             AndroidView(
                 factory = { ctx ->
@@ -428,7 +480,7 @@ fun PlayerScreen(
                         subtitleView?.visibility = android.view.View.GONE
                         resizeMode = when (uiState.aspectRatioMode) {
                             AspectRatioMode.FIT -> AspectRatioFrameLayout.RESIZE_MODE_FIT
-                            AspectRatioMode.ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                            AspectRatioMode.ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_FIT
                             AspectRatioMode.FIXED_16_9 -> AspectRatioFrameLayout.RESIZE_MODE_FIT
                             AspectRatioMode.STRETCH -> AspectRatioFrameLayout.RESIZE_MODE_FILL
                         }
@@ -443,7 +495,7 @@ fun PlayerScreen(
                     }
                     val targetResizeMode = when (uiState.aspectRatioMode) {
                         AspectRatioMode.FIT -> AspectRatioFrameLayout.RESIZE_MODE_FIT
-                        AspectRatioMode.ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                        AspectRatioMode.ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_FIT
                         AspectRatioMode.FIXED_16_9 -> AspectRatioFrameLayout.RESIZE_MODE_FIT
                         AspectRatioMode.STRETCH -> AspectRatioFrameLayout.RESIZE_MODE_FILL
                     }
@@ -453,9 +505,11 @@ fun PlayerScreen(
                 },
                 modifier = Modifier
                     .fillMaxSize()
+                    .clipToBounds()
                     .graphicsLayer {
-                        scaleX = videoSurfaceScale
-                        scaleY = videoSurfaceScale
+                        val s = if (isInPip) 1.0f else videoSurfaceScale
+                        scaleX = s
+                        scaleY = s
                     }
             )
         }
@@ -478,6 +532,7 @@ fun PlayerScreen(
                 isGesturesPaused = isGesturesPaused,
                 isScreenLocked = uiState.isScreenLocked,
                 currentAspectRatioMode = uiState.aspectRatioMode,
+                fillScale = fillScale,
                 onHold2xStart = { viewModel.onHold2xStart() },
                 onHold2xEnd = { viewModel.onHold2xEnd() },
                 onSingleTap = { viewModel.toggleControls() },
@@ -485,6 +540,7 @@ fun PlayerScreen(
                 onPinchAspect = { mode, label -> viewModel.triggerPinchAspect(mode, label) },
                 onPinchBadgeLabel = { label -> viewModel.showPinchBadge(label) },
                 onPinchScaleChanged = { scale -> videoSurfaceScale = scale },
+                onPinchGestureActiveChanged = { active -> isPinchGestureInProgress = active },
                 onLockedScreenTap = { triggerShowUnlockButton() },
                 seekIntervalSeconds = uiState.seekIntervalSeconds,
                 modifier = Modifier.fillMaxSize()
@@ -635,27 +691,36 @@ fun PlayerScreen(
                 modifier = Modifier.align(Alignment.TopCenter)
             )
 
-            // Layer 6.5: Mid-Top Format Badges (Dolby Vision, HDR10+, Dolby Audio / Atmos, 4K)
-            var showFormatBadges by remember { mutableStateOf(false) }
+            // HUD Hide Quality Indicator Trigger
+            var hudHideQualityToast by remember { mutableStateOf<String?>(null) }
+            var previousShowHud by remember { mutableStateOf(showHud) }
 
-            LaunchedEffect(showHud, uiState.mediaFormatInfo) {
-                if (!showHud && !uiState.isScreenLocked && uiState.mediaFormatInfo.hasAnyBadge) {
-                    showFormatBadges = true
-                    delay(5000L)
-                    showFormatBadges = false
-                } else {
-                    showFormatBadges = false
+            LaunchedEffect(showHud, uiState.isPlaying, uiState.mediaFormatInfo, uiState.selectedQuality, uiState.selectedServer) {
+                val justHidden = previousShowHud && !showHud
+                previousShowHud = showHud
+
+                if (justHidden && !uiState.isScreenLocked && !uiState.isFastForwarding2x) {
+                    val resolutionText = resolvePlaybackResolutionLabel(
+                        mediaFormatInfo = uiState.mediaFormatInfo,
+                        selectedQuality = uiState.selectedQuality,
+                        selectedServer = uiState.selectedServer
+                    )
+                    if (resolutionText.isNotBlank()) {
+                        hudHideQualityToast = resolutionText
+                    }
+                } else if (showHud) {
+                    hudHideQualityToast = null
                 }
             }
 
-            PlayerFormatBadges(
-                formatInfo = uiState.mediaFormatInfo,
-                visible = showFormatBadges && !uiState.isFastForwarding2x,
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .statusBarsPadding()
-                    .padding(top = 24.dp)
-            )
+            // Active HUD Toast: Aspect ratio pinch takes top priority, then manual quality change, then HUD-hide resolution
+            val activeHudToast = when {
+                uiState.isFastForwarding2x -> null
+                !uiState.pinchAspectToast.isNullOrBlank() -> uiState.pinchAspectToast
+                !uiState.qualityIndicatorToast.isNullOrBlank() -> uiState.qualityIndicatorToast
+                !hudHideQualityToast.isNullOrBlank() -> hudHideQualityToast
+                else -> null
+            }
 
             // Layer 7: Center Cluster
             PlayerCenterCluster(
@@ -712,6 +777,10 @@ fun PlayerScreen(
                 seasonNumber = uiState.seasonNumber,
                 episodeNumber = uiState.episodeNumber,
                 serverName = uiState.selectedServer?.serverName,
+                logoUrl = uiState.logoUrl,
+                genres = uiState.genres,
+                rating = uiState.rating,
+                contentRating = uiState.contentRating,
                 showRemainingTime = showRemainingTime,
                 aspectRatioMode = uiState.aspectRatioMode,
                 selectedServer = uiState.selectedServer,
@@ -761,12 +830,19 @@ fun PlayerScreen(
                 },
                 modifier = Modifier
                     .align(Alignment.CenterStart)
+                    .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Start))
                     .padding(start = 24.dp)
             )
 
-            // Layer 10: Pinch-to-Zoom Aspect Ratio Badge
+            // Layer 10: Top HUD Indicator (Aspect Ratio & Quality Badge)
             PinchAspectBadge(
-                label = if (!uiState.isFastForwarding2x) uiState.pinchAspectToast else null,
+                label = activeHudToast,
+                controlsVisible = showHud,
+                onDismissed = {
+                    hudHideQualityToast = null
+                    viewModel.dismissQualityIndicator()
+                    viewModel.dismissAspectToast()
+                },
                 modifier = Modifier.align(Alignment.TopCenter)
             )
 

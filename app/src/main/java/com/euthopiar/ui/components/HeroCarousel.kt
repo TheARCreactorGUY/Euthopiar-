@@ -62,6 +62,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.first
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -212,9 +214,7 @@ fun HeroCarousel(
         }
         if (!reduceMotion && items.size > 1 && !isOffScreen && !isUserTouching && !hasFocus) {
             lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
-                while (pagerState.isScrollInProgress || isFeedScrolling()) {
-                    delay(100L)
-                }
+                snapshotFlow { pagerState.isScrollInProgress || isFeedScrolling() }.first { !it }
                 val remainingFraction = (1f - autoAdvanceProgress.value).coerceIn(0f, 1f)
                 val remainingDuration = (AUTO_ADVANCE_DURATION_MS * remainingFraction).roundToInt().coerceAtLeast(1)
 
@@ -226,9 +226,7 @@ fun HeroCarousel(
                     )
                 )
 
-                while (pagerState.isScrollInProgress || isFeedScrolling() || hasFocus || isUserTouching) {
-                    delay(100L)
-                }
+                snapshotFlow { pagerState.isScrollInProgress || isFeedScrolling() || hasFocus || isUserTouching }.first { !it }
 
                 if (!hasFocus && !isOffScreen && !isUserTouching) {
                     val nextPage = pagerState.currentPage + 1
@@ -236,7 +234,7 @@ fun HeroCarousel(
                         try {
                             pagerState.animateScrollToPage(
                                 nextPage,
-                                animationSpec = tween(Motion.DurationHero, easing = Motion.EmphasizedDecelerateEasing)
+                                animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow)
                             )
                         } finally {
                             if (abs(pagerState.currentPageOffsetFraction) > 0.001f) {
@@ -293,8 +291,14 @@ fun HeroCarousel(
     } else 0
     val currentSlideItem = items.getOrNull(currentActualIndex)
 
-    // Soft color haze derived from current slide's identity
-    val targetHazeColor = if (currentSlideItem != null) resolveSlideHazeColor(currentSlideItem) else Color(0xFF2A2859)
+    // Soft color haze derived from current slide's identity via genuine poster swatch extraction
+    val targetHazeColor = if (currentSlideItem != null) {
+        rememberPosterTint(
+            itemId = currentSlideItem.id,
+            imageUrl = currentSlideItem.backdropUrl ?: currentSlideItem.posterUrl,
+            fallbackColor = Color(0xFF2A2859)
+        )
+    } else Color(0xFF2A2859)
     val animatedHazeColor by animateColorAsState(
         targetValue = targetHazeColor,
         animationSpec = tween(durationMillis = 600, easing = LinearOutSlowInEasing),
@@ -516,7 +520,7 @@ private fun BoxScope.HeroHudContent(
                         fontFamily = AppFontFamily,
                         fontWeight = FontWeight.Medium,
                         fontSize = 28.sp,
-                        letterSpacing = 0.16.em
+                        letterSpacing = (-0.01).em
                     ),
                     color = Color.White,
                     maxLines = 2,
@@ -842,14 +846,20 @@ private fun HeroPagination(
             Pair(animWidth, animAlpha)
         }
 
-        Canvas(
+        Box(
             modifier = modifier
                 .fillMaxWidth()
-                .height(2.dp)
-                .semantics {
-                    contentDescription = "Slide ${activeIndex + 1} of $itemsCount"
-                }
+                .height(24.dp),
+            contentAlignment = Alignment.Center
         ) {
+            Canvas(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(2.dp)
+                    .semantics {
+                        contentDescription = "Slide ${activeIndex + 1} of $itemsCount"
+                    }
+            ) {
             val widthsPx = segmentWidths.map { with(density) { it.first.toPx() } }
             val totalWidthPx = widthsPx.sum() + (itemsCount - 1) * gapPx
             var startX = (size.width - totalWidthPx) / 2f
@@ -882,7 +892,8 @@ private fun HeroPagination(
                 startX += segWidthPx + gapPx
             }
         }
-    } else {
+    }
+} else {
         // Compact sliding window for >8 slides
         val maxVisible = 7
         val windowStart = (activeIndex - maxVisible / 2).coerceIn(0, itemsCount - maxVisible)
@@ -910,14 +921,20 @@ private fun HeroPagination(
             Triple(animWidth, animAlpha, isActive)
         }
 
-        Canvas(
+        Box(
             modifier = modifier
                 .fillMaxWidth()
-                .height(2.dp)
-                .semantics {
-                    contentDescription = "Slide ${activeIndex + 1} of $itemsCount"
-                }
+                .height(24.dp),
+            contentAlignment = Alignment.Center
         ) {
+            Canvas(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(2.dp)
+                    .semantics {
+                        contentDescription = "Slide ${activeIndex + 1} of $itemsCount"
+                    }
+            ) {
             val widthsPx = slotData.map { with(density) { it.first.toPx() } }
             val totalWidthPx = widthsPx.sum() + (maxVisible - 1) * gapPx
             var startX = (size.width - totalWidthPx) / 2f
@@ -949,6 +966,7 @@ private fun HeroPagination(
             }
         }
     }
+}
 }
 
 @Composable
@@ -1382,7 +1400,10 @@ private fun Modifier.heroPagerGesture(
                         coroutineScope.launch {
                             pagerState.animateScrollToPage(
                                 targetPage,
-                                animationSpec = tween(Motion.DurationEmphasized, easing = Motion.EmphasizedDecelerateEasing)
+                                animationSpec = spring(
+                                    dampingRatio = Spring.DampingRatioNoBouncy,
+                                    stiffness = Spring.StiffnessMediumLow
+                                )
                             )
                         }
                     } else if (abs(pagerState.currentPageOffsetFraction) > 0.001f) {
@@ -1392,7 +1413,10 @@ private fun Modifier.heroPagerGesture(
                                 .coerceIn(0, pagerState.pageCount - 1)
                             pagerState.animateScrollToPage(
                                 targetPage,
-                                animationSpec = tween(Motion.DurationEmphasized, easing = Motion.EmphasizedDecelerateEasing)
+                                animationSpec = spring(
+                                    dampingRatio = Spring.DampingRatioNoBouncy,
+                                    stiffness = Spring.StiffnessMediumLow
+                                )
                             )
                         }
                     }
@@ -1448,16 +1472,17 @@ private fun resolveHeroTargetPage(
     velocityX: Float,
     widthPx: Float,
 ): Int {
-    val thresholdPassed = abs(totalDx) > widthPx * HERO_SWIPE_THRESHOLD_FRACTION ||
-        abs(velocityX) > HERO_SWIPE_VELOCITY_THRESHOLD
-    if (!thresholdPassed) return startPage
-
-    val currentPage = startPage.coerceIn(0, pageCount - 1)
-    return when {
-        totalDx > 0f -> (currentPage - 1).coerceAtLeast(0)
-        totalDx < 0f -> (currentPage + 1).coerceAtMost(pageCount - 1)
-        else -> currentPage
+    // Kowalski momentum projection: project where finger momentum naturally settles
+    val projectedDx = totalDx + (velocityX * 0.18f)
+    val pageDelta = -(projectedDx / widthPx).roundToInt()
+    val rawTarget = if (pageDelta != 0) {
+        startPage + pageDelta
+    } else if (abs(totalDx) > widthPx * HERO_SWIPE_THRESHOLD_FRACTION || abs(velocityX) > HERO_SWIPE_VELOCITY_THRESHOLD) {
+        if (totalDx > 0f || velocityX > 0f) startPage - 1 else startPage + 1
+    } else {
+        startPage
     }
+    return rawTarget.coerceIn(0, pageCount - 1)
 }
 
 /**

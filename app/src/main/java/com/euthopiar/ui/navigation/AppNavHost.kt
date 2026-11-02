@@ -24,16 +24,22 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.NavController
 import androidx.navigation.NavHostController
+import androidx.navigation.NavOptionsBuilder
 import androidx.navigation.NavType
 import androidx.navigation.compose.*
 import androidx.navigation.navArgument
+import androidx.lifecycle.Lifecycle
+import android.os.SystemClock
 import com.euthopiar.core.model.MediaItem
 import com.euthopiar.core.registry.PluginRegistry
 import com.euthopiar.ui.details.MediaDetailsScreen
 import com.euthopiar.ui.home.HomeScreen
 import com.euthopiar.ui.player.PlayerScreen
 import com.euthopiar.ui.search.SearchScreen
+import com.euthopiar.ui.walkthrough.SpotlightWalkthroughOverlay
+import com.euthopiar.ui.walkthrough.WalkthroughCoordinator
 import com.euthopiar.ui.components.AppSnackbarController
 import com.euthopiar.ui.components.AppSnackbarHost
 import com.euthopiar.ui.components.AppSnackbarHostState
@@ -50,6 +56,36 @@ import dev.chrisbanes.haze.rememberHazeState
 import dev.chrisbanes.haze.hazeSource
 
 val LocalNavbarVisible = compositionLocalOf { mutableStateOf(true) }
+
+private var lastNavigationEventTime = -100000L
+private const val NAVIGATION_DEBOUNCE_MS = 500L
+
+/**
+ * Safely navigates to a target route, preventing duplicate backstack entries and multi-click spam.
+ * 1. Checks if the current screen lifecycle is RESUMED (if it is transitioning away or paused, navigation is blocked).
+ * 2. Applies a 500ms time-window debounce across the application.
+ * 3. Enforces launchSingleTop = true so identical destinations cannot be pushed on top of each other.
+ */
+internal fun NavController.navigateSafely(
+    route: String,
+    builder: (NavOptionsBuilder.() -> Unit)? = null
+) {
+    val currentEntry = currentBackStackEntry
+    if (currentEntry != null && currentEntry.lifecycle.currentState != Lifecycle.State.RESUMED) {
+        return
+    }
+
+    val now = SystemClock.elapsedRealtime()
+    if (now - lastNavigationEventTime < NAVIGATION_DEBOUNCE_MS) {
+        return
+    }
+    lastNavigationEventTime = now
+
+    navigate(route) {
+        launchSingleTop = true
+        builder?.invoke(this)
+    }
+}
 
 /**
  * Computes directional scroll delta handling item boundary transitions and heterogeneous item sizes.
@@ -306,6 +342,43 @@ fun AppNavHost(
         val showBottomNav = windowDimensions.isPhone && !isFullscreen
         val showNavRail = !windowDimensions.isPhone && !isFullscreen
 
+        val currentAppVersion = remember(context) {
+            com.euthopiar.data.update.AppUpdateManager.getInstance(context).getCurrentVersionName()
+        }
+        val lastSavedVersion by preferencesRepository.lastAppVersion.collectAsState(initial = null)
+        val walkthroughCompletedVersion by preferencesRepository.walkthroughCompletedVersion.collectAsState(initial = null)
+
+        DisposableEffect(navController) {
+            WalkthroughCoordinator.instance.navigationHandler = { route ->
+                if (route == "home" || route == NavTab.HOME.route) {
+                    navController.popBackStack(NavTab.HOME.route, inclusive = false)
+                } else {
+                    navController.navigateSafely(route)
+                }
+            }
+            onDispose {
+                WalkthroughCoordinator.instance.navigationHandler = null
+            }
+        }
+
+        LaunchedEffect(firstRunCompleted, lastSavedVersion, walkthroughCompletedVersion) {
+            if (firstRunCompleted != true) return@LaunchedEffect
+            val lastVer = lastSavedVersion ?: return@LaunchedEffect
+            val completedVer = walkthroughCompletedVersion ?: return@LaunchedEffect
+
+            if (completedVer == currentAppVersion) return@LaunchedEffect
+
+            val coordinator = WalkthroughCoordinator.instance
+            if (!coordinator.isActive) {
+                val isFreshInstall = lastVer.isBlank()
+                val isAppUpdate = lastVer.isNotBlank() && lastVer != currentAppVersion
+
+                if (isFreshInstall || isAppUpdate) {
+                    coordinator.start(isFreshInstall = isFreshInstall)
+                }
+            }
+        }
+
         Scaffold(
             modifier = Modifier
                 .fillMaxSize()
@@ -367,13 +440,14 @@ fun AppNavHost(
                         .fillMaxSize()
                         .hazeSource(state = navbarHazeState),
                     onMediaClick = { item: MediaItem ->
-                        navController.navigate(
+                        navController.navigateSafely(
                             buildDetailsRoute(
                                 mediaId = item.id,
                                 provider = item.provider,
                                 type = item.type.name,
                                 title = item.title,
-                                posterUrl = item.posterUrl ?: item.backdropUrl
+                                posterUrl = item.posterUrl ?: item.backdropUrl,
+                                logoUrl = item.logoUrl
                             )
                         )
                     },
@@ -383,7 +457,7 @@ fun AppNavHost(
                         val epData = item.episodeData ?: if (isTv) "${item.mediaId}:${item.seasonNumber ?: 1}:${item.episodeNumber ?: 1}" else item.mediaId
                         val season = if (isTv) (item.seasonNumber ?: 1) else 0
                         val episode = if (isTv) (item.episodeNumber ?: 1) else 0
-                        navController.navigate(
+                        navController.navigateSafely(
                             buildPlayerRoute(
                                 mediaId = item.mediaId,
                                 provider = item.provider,
@@ -409,7 +483,7 @@ fun AppNavHost(
                         val season = if (isTv) (history?.seasonNumber ?: 1) else 0
                         val episode = if (isTv) (history?.episodeNumber ?: 1) else 0
                         val title = history?.title?.ifBlank { item.title } ?: item.title
-                        navController.navigate(
+                        navController.navigateSafely(
                             buildPlayerRoute(
                                 mediaId = item.id,
                                 provider = history?.provider ?: item.provider,
@@ -423,7 +497,7 @@ fun AppNavHost(
                         )
                     },
                     onNavigateToPluginManager = {
-                        navController.navigate("plugin_manager")
+                        navController.navigateSafely("settings/plugins")
                     }
                 )
             }
@@ -434,13 +508,14 @@ fun AppNavHost(
                         .fillMaxSize()
                         .hazeSource(state = navbarHazeState),
                     onMediaClick = { item: MediaItem ->
-                        navController.navigate(
+                        navController.navigateSafely(
                             buildDetailsRoute(
                                 mediaId = item.id,
                                 provider = item.provider,
                                 type = item.type.name,
                                 title = item.title,
-                                posterUrl = item.posterUrl ?: item.backdropUrl
+                                posterUrl = item.posterUrl ?: item.backdropUrl,
+                                logoUrl = item.logoUrl
                             )
                         )
                     },
@@ -449,7 +524,7 @@ fun AppNavHost(
                             (item.type == com.euthopiar.core.model.MediaType.TV_SERIES || item.type == com.euthopiar.core.model.MediaType.ANIME)
                         val typeStr = item.type.name
                         val epData = if (isTv) "${item.id}:1:1" else item.id
-                        navController.navigate(
+                        navController.navigateSafely(
                             buildPlayerRoute(
                                 mediaId = item.id,
                                 provider = item.provider,
@@ -463,20 +538,21 @@ fun AppNavHost(
                         )
                     },
                     onNavigateToPluginManager = {
-                        navController.navigate("plugin_manager")
+                        navController.navigateSafely("settings/plugins")
                     }
                 )
             }
 
             composable(
-                route = "details/{mediaId}?provider={provider}&type={type}&depth={depth}&title={title}&posterUrl={posterUrl}",
+                route = "details/{mediaId}?provider={provider}&type={type}&depth={depth}&title={title}&posterUrl={posterUrl}&logoUrl={logoUrl}",
                 arguments = listOf(
                     navArgument("mediaId") { type = NavType.StringType },
                     navArgument("provider") { type = NavType.StringType; nullable = true; defaultValue = null },
                     navArgument("type") { type = NavType.StringType; nullable = true; defaultValue = null },
                     navArgument("depth") { type = NavType.IntType; defaultValue = 1 },
                     navArgument("title") { type = NavType.StringType; nullable = true; defaultValue = null },
-                    navArgument("posterUrl") { type = NavType.StringType; nullable = true; defaultValue = null }
+                    navArgument("posterUrl") { type = NavType.StringType; nullable = true; defaultValue = null },
+                    navArgument("logoUrl") { type = NavType.StringType; nullable = true; defaultValue = null }
                 ),
                 enterTransition = {
                     if (reduceMotion) {
@@ -510,16 +586,23 @@ fun AppNavHost(
                 val initialTitle = rawTitle?.takeIf { it.isNotBlank() }
                 val rawPosterUrl = backStackEntry.arguments?.getString("posterUrl")
                 val initialPosterUrl = rawPosterUrl?.takeIf { it.isNotBlank() }
+                val rawLogoUrl = backStackEntry.arguments?.getString("logoUrl")
+                val initialLogoUrl = rawLogoUrl?.takeIf { it.isNotBlank() }
                 MediaDetailsScreen(
                     mediaId = mediaId,
                     provider = provider,
                     type = type,
                     initialTitle = initialTitle,
                     initialPosterUrl = initialPosterUrl,
+                    initialLogoUrl = initialLogoUrl,
                     depth = depth,
                     onBack = {
+                        val currentEntry = navController.currentBackStackEntry
+                        if (currentEntry != null && currentEntry.lifecycle.currentState != Lifecycle.State.RESUMED) {
+                            return@MediaDetailsScreen
+                        }
                         if (!navController.popBackStack()) {
-                            navController.navigate("home") {
+                            navController.navigateSafely("home") {
                                 popUpTo(navController.graph.findStartDestination().id) { saveState = true }
                                 launchSingleTop = true
                                 restoreState = true
@@ -531,14 +614,15 @@ fun AppNavHost(
                     },
                     onNavigateToMedia = { rec ->
                         val p = rec.provider ?: provider ?: "tmdb"
-                        navController.navigate(
+                        navController.navigateSafely(
                             buildDetailsRoute(
                                 mediaId = rec.id,
                                 provider = p,
                                 type = rec.type.name,
                                 depth = depth + 1,
                                 title = rec.title,
-                                posterUrl = rec.posterUrl ?: rec.backdropUrl
+                                posterUrl = rec.posterUrl ?: rec.backdropUrl,
+                                logoUrl = rec.logoUrl
                             )
                         )
                     },
@@ -557,7 +641,7 @@ fun AppNavHost(
                             rawEpData ?: detail.id
                         }
                         val epTitle = if (isTv) (episode?.title ?: "") else ""
-                        navController.navigate(
+                        navController.navigateSafely(
                             buildPlayerRoute(
                                 mediaId = detail.id,
                                 provider = prov,
@@ -571,7 +655,7 @@ fun AppNavHost(
                         )
                     },
                     onNavigateToPluginManager = {
-                        navController.navigate("plugin_manager")
+                        navController.navigateSafely("settings/plugins")
                     }
                 )
             }
@@ -619,14 +703,18 @@ fun AppNavHost(
                     initialSeason = season,
                     initialEpisode = episode,
                     onBack = {
+                        val currentEntry = navController.currentBackStackEntry
+                        if (currentEntry != null && currentEntry.lifecycle.currentState != Lifecycle.State.RESUMED) {
+                            return@PlayerScreen
+                        }
                         val popped = navController.popBackStack()
                         if (!popped) {
-                            navController.navigate(NavTab.HOME.route) {
+                            navController.navigateSafely(NavTab.HOME.route) {
                                 popUpTo(0) { inclusive = true }
                             }
                         }
                     },
-                    onNavigateToPluginManager = { navController.navigate("plugin_manager") }
+                    onNavigateToPluginManager = { navController.navigateSafely("settings/plugins") }
                 )
             }
 
@@ -637,7 +725,7 @@ fun AppNavHost(
                         .hazeSource(state = navbarHazeState),
                     onMediaClick = { mediaId, type, prov ->
                         val providerName = prov ?: registry.activePlugin.value.name
-                        navController.navigate(
+                        navController.navigateSafely(
                             buildDetailsRoute(
                                 mediaId = mediaId,
                                 provider = providerName,
@@ -655,7 +743,7 @@ fun AppNavHost(
                         }
                         val s = if (isTv) (season ?: 1) else 0
                         val ep = if (isTv) (episode ?: 1) else 0
-                        navController.navigate(
+                        navController.navigateSafely(
                             buildPlayerRoute(
                                 mediaId = mediaId,
                                 provider = providerName,
@@ -674,7 +762,7 @@ fun AppNavHost(
                         val prov = downloadItem.provider ?: "Offline"
                         val s = if (downloadItem.isTvSeries) (downloadItem.seasonNumber ?: 1) else 0
                         val ep = if (downloadItem.isTvSeries) (downloadItem.episodeNumber ?: 1) else 0
-                        navController.navigate(
+                        navController.navigateSafely(
                             buildPlayerRoute(
                                 mediaId = downloadItem.mediaId,
                                 provider = prov,
@@ -688,7 +776,7 @@ fun AppNavHost(
                         )
                     },
                     onExploreClick = {
-                        navController.navigate(NavTab.HOME.route) {
+                        navController.navigateSafely(NavTab.HOME.route) {
                             popUpTo(navController.graph.startDestinationId) { saveState = true }
                             launchSingleTop = true
                             restoreState = true
@@ -717,7 +805,7 @@ fun AppNavHost(
                         .hazeSource(state = navbarHazeState),
                     onMediaClick = { mediaId, type, prov ->
                         val providerName = prov ?: registry.activePlugin.value.name
-                        navController.navigate(
+                        navController.navigateSafely(
                             buildDetailsRoute(
                                 mediaId = mediaId,
                                 provider = providerName,
@@ -735,7 +823,7 @@ fun AppNavHost(
                         }
                         val s = if (isTv) (season ?: 1) else 0
                         val ep = if (isTv) (episode ?: 1) else 0
-                        navController.navigate(
+                        navController.navigateSafely(
                             buildPlayerRoute(
                                 mediaId = mediaId,
                                 provider = providerName,
@@ -754,7 +842,7 @@ fun AppNavHost(
                         val prov = downloadItem.provider ?: "Offline"
                         val s = if (downloadItem.isTvSeries) (downloadItem.seasonNumber ?: 1) else 0
                         val ep = if (downloadItem.isTvSeries) (downloadItem.episodeNumber ?: 1) else 0
-                        navController.navigate(
+                        navController.navigateSafely(
                             buildPlayerRoute(
                                 mediaId = downloadItem.mediaId,
                                 provider = prov,
@@ -768,7 +856,7 @@ fun AppNavHost(
                         )
                     },
                     onExploreClick = {
-                        navController.navigate(NavTab.HOME.route) {
+                        navController.navigateSafely(NavTab.HOME.route) {
                             popUpTo(navController.graph.startDestinationId) { saveState = true }
                             launchSingleTop = true
                             restoreState = true
@@ -792,7 +880,7 @@ fun AppNavHost(
                     modifier = Modifier
                         .fillMaxSize()
                         .hazeSource(state = navbarHazeState),
-                    onNavigateToPage = { route -> navController.navigate(route) }
+                    onNavigateToPage = { route -> navController.navigateSafely(route) }
                 )
             }
 
@@ -801,7 +889,7 @@ fun AppNavHost(
                     modifier = Modifier
                         .fillMaxSize()
                         .hazeSource(state = navbarHazeState),
-                    onNavigateToPage = { route -> navController.navigate(route) }
+                    onNavigateToPage = { route -> navController.navigateSafely(route) }
                 )
             }
 
@@ -890,7 +978,7 @@ fun AppNavHost(
             ) {
                 com.euthopiar.ui.settings.pages.PluginsSettingsPage(
                     onBack = { navController.popBackStack() },
-                    onNavigateToRepo = { repoRoute -> navController.navigate(repoRoute) }
+                    onNavigateToRepo = { repoRoute -> navController.navigateSafely(repoRoute) }
                 )
             }
 
@@ -968,7 +1056,15 @@ fun AppNavHost(
                 }
             ) {
                 com.euthopiar.ui.settings.pages.UpdateSettingsPage(
-                    onBack = { navController.popBackStack() }
+                    onBack = { navController.popBackStack() },
+                    onNavigateHome = {
+                        navController.navigate("home") {
+                            popUpTo(navController.graph.startDestinationId) {
+                                inclusive = false
+                            }
+                            launchSingleTop = true
+                        }
+                    }
                 )
             }
 
@@ -991,7 +1087,7 @@ fun AppNavHost(
             ) {
                 com.euthopiar.ui.settings.pages.AboutSettingsPage(
                     onBack = { navController.popBackStack() },
-                    onNavigateToUpdates = { navController.navigate("settings/updates") }
+                    onNavigateToUpdates = { navController.navigateSafely("settings/updates") }
                 )
             }
 
@@ -1032,12 +1128,16 @@ fun AppNavHost(
                     currentRoute = currentRoute,
                     style = navbarStyle,
                     onTabSelected = { tab ->
-                        navController.navigate(tab.route) {
-                            popUpTo(navController.graph.startDestinationId) {
-                                saveState = true
+                        if (tab == NavTab.HOME) {
+                            navController.popBackStack(NavTab.HOME.route, inclusive = false)
+                        } else {
+                            navController.navigate(tab.route) {
+                                popUpTo(navController.graph.startDestinationId) {
+                                    saveState = true
+                                }
+                                launchSingleTop = true
+                                restoreState = true
                             }
-                            launchSingleTop = true
-                            restoreState = true
                         }
                     },
                     onTabReselected = { tab ->
@@ -1070,6 +1170,11 @@ fun AppNavHost(
             AppSnackbarHost(
                 hostState = snackbarHostState,
                 bottomPadding = snackbarBottomPadding
+            )
+
+            SpotlightWalkthroughOverlay(
+                coordinator = WalkthroughCoordinator.instance,
+                hazeState = navbarHazeState
             )
         }
     }
@@ -1133,7 +1238,8 @@ internal fun buildDetailsRoute(
     type: String? = null,
     depth: Int = 1,
     title: String? = null,
-    posterUrl: String? = null
+    posterUrl: String? = null,
+    logoUrl: String? = null
 ): String {
     val safeId = mediaId.trim().ifBlank { "unknown" }
     val encodedId = safeDoubleEncode(safeId)
@@ -1142,7 +1248,8 @@ internal fun buildDetailsRoute(
     val typeStr = type ?: "MOVIE"
     val encodedTitle = title?.let { rfc3986Encode(it) } ?: ""
     val posterQuery = if (!posterUrl.isNullOrBlank()) "&posterUrl=${rfc3986Encode(posterUrl)}" else ""
-    return "details/$encodedId?provider=$encodedProv&type=$typeStr&depth=$depth&title=$encodedTitle$posterQuery"
+    val logoQuery = if (!logoUrl.isNullOrBlank()) "&logoUrl=${rfc3986Encode(logoUrl)}" else ""
+    return "details/$encodedId?provider=$encodedProv&type=$typeStr&depth=$depth&title=$encodedTitle$posterQuery$logoQuery"
 }
 
 internal fun buildPlayerRoute(

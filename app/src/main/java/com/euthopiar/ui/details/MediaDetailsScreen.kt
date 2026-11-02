@@ -18,6 +18,12 @@ import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.EaseInOutCubic
+import androidx.compose.ui.text.style.TextAlign
 import kotlinx.coroutines.delay
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -218,6 +224,7 @@ fun MediaDetailsScreen(
     type: String? = null,
     initialTitle: String? = null,
     initialPosterUrl: String? = null,
+    initialLogoUrl: String? = null,
     depth: Int = 1,
     onBack: () -> Unit,
     onCloseToRoot: (() -> Unit)? = null,
@@ -239,14 +246,23 @@ fun MediaDetailsScreen(
     }
 
     val hasAnyStreamProviders = remember(installedPlugins, addonState.addons) {
-        installedPlugins.any { it.isEnabled } || addonState.addons.any { it.enabled }
+        installedPlugins.any { it.isEnabled } || addonState.addons.any { addon ->
+            addon.enabled &&
+                addon.manifestUrl != com.euthopiar.core.addons.AddonRepository.DEFAULT_CATALOG_MANIFEST_URL &&
+                addon.manifestUrl != com.euthopiar.core.addons.AddonRepository.DEFAULT_OPENSUBTITLES_MANIFEST_URL
+        }
     }
 
     var isNavigatingAway by remember { mutableStateOf(false) }
+    val lastNavTime = remember { longArrayOf(0L) }
     val safeNavigate: (() -> Unit) -> Unit = remember {
         { action ->
-            isNavigatingAway = true
-            action()
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (now - lastNavTime[0] >= 500L) {
+                lastNavTime[0] = now
+                isNavigatingAway = true
+                action()
+            }
         }
     }
 
@@ -270,13 +286,14 @@ fun MediaDetailsScreen(
         }
     }
 
-    LaunchedEffect(mediaId, provider, parsedType, initialTitle, initialPosterUrl) {
+    LaunchedEffect(mediaId, provider, parsedType, initialTitle, initialPosterUrl, initialLogoUrl) {
         viewModel.loadDetails(
             mediaId = mediaId,
             provider = provider,
             type = parsedType,
             fallbackTitle = initialTitle,
-            fallbackPosterUrl = initialPosterUrl
+            fallbackPosterUrl = initialPosterUrl,
+            fallbackLogoUrl = initialLogoUrl
         )
     }
 
@@ -334,22 +351,26 @@ fun MediaDetailsScreen(
         ) {
             Crossfade(
                 targetState = uiState,
-                animationSpec = tween(durationMillis = Motion.DurationEmphasized),
+                animationSpec = tween(
+                    durationMillis = Motion.DurationEmphasized,
+                    easing = FastOutSlowInEasing
+                ),
                 label = "MediaDetailsTransition"
             ) { state ->
             when (state) {
                 is MediaDetailsUiState.Loading -> {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(38.dp),
-                            color = Color.White,
-                            trackColor = Color.White.copy(alpha = 0.2f),
-                            strokeWidth = 3.dp
+                    val resolvedLogo = state.logoUrl
+                        ?: initialLogoUrl
+                        ?: com.euthopiar.core.util.TmdbBridge.getCachedLogo(
+                            mediaId,
+                            parsedType == MediaType.TV_SERIES || parsedType == MediaType.ANIME
                         )
-                    }
+                    MediaDetailsLoadingView(
+                        title = state.title ?: initialTitle,
+                        posterUrl = state.posterUrl ?: initialPosterUrl,
+                        logoUrl = resolvedLogo,
+                        screenBg = screenBg
+                    )
                 }
 
                 is MediaDetailsUiState.Error -> {
@@ -467,6 +488,7 @@ fun MediaDetailsScreen(
                                         watchlistStatus = watchlistStatus,
                                         isInPlaylist = isInPlaylist,
                                         downloads = downloads,
+                                        hasStreamEngine = hasAnyStreamProviders,
                                         onPlay = { handlePlayRequest(detail, targetEpisodeForPlay) },
                                         onWatchlist = { showWatchlistSheet = true },
                                         onDownload = {
@@ -798,6 +820,7 @@ fun MediaDetailsScreen(
                                             watchlistStatus = watchlistStatus,
                                             isInPlaylist = isInPlaylist,
                                             downloads = downloads,
+                                            hasStreamEngine = hasAnyStreamProviders,
                                             onPlay = { handlePlayRequest(detail, targetEpisodeForPlay) },
                                             onWatchlist = { showWatchlistSheet = true },
                                             onDownload = {
@@ -1176,17 +1199,13 @@ fun MediaDetailsScreen(
         val successDetail = (uiState as? MediaDetailsUiState.Success)?.detail
 
         if (showNoPluginsDialog) {
-            VelvetAlertDialog(
-                onDismissRequest = { showNoPluginsDialog = false },
-                title = "No Stream Providers Installed",
-                message = "Euthopiar is a modular player and does not provide or host media streams. Please install a provider plugin or Stremio addon in the manager to stream content.",
-                confirmText = "Open Manager",
-                dismissText = "Cancel",
-                hazeState = detailsHazeState,
-                onConfirm = {
+            NoStreamingEngineDialog(
+                onDismiss = { showNoPluginsDialog = false },
+                onNavigateToPlugins = {
                     showNoPluginsDialog = false
                     onNavigateToPluginManager?.invoke()
-                }
+                },
+                hazeState = detailsHazeState
             )
         }
 
@@ -1634,6 +1653,7 @@ fun FrostedMuteButton(
             .pressable(
                 role = Role.Button,
                 onClickLabel = if (isMuted) "Unmute trailer" else "Mute trailer",
+                debounceIntervalMs = 0L,
                 onClick = onToggle
             )
             .tvFocusable(shape = ShapeFull),
@@ -1896,6 +1916,123 @@ private fun DetailsBackdropHero(
 }
 
 /**
+ * Cinematic loading view with content logo in the dead center of the screen,
+ * calm breathing animation, and atmospheric backdrop without any back button.
+ */
+@Composable
+private fun MediaDetailsLoadingView(
+    title: String?,
+    posterUrl: String?,
+    logoUrl: String?,
+    screenBg: Color,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val cleanTitle = remember(title) { title?.let { sanitizeTitle(it) }.orEmpty() }
+
+    val infiniteTransition = rememberInfiniteTransition(label = "LoadingBreathe")
+    val breatheAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.82f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1400, easing = EaseInOutCubic),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "BreatheAlpha"
+    )
+    val breatheScale by infiniteTransition.animateFloat(
+        initialValue = 0.985f,
+        targetValue = 1.015f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1400, easing = EaseInOutCubic),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "BreatheScale"
+    )
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(screenBg),
+        contentAlignment = Alignment.Center
+    ) {
+        // 1. Atmospheric Ambient Backdrop (Dimmed & Scrimmed)
+        if (!posterUrl.isNullOrBlank()) {
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(posterUrl)
+                    .crossfade(250)
+                    .build(),
+                contentDescription = null,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer { alpha = 0.16f },
+                contentScale = ContentScale.Crop
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                screenBg.copy(alpha = 0.82f),
+                                screenBg.copy(alpha = 0.94f),
+                                screenBg
+                            )
+                        )
+                    )
+            )
+        }
+
+        // 2. Optical Center Breathing Content Custom Logo (NO back button on loading screen)
+        var isLogoFailed by remember(logoUrl) { mutableStateOf(false) }
+
+        Box(
+            modifier = Modifier
+                .padding(horizontal = 32.dp)
+                .graphicsLayer {
+                    scaleX = breatheScale
+                    scaleY = breatheScale
+                    alpha = breatheAlpha
+                },
+            contentAlignment = Alignment.Center
+        ) {
+            // Keep empty while logo resolves (no text flicker). Only render when logo is present.
+            if (!logoUrl.isNullOrBlank() && !isLogoFailed) {
+                // Soft radial ambient backlight (Peter Bakaus color science)
+                Box(
+                    modifier = Modifier
+                        .size(width = 300.dp, height = 130.dp)
+                        .background(
+                            Brush.radialGradient(
+                                colors = listOf(
+                                    Color.White.copy(alpha = 0.04f),
+                                    Color.Transparent
+                                )
+                            )
+                        )
+                )
+
+                AsyncImage(
+                    model = ImageRequest.Builder(context)
+                        .data(logoUrl)
+                        .crossfade(260)
+                        .transformations(TrimTransparentTransformation())
+                        .build(),
+                    contentDescription = cleanTitle,
+                    onError = { isLogoFailed = true },
+                    modifier = Modifier
+                        .heightIn(min = 40.dp, max = 76.dp)
+                        .widthIn(max = 260.dp),
+                    contentScale = ContentScale.Fit,
+                    alignment = Alignment.Center
+                )
+            }
+        }
+    }
+}
+
+/**
  * Title Header: Clear PNG logo or styled heading title (medium weight, no bold).
  */
 @Composable
@@ -2071,6 +2208,7 @@ private fun DetailsActionBlock(
     watchlistStatus: String? = null,
     isInPlaylist: Boolean = false,
     downloads: List<DownloadItem> = emptyList(),
+    hasStreamEngine: Boolean = true,
     onPlay: () -> Unit,
     onWatchlist: () -> Unit,
     onDownload: () -> Unit,
@@ -2220,6 +2358,7 @@ private fun DetailsActionBlock(
             text = primaryLabel,
             icon = Icons.Filled.PlayArrow,
             onClick = onPlay,
+            isFaded = !hasStreamEngine,
             modifier = Modifier
                 .fillMaxWidth()
                 .focusRequester(playFocusRequester)

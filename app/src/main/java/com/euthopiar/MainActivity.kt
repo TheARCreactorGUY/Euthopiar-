@@ -39,7 +39,7 @@ import androidx.compose.material3.MaterialTheme
 import com.euthopiar.core.registry.PluginRegistry
 import com.euthopiar.ui.navigation.AppNavHost
 import com.euthopiar.ui.player.PipController
-import com.euthopiar.ui.splash.CinematicSplashScreen
+import com.euthopiar.ui.splash.AppIgnitionSequence
 import com.euthopiar.ui.theme.EuthopiarTheme
 
 class MainActivity : ComponentActivity() {
@@ -128,6 +128,9 @@ class MainActivity : ComponentActivity() {
         }
 
         val isWarmStart = savedInstanceState != null || hasShownSplashInProcess
+        if (!isWarmStart) {
+            com.euthopiar.ui.splash.AppLaunchCoordinator.reset()
+        }
         setContent {
             EuthopiarTheme {
                 var showSplash by rememberSaveable { mutableStateOf(!isWarmStart) }
@@ -140,8 +143,8 @@ class MainActivity : ComponentActivity() {
                     AppNavHost(registry = PluginRegistry.Default)
 
                     if (showSplash) {
-                        CinematicSplashScreen(
-                            onAnimationFinished = {
+                        AppIgnitionSequence(
+                            onIgnitionFinished = {
                                 hasShownSplashInProcess = true
                                 showSplash = false
                             }

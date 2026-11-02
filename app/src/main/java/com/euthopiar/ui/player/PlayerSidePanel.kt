@@ -818,15 +818,30 @@ private fun QualityTabContent(
             Text(
                 text = "RESOLUTION",
                 style = PlayerTokens.SectionLabel,
-                modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 8.dp)
+                modifier = Modifier.padding(start = 20.dp, top = 20.dp, bottom = 10.dp)
             )
         }
         itemsIndexed(qualities) { idx, q ->
             val isSelected = q.id == selectedQuality.id
+            val (iconRes, cleanTitle) = resolveQualityFullTitle(q)
+            val metaText = when {
+                q.id == "auto" || q.isAuto -> "Dynamically adapts to bandwidth"
+                q.bitrate != null && q.bitrate > 0 -> "${q.bitrate / 1000} kbps"
+                q.height != null -> "${q.height}p video stream"
+                else -> null
+            }
             DrawerSelectionRow(
-                title = q.label,
-                meta = if (q.id == "auto" || q.isAuto) "Adaptive" else null,
+                title = cleanTitle,
+                meta = metaText,
                 isSelected = isSelected,
+                leadingIcon = {
+                    Icon(
+                        painter = painterResource(id = iconRes),
+                        contentDescription = null,
+                        tint = if (isSelected) Color.White else Color.White.copy(alpha = 0.6f),
+                        modifier = Modifier.size(20.dp)
+                    )
+                },
                 onClick = { onSelectQuality(q) }
             )
         }
@@ -1004,6 +1019,60 @@ private fun PlayerSettingsPanelContent(
                 style = PlayerTokens.SectionLabel,
                 modifier = Modifier.padding(start = 20.dp, top = 20.dp, bottom = 10.dp)
             )
+        }
+
+        // Aspect Ratio Mode Segmented Row
+        item {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 8.dp)
+            ) {
+                Text(
+                    text = "Aspect Ratio",
+                    style = PlayerTokens.RowTitle.copy(fontSize = 15.sp)
+                )
+                Spacer(modifier = Modifier.height(3.dp))
+                Text(
+                    text = "Adjust video frame scaling and crop",
+                    style = PlayerTokens.RowMeta.copy(fontSize = 12.sp)
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(PlayerMotionMath.BUTTON_GAP_DP.dp)
+                ) {
+                    val modes = listOf(
+                        AspectRatioMode.FIT to "Fit",
+                        AspectRatioMode.ZOOM to "Fill",
+                        AspectRatioMode.FIXED_16_9 to "16:9",
+                        AspectRatioMode.STRETCH to "Stretch"
+                    )
+                    modes.forEach { (mode, label) ->
+                        val isSelected = aspectRatioMode == mode
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(40.dp)
+                                .clip(PlayerTokens.RadiusPill)
+                                .background(if (isSelected) Color.White else PlayerTokens.VideoOverlayGlassBase)
+                                .border(HairlineWidth, PlayerTokens.VideoOverlayGlassBorder, PlayerTokens.RadiusPill)
+                                .tvFocusable(shape = PlayerTokens.RadiusPill)
+                                .playerPressable(
+                                    isWhiteElement = isSelected,
+                                    onClick = { onSelectAspectRatio(mode) }
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = label,
+                                style = PlayerTokens.PillText,
+                                color = if (isSelected) PlayerTokens.LabelDark else Color.White
+                            )
+                        }
+                    }
+                }
+            }
         }
 
         // Seek Interval
@@ -1207,6 +1276,7 @@ private fun DrawerSelectionRow(
     title: String,
     meta: String?,
     isSelected: Boolean,
+    leadingIcon: (@Composable () -> Unit)? = null,
     onClick: () -> Unit
 ) {
     Column(
@@ -1226,6 +1296,11 @@ private fun DrawerSelectionRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
+            if (leadingIcon != null) {
+                leadingIcon()
+                Spacer(modifier = Modifier.width(14.dp))
+            }
+
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = title,

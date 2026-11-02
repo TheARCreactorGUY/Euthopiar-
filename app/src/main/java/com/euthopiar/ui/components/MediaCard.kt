@@ -82,7 +82,7 @@ fun MediaCard(
                 .aspectRatio(Dimens.posterAspectRatio)
                 .clip(ShapeS)
                 .background(SurfaceLow)
-                .border(0.5.dp, Color.White.copy(alpha = 0.08f), ShapeS)
+                .border(0.5.dp, Color.White.copy(alpha = 0.03f), ShapeS)
         ) {
             AppAsyncImage(
                 model = item.posterUrl ?: item.backdropUrl,

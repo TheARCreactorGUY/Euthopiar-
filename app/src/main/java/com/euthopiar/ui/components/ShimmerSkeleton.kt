@@ -215,10 +215,13 @@ fun HomeScreenSkeleton(
             (configuration.screenHeightDp * 0.60f).coerceIn(440f, 560f).dp
         }
 
+        val isAmoled = LocalAmoledMode.current
+        val skeletonBg = if (isAmoled) Color.Black else Background
+
         Column(
             modifier = modifier
                 .fillMaxSize()
-                .background(Background)
+                .background(skeletonBg)
                 .verticalScroll(rememberScrollState())
         ) {
         // 1. Cinematic Hero Carousel Skeleton

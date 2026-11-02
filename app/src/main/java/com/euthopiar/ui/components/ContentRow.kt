@@ -57,7 +57,7 @@ fun ContentRow(
         ) {
             itemsIndexed(
                 items = row.items,
-                key = { index, item -> "${item.id}_${item.provider ?: ""}_$index" },
+                key = { _, item -> "${item.id}_${item.provider ?: ""}" },
                 contentType = { _, _ -> "media_card" }
             ) { _, item ->
                 MediaCard(

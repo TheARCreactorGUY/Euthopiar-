@@ -49,6 +49,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
@@ -56,6 +58,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -444,12 +447,36 @@ fun SettingsRootScreen(
 
                     item(key = "row_plugins") {
                         StaggeredEnterRow(index = 4, isAnimated = hasAnimatedEnter, reduceMotion = reduceMotion) {
-                            SettingsHairlineRow(
-                                title = SettingsPage.Plugins.title,
-                                subtitle = SettingsPage.Plugins.subtitle,
-                                icon = SettingsPage.Plugins.icon,
-                                onClick = { onNavigateToPage(SettingsPage.Plugins.route) }
-                            )
+                            val rowDensity = LocalDensity.current
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp)
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .onGloballyPositioned { coordinates ->
+                                        val bounds = coordinates.boundsInRoot()
+                                        val radiusPx = with(rowDensity) { 16.dp.toPx() }
+                                        com.euthopiar.ui.walkthrough.WalkthroughCoordinator.instance.reportTarget(
+                                            step = com.euthopiar.ui.walkthrough.WalkthroughStep.STEP_2_PLUGINS_TILE,
+                                            bounds = bounds,
+                                            cornerRadiusPx = radiusPx,
+                                            isInteractive = false
+                                        )
+                                    }
+                            ) {
+                                SettingsHairlineRow(
+                                    title = SettingsPage.Plugins.title,
+                                    subtitle = SettingsPage.Plugins.subtitle,
+                                    icon = SettingsPage.Plugins.icon,
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 14.dp),
+                                    onClick = {
+                                        com.euthopiar.ui.walkthrough.WalkthroughCoordinator.instance.onTargetTapped(
+                                            com.euthopiar.ui.walkthrough.WalkthroughStep.STEP_2_PLUGINS_TILE
+                                        )
+                                        onNavigateToPage(SettingsPage.Plugins.route)
+                                    }
+                                )
+                            }
                         }
                         Spacer(modifier = Modifier.height(26.dp))
                     }

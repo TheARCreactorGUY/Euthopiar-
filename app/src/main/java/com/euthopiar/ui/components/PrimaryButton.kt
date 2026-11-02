@@ -1,6 +1,7 @@
 package com.euthopiar.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.defaultMinSize
@@ -42,12 +43,24 @@ fun PrimaryButton(
     icon: ImageVector? = null,
     isAccentRed: Boolean = false,
     enabled: Boolean = true,
+    isFaded: Boolean = false,
     iconSize: androidx.compose.ui.unit.Dp = 20.dp,
     fontSize: TextUnit = 14.sp,
     fontWeight: FontWeight = FontWeight.Bold,
 ) {
-    val backgroundColor = if (isAccentRed) Accent else TextPrimary
-    val contentColor = if (isAccentRed) TextPrimary else Background
+    val backgroundColor = when {
+        isFaded -> androidx.compose.ui.graphics.Color.White.copy(alpha = 0.38f)
+        isAccentRed -> Accent
+        else -> TextPrimary
+    }
+    val contentColor = when {
+        isFaded -> androidx.compose.ui.graphics.Color.White.copy(alpha = 0.85f)
+        isAccentRed -> TextPrimary
+        else -> Background
+    }
+    val borderModifier = if (isFaded) {
+        Modifier.border(0.5.dp, androidx.compose.ui.graphics.Color.White.copy(alpha = 0.18f), ShapeFull)
+    } else Modifier
 
     val interactionModifier = if (icon != null) {
         Modifier.playButtonSpringPress(enabled = enabled, onClickLabel = text, onClick = onClick)
@@ -62,6 +75,7 @@ fun PrimaryButton(
             .defaultMinSize(minWidth = 120.dp)
             .clip(ShapeFull)
             .background(backgroundColor)
+            .then(borderModifier)
             .tvFocusable(shape = ShapeFull)
             .padding(horizontal = Dimens.spacing24),
         verticalAlignment = Alignment.CenterVertically,

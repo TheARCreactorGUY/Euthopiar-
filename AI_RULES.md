@@ -51,26 +51,31 @@ C:\Euthopiar\
 
 ### System Ecosystem Context
 - **Daily Workshop:** `C:\Euthopiar` (where development and vibe-coding happen).
+- **Plugins Repo (Sole Source of Truth):** `C:\Euthopiar-Plugins` (linked to GitHub repo `https://github.com/TheARCreactorGUY/Plugins.git`).
 - **Open Source Mirror:** `C:\Euthopiar Open Source Release` (linked to GitHub repo `https://github.com/TheARCreactorGUY/Euthopiar-.git`).
 - **Safety Backups:** `C:\Euthopiar-System\Backups` (timestamped zip snapshots).
 - **Production Builds:** `C:\Euthopiar-System\Production-Releases` (signed/clean release APKs and AABs).
 - **Control Center App:** `C:\Euthopiar-System\Control-Center` (desktop visual manager).
+- **Cold Storage Archive:** `E:\Device backup\Euthopiar-ColdStorage\` (historical multi-gigabyte archives).
 
 ---
 
-## 🔒 2. CRITICAL PROTECTED FILES (STRICT DO NOT TOUCH LIST)
+## 🔒 2. CREDENTIALS ARCHITECTURE & PROTECTED BRIDGES
 
-The following files contain real, operational API keys and cryptographic bindings:
-1. 🛑 `core/src/main/java/com/euthopiar/core/util/TmdbBridge.kt`
-2. 🛑 `core/src/main/java/com/euthopiar/core/js/host/HostFunctions.kt`
-3. 🛑 `core/src/main/java/com/euthopiar/core/subtitle/external/SubDlClient.kt`
-4. 🛑 `core/src/main/java/com/euthopiar/core/sync/simkl/SimklClient.kt`
-5. 🛑 `core/src/main/java/com/euthopiar/core/sync/trakt/TraktClient.kt`
+All production API credentials are now strictly abstracted into `local.properties` (gitignored across all repos) and dynamically loaded at compile time into `BuildConfig.*`. Never re-introduce hardcoded plaintext keys into source files.
+
+The following files act as protected cryptographic runtimes and credential bridges:
+1. 🛑 `core/src/main/java/com/euthopiar/core/util/TmdbBridge.kt` (consumes `BuildConfig.TMDB_API_KEY`)
+2. 🛑 `core/src/main/java/com/euthopiar/core/js/host/HostFunctions.kt` (QuickJS bridge runtime, exposes `__get_freekz_key_token()`)
+3. 🛑 `core/src/main/java/com/euthopiar/core/subtitle/external/SubDlClient.kt` (consumes `BuildConfig.SUBDL_API_KEY`)
+4. 🛑 `core/src/main/java/com/euthopiar/core/sync/simkl/SimklClient.kt` (Simkl Auth V2 + PKCE flow; redirect URI: `Euthopiar://auth/simkl`)
+5. 🛑 `core/src/main/java/com/euthopiar/core/sync/trakt/TraktClient.kt` (consumes `BuildConfig.TRAKT_CLIENT_ID` / `SECRET`)
 
 ### Rules for Protected Files:
-- **NEVER** edit, refactor, replace, or "sanitize" the API keys in these files without explicit, written instruction from the user.
-- **NEVER** delete or mock these files.
-- The user has planned a future migration to Cloudflare Workers for key abstraction. Until that specific session, keep all keys intact and functional.
+- **NEVER** re-hardcode plaintext keys or tokens into these files.
+- **NEVER** edit, delete, or mock the `BuildConfig` bridge mappings without explicit user instruction.
+- **Reference Code Hygiene:** `Refrence Nuviou/` is for local developer reading only and must remain untracked and gitignored.
+- **Operational Guide:** For full step-by-step instructions on Mode A (Emulator), Mode B (Local Wi-Fi), and the 4 everyday developer situations, see `docs/PIPELINE_WORKFLOW_GUIDE.md`.
 
 ---
 
