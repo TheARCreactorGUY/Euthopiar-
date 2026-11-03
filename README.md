@@ -10,7 +10,7 @@
 
 <br/>
 
-[![Latest Release](https://img.shields.io/badge/Release-v1.0.5--Stable-E50914?style=for-the-badge&logo=github&logoColor=white)](https://github.com/TheARCreactorGUY/Euthopiar-/releases/latest)
+[![Latest Release](https://img.shields.io/badge/Release-v1.0.7--Stable-E50914?style=for-the-badge&logo=github&logoColor=white)](https://github.com/TheARCreactorGUY/Euthopiar-/releases/latest)
 [![Platform](https://img.shields.io/badge/Android-Available-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/TheARCreactorGUY/Euthopiar-/releases/latest)
 [![Android TV](https://img.shields.io/badge/Android%20TV-Coming%20Soon-F5A623?style=for-the-badge&logo=android&logoColor=white)](#-roadmap)
 [![Kotlin](https://img.shields.io/badge/Kotlin-100%25-7F52FF?style=for-the-badge&logo=kotlin&logoColor=white)](https://kotlinlang.org/)
@@ -105,6 +105,9 @@ Bookmark favourites and organise them into your own playlists, your way.
 ### ▶️ Continue Watching
 Pick up **exactly** where you left off, on any title.
 
+### 🧭 Guided Setup Walkthrough
+Interactive spotlight tour guiding you through Profile, Plugins, and Repository setup in 3 quick steps for zero-friction streaming.
+
 ### 🔌 Nuvio Plugins Compatible
 Built-in support for Nuvio plugins. Paste one link and unlock more sources.
 
@@ -157,7 +160,7 @@ flowchart LR
 <td align="center" width="20%"><h2>2️⃣</h2><sub>Download the <b>.apk</b></sub></td>
 <td align="center" width="20%"><h2>3️⃣</h2><sub>Open it & allow <i>“Install from unknown sources”</i></sub></td>
 <td align="center" width="20%"><h2>4️⃣</h2><sub>Launch Euthopiar 🍿</sub></td>
-<td align="center" width="20%"><h2>5️⃣</h2><sub><i>(Optional)</i> add the Nuvio manifest</sub></td>
+<td align="center" width="20%"><h2>5️⃣</h2><sub>Follow the 3-step setup walkthrough to add plugins 🔌</sub></td>
 </tr>
 </table>
 
@@ -210,6 +213,8 @@ cd Euthopiar-
 - [x] 🔖 Watchlist & playlists
 - [x] ▶️ Continue Watching
 - [x] 🔌 Nuvio plugin compatibility
+- [x] 🧭 Interactive guided setup walkthrough & spotlight onboarding
+- [x] ⚡ In-app OTA update notifier & rich changelog viewer
 - [ ] 📺 **Android TV app**
 - [ ] 🎨 More themes & customization
 - [ ] 💡 Your idea here, [open an issue](https://github.com/TheARCreactorGUY/Euthopiar-/issues)!
