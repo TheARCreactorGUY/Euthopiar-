@@ -21,6 +21,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -55,6 +56,7 @@ import androidx.compose.material.icons.automirrored.outlined.VolumeMute
 import androidx.compose.material.icons.automirrored.outlined.VolumeUp
 import androidx.compose.material.icons.outlined.FastForward
 import androidx.compose.material.icons.outlined.LightMode
+import com.euthopiar.ui.icons.LucideIcons
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -699,7 +701,14 @@ fun PlayerGestureOverlay(
                     animationSpec = tween(PlayerTokens.Pill2XEnterMs, easing = PlayerTokens.EaseOut)
                 )
             },
-            exit = fadeOut(tween(PlayerTokens.Pill2XExitMs)),
+            exit = if (reduceMotion) {
+                fadeOut(tween(PlayerTokens.Pill2XExitMs))
+            } else {
+                slideOutVertically(
+                    targetOffsetY = { -with(density) { 8.dp.roundToPx() } },
+                    animationSpec = tween(PlayerTokens.Pill2XExitMs, easing = PlayerTokens.EaseIn)
+                ) + fadeOut(tween(PlayerTokens.Pill2XExitMs))
+            },
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .statusBarsPadding()
@@ -717,7 +726,7 @@ fun PlayerGestureOverlay(
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Icon(
-                        imageVector = Icons.Outlined.FastForward,
+                        imageVector = LucideIcons.FastForward,
                         contentDescription = null,
                         tint = Color.White,
                         modifier = Modifier.size(PlayerTokens.IconPill)
@@ -795,7 +804,7 @@ fun VerticalSliderCapsule(
                     }
                     if (weights.alphaDown > 0.01f) {
                         Icon(
-                            imageVector = Icons.AutoMirrored.Outlined.VolumeDown,
+                            imageVector = LucideIcons.VolumeDown,
                             contentDescription = "Volume Down",
                             tint = iconTint,
                             modifier = Modifier
@@ -809,7 +818,7 @@ fun VerticalSliderCapsule(
                     }
                     if (weights.alphaUp > 0.01f) {
                         Icon(
-                            imageVector = Icons.AutoMirrored.Outlined.VolumeUp,
+                            imageVector = LucideIcons.VolumeUp,
                             contentDescription = "Volume Up",
                             tint = iconTint,
                             modifier = Modifier

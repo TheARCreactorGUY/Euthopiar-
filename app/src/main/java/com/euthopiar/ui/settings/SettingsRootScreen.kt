@@ -8,6 +8,8 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -76,12 +78,14 @@ import com.euthopiar.ui.profile.ProfileGlassPill
 import com.euthopiar.ui.profile.ProfileGlassTokens
 import com.euthopiar.ui.profile.ProfileManagementSheet
 import com.euthopiar.ui.profile.SettingsHairlineRow
+import com.euthopiar.ui.settings.components.settingsPressable
 import com.euthopiar.ui.settings.models.SettingsCategory
 import com.euthopiar.ui.settings.models.SettingsPage
 import com.euthopiar.ui.settings.models.isVisibleFor
 import com.euthopiar.ui.settings.search.SettingsSearchBar
 import com.euthopiar.ui.settings.search.getAllSettingsSearchEntries
 import com.euthopiar.ui.theme.AppFontFamily
+import com.euthopiar.ui.theme.EuthopiarMotionTokens
 import com.euthopiar.ui.theme.LocalAmoledMode
 import com.euthopiar.ui.theme.LocalReduceMotion
 import kotlinx.coroutines.delay
@@ -127,12 +131,12 @@ fun SettingsRootScreen(
 
     val headerAlpha by animateFloatAsState(
         targetValue = if (headerTriggered || hasAnimatedEnter || reduceMotion) 1f else 0f,
-        animationSpec = tween(durationMillis = 240, easing = FastOutSlowInEasing),
+        animationSpec = if (reduceMotion) snap() else tween(durationMillis = 240, easing = FastOutSlowInEasing),
         label = "headerAlpha"
     )
     val headerTranslationY by animateFloatAsState(
         targetValue = if (headerTriggered || hasAnimatedEnter || reduceMotion) 0f else 8f,
-        animationSpec = tween(durationMillis = 240, easing = FastOutSlowInEasing),
+        animationSpec = if (reduceMotion) snap() else spring(dampingRatio = 0.82f, stiffness = 450f),
         label = "headerTranslationY"
     )
 
@@ -174,13 +178,13 @@ fun SettingsRootScreen(
                 bottom = listBottomPadding
             )
         ) {
-            // 1. Headline "Settings" (38 sp, medium, lineHeight 1.0, letterSpacing slightly negative, 22 dp side margin)
+            // 1. Headline "Settings" (38 sp, medium, lineHeight 1.0, letterSpacing slightly negative, 20 dp side margin)
             item(key = "header_title") {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .statusBarsPadding()
-                        .padding(horizontal = 22.dp)
+                        .padding(horizontal = 20.dp)
                         .padding(top = 28.dp, bottom = 18.dp)
                         .graphicsLayer {
                             alpha = headerAlpha
@@ -206,7 +210,7 @@ fun SettingsRootScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 22.dp)
+                        .padding(horizontal = 20.dp)
                         .padding(bottom = 20.dp)
                         .graphicsLayer {
                             alpha = headerAlpha
@@ -228,7 +232,7 @@ fun SettingsRootScreen(
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 22.dp, vertical = 48.dp),
+                                .padding(horizontal = 20.dp, vertical = 48.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.Center
                         ) {
@@ -271,7 +275,7 @@ fun SettingsRootScreen(
                                 onNavigateToPage(entry.page.route)
                             }
                         )
-                        Box(modifier = Modifier.padding(horizontal = 22.dp)) {
+                        Box(modifier = Modifier.padding(horizontal = 20.dp)) {
                             HorizontalDivider(
                                 thickness = ProfileGlassTokens.HairlineWidthDp,
                                 color = ProfileGlassTokens.HairlineDivider
@@ -293,7 +297,7 @@ fun SettingsRootScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             // Hairline above
-                            Box(modifier = Modifier.padding(horizontal = 22.dp)) {
+                            Box(modifier = Modifier.padding(horizontal = 20.dp)) {
                                 HorizontalDivider(
                                     thickness = ProfileGlassTokens.HairlineWidthDp,
                                     color = ProfileGlassTokens.HairlineDivider
@@ -304,14 +308,13 @@ fun SettingsRootScreen(
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clickable(
-                                        interactionSource = remember { MutableInteractionSource() },
-                                        indication = null,
+                                    .settingsPressable(
+                                        scaleDown = 0.97f,
                                         role = Role.Button,
                                         onClickLabel = "Switch or manage accounts",
                                         onClick = { showProfileSheet = true }
                                     )
-                                    .padding(horizontal = 22.dp, vertical = 16.dp)
+                                    .padding(horizontal = 20.dp, vertical = 16.dp)
                                     .tvFocusable(shape = RoundedCornerShape(12.dp)),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
@@ -384,7 +387,7 @@ fun SettingsRootScreen(
                             }
 
                             // Hairline below
-                            Box(modifier = Modifier.padding(horizontal = 22.dp)) {
+                            Box(modifier = Modifier.padding(horizontal = 20.dp)) {
                                 HorizontalDivider(
                                     thickness = ProfileGlassTokens.HairlineWidthDp,
                                     color = ProfileGlassTokens.HairlineDivider
@@ -579,7 +582,7 @@ private fun SettingsSectionHeader(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 22.dp)
+            .padding(horizontal = 20.dp)
     ) {
         Text(
             text = title.uppercase(),
@@ -588,7 +591,7 @@ private fun SettingsSectionHeader(
                 fontWeight = FontWeight.Medium,
                 fontSize = 11.sp,
                 lineHeight = 14.sp,
-                letterSpacing = 0.08.sp,
+                letterSpacing = (11 * 0.08).sp,
                 color = ProfileGlassTokens.TextLabel45
             ),
             modifier = Modifier.semantics { heading() }
@@ -608,7 +611,7 @@ private fun SettingsSectionHeader(
  */
 @Composable
 private fun SettingsRowHairline() {
-    Box(modifier = Modifier.padding(horizontal = 22.dp)) {
+    Box(modifier = Modifier.padding(horizontal = 20.dp)) {
         HorizontalDivider(
             thickness = ProfileGlassTokens.HairlineWidthDp,
             color = ProfileGlassTokens.HairlineDivider
@@ -639,18 +642,17 @@ private fun StaggeredEnterRow(
         val animAlpha by animateFloatAsState(
             targetValue = if (startAnim) 1f else 0f,
             animationSpec = tween(
-                durationMillis = 160,
-                delayMillis = 30 + (index * 20),
+                durationMillis = 180,
+                delayMillis = 20 + (index * 25),
                 easing = FastOutSlowInEasing
             ),
             label = "staggerAlpha_$index"
         )
         val animTranslationY by animateFloatAsState(
             targetValue = if (startAnim) 0f else 8f,
-            animationSpec = tween(
-                durationMillis = 160,
-                delayMillis = 30 + (index * 20),
-                easing = FastOutSlowInEasing
+            animationSpec = spring(
+                dampingRatio = 0.82f,
+                stiffness = 450f
             ),
             label = "staggerTrans_$index"
         )

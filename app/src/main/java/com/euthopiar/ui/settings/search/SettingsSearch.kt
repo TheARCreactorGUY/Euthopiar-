@@ -25,6 +25,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.euthopiar.ui.icons.LucideIcons
 import com.euthopiar.ui.settings.models.SettingsCategory
 import com.euthopiar.ui.settings.models.SettingsPage
 import com.euthopiar.ui.settings.models.SettingsSearchEntry
@@ -57,7 +58,7 @@ fun getAllSettingsSearchEntries(): List<SettingsSearchEntry> = listOf(
         category = SettingsCategory.General,
         page = SettingsPage.Playback,
         keywords = listOf("seek", "skip", "fast forward", "rewind", "double tap"),
-        icon = Icons.Outlined.FastForward
+        icon = LucideIcons.FastForward
     ),
     SettingsSearchEntry(
         id = "auto_play_next",
@@ -95,8 +96,44 @@ fun getAllSettingsSearchEntries(): List<SettingsSearchEntry> = listOf(
         keywords = listOf("hardware", "gpu", "decoder", "tunneling", "acceleration", "hevc"),
         icon = Icons.Outlined.Speed
     ),
+    SettingsSearchEntry(
+        id = "audio_passthrough",
+        title = "Audio Passthrough",
+        description = "Direct digital bitstream multichannel pass-through to AV receiver",
+        category = SettingsCategory.General,
+        page = SettingsPage.Playback,
+        keywords = listOf("audio", "sound", "passthrough", "surround", "dolby", "atmos", "dts", "receiver", "bitstream"),
+        icon = Icons.Outlined.Cable
+    ),
 
     // Appearance
+    SettingsSearchEntry(
+        id = "catalog_region",
+        title = "Catalog Content Region",
+        description = "Discover trending titles localized to your preferred country or language",
+        category = SettingsCategory.General,
+        page = SettingsPage.Appearance,
+        keywords = listOf("region", "country", "language", "catalog", "tmdb", "content", "discovery"),
+        icon = Icons.Outlined.Public
+    ),
+    SettingsSearchEntry(
+        id = "section_header_style",
+        title = "Section Header Style",
+        description = "Switch catalog section ornamentation (Accent bar, Eyebrow, Rule line)",
+        category = SettingsCategory.General,
+        page = SettingsPage.Appearance,
+        keywords = listOf("header", "section", "accent bar", "eyebrow", "rule line", "divider", "ornamentation"),
+        icon = Icons.Outlined.Widgets
+    ),
+    SettingsSearchEntry(
+        id = "amoled_black",
+        title = "AMOLED True Black",
+        description = "Pure pitch-black background with zero atmospheric color haze for OLED displays",
+        category = SettingsCategory.General,
+        page = SettingsPage.Appearance,
+        keywords = listOf("amoled", "black", "oled", "true black", "pitch black", "haze", "contrast"),
+        icon = Icons.Outlined.LightMode
+    ),
     SettingsSearchEntry(
         id = "card_scale",
         title = "Card Scale Size",
@@ -104,7 +141,7 @@ fun getAllSettingsSearchEntries(): List<SettingsSearchEntry> = listOf(
         category = SettingsCategory.General,
         page = SettingsPage.Appearance,
         keywords = listOf("card", "scale", "poster", "size", "compact", "large"),
-        icon = Icons.Outlined.AspectRatio
+        icon = LucideIcons.AspectRatio
     ),
 
     SettingsSearchEntry(
@@ -174,6 +211,15 @@ fun getAllSettingsSearchEntries(): List<SettingsSearchEntry> = listOf(
         keywords = listOf("plugins", "addons", "scrapers", "repositories", "sources", "manifest"),
         icon = Icons.Outlined.Extension
     ),
+    SettingsSearchEntry(
+        id = "smart_failover",
+        title = "Smart Provider Failover",
+        description = "Auto-switch to next healthy provider if a video source stalls or fails",
+        category = SettingsCategory.Ecosystem,
+        page = SettingsPage.Plugins,
+        keywords = listOf("failover", "smart failover", "fallback", "stall", "auto switch", "stream fail"),
+        icon = Icons.Outlined.Sync
+    ),
 
     // Storage & Cache
     SettingsSearchEntry(
@@ -184,6 +230,24 @@ fun getAllSettingsSearchEntries(): List<SettingsSearchEntry> = listOf(
         page = SettingsPage.Storage,
         keywords = listOf("storage", "cache", "clear", "disk", "clean", "downloads"),
         icon = Icons.Outlined.DeleteSweep
+    ),
+    SettingsSearchEntry(
+        id = "wifi_only_downloads",
+        title = "Wi-Fi Only Downloads",
+        description = "Prevent media downloading when operating on cellular data",
+        category = SettingsCategory.Advanced,
+        page = SettingsPage.Storage,
+        keywords = listOf("wifi", "cellular", "data", "download", "mobile", "network", "offline"),
+        icon = Icons.Outlined.Wifi
+    ),
+    SettingsSearchEntry(
+        id = "download_directory",
+        title = "Download Directory",
+        description = "Configure custom storage location on device for offline saved media",
+        category = SettingsCategory.Advanced,
+        page = SettingsPage.Storage,
+        keywords = listOf("directory", "folder", "path", "storage", "downloads", "location", "offline"),
+        icon = Icons.Outlined.Download
     ),
     SettingsSearchEntry(
         id = "config_backup",
@@ -213,6 +277,24 @@ fun getAllSettingsSearchEntries(): List<SettingsSearchEntry> = listOf(
         page = SettingsPage.About,
         keywords = listOf("about", "version", "licenses", "github", "euthopiar"),
         icon = Icons.Outlined.Info
+    ),
+    SettingsSearchEntry(
+        id = "licenses",
+        title = "Open-Source Licenses",
+        description = "Third-party open-source software libraries, legal credits and notices",
+        category = SettingsCategory.About,
+        page = SettingsPage.About,
+        keywords = listOf("license", "licenses", "open source", "credits", "notices", "apache", "mit"),
+        icon = Icons.Outlined.Description
+    ),
+    SettingsSearchEntry(
+        id = "privacy",
+        title = "Privacy & Security",
+        description = "Zero telemetry architecture, local cryptographic keys and no tracking guarantees",
+        category = SettingsCategory.About,
+        page = SettingsPage.About,
+        keywords = listOf("privacy", "security", "telemetry", "tracking", "data", "local keys", "analytics"),
+        icon = Icons.Outlined.Security
     ),
     SettingsSearchEntry(
         id = "support_euthopiar",

@@ -2,6 +2,8 @@ package com.euthopiar.ui.components
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -27,6 +29,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -38,6 +41,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -57,6 +62,7 @@ import android.os.Build
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import com.euthopiar.ui.splash.AppLaunchCoordinator
 import com.euthopiar.ui.theme.AppFontFamily
 import com.euthopiar.ui.theme.LocalAmoledMode
 import com.euthopiar.ui.theme.GlassDefaults
@@ -87,6 +93,8 @@ fun TopHeaderBar(
     val profileManager = remember { com.euthopiar.data.profile.ProfileManager.getInstance(context) }
     val activeProfile by profileManager.activeProfile.collectAsState()
     var showProfileSheet by remember { mutableStateOf(false) }
+    val isIgnitionActive by AppLaunchCoordinator.isIgnitionActive.collectAsState()
+    val wordmarkAlpha = if (isIgnitionActive) 0f else 1f
 
     val isAmoled = LocalAmoledMode.current
     val barBg = if (isAmoled) Color.Black else Background
@@ -114,14 +122,15 @@ fun TopHeaderBar(
         // 1. Scrolled Frosted Glass Background Layer
         // Fades in/out continuously via graphicsLayer alpha with smootherstep easing
         // Eliminates rigid threshold pops and abrupt last-millisecond snaps
-        val currentScrollFraction = scrollFraction().coerceIn(0f, 1f)
-        val isHazeActive = isUsingHaze && currentScrollFraction > 0.01f
+        val isHazeActive by remember(isUsingHaze, scrollFraction) {
+            derivedStateOf { isUsingHaze && scrollFraction().coerceIn(0f, 1f) > 0.01f }
+        }
 
         Box(
             modifier = Modifier
                 .matchParentSize()
                 .graphicsLayer {
-                    alpha = currentScrollFraction
+                    alpha = scrollFraction().coerceIn(0f, 1f)
                 }
                 .then(
                     if (isHazeActive) {
@@ -183,6 +192,7 @@ fun TopHeaderBar(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 // App Wordmark: 15 sp, medium, wide letter spacing (0.2 em), white
+                // Coordinated with AppIgnitionSequence to eliminate dual-text ghosting during landing
                 Text(
                     text = "EUTHOPIAR",
                     style = AppTypography.titleMedium.copy(
@@ -191,7 +201,15 @@ fun TopHeaderBar(
                         fontSize = 15.sp,
                         letterSpacing = 0.2.em
                     ),
-                    color = Color.White
+                    color = Color.White,
+                    modifier = Modifier
+                        .onGloballyPositioned { coords ->
+                            val pos = coords.positionInRoot()
+                            com.euthopiar.ui.splash.AppLaunchCoordinator.reportWordmarkTarget(pos)
+                        }
+                        .graphicsLayer {
+                            alpha = wordmarkAlpha
+                        }
                 )
 
                 // Trailing Actions: Update notification badge (if available) + Profile avatar

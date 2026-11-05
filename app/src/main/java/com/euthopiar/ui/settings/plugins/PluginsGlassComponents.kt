@@ -59,6 +59,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.euthopiar.ui.theme.AppFontFamily
+import com.euthopiar.ui.theme.EuthopiarMotionTokens
 import com.euthopiar.ui.theme.LocalAmoledMode
 import com.euthopiar.ui.theme.LocalReduceMotion
 import dev.chrisbanes.haze.HazeState
@@ -78,15 +80,15 @@ object PluginsGlassTokens {
     val GlassFillDisabled = Color.White.copy(alpha = 0.04f)
 
     val HairlineBorder = Color.White.copy(alpha = 0.16f)
-    val HairlineDivider = Color.White.copy(alpha = 0.14f)
+    val HairlineDivider = Color.White.copy(alpha = 0.10f)
 
-    val SheetGlassFill = Color(0xBA0B0B0F)
-    val SheetGlassFallback = Color(0xF50B0B0F)
-    val SheetGlassAmoledFill = Color(0xD8000000)
+    val SheetGlassFill = Color(0xFF0F1219).copy(alpha = 0.85f)
+    val SheetGlassFallback = Color(0xFF0F1219).copy(alpha = 0.96f)
+    val SheetGlassAmoledFill = Color.Black.copy(alpha = 0.92f)
 
-    val DialogGlassFill = Color(0xBA0B0B0F)
-    val DialogGlassFallback = Color(0xF50B0B0F)
-    val DialogGlassAmoledFill = Color(0xD8000000)
+    val DialogGlassFill = Color(0xFF0F1219).copy(alpha = 0.85f)
+    val DialogGlassFallback = Color(0xFF0F1219).copy(alpha = 0.96f)
+    val DialogGlassAmoledFill = Color.Black.copy(alpha = 0.92f)
 
     val TextPrimary = Color.White
     val TextSecondary = Color.White.copy(alpha = 0.55f)
@@ -140,7 +142,7 @@ fun Modifier.pluginsGlassSurface(
 
     val blurModifier = if (!isAmoled && !isLowEnd && hazeState != null) {
         Modifier.hazeEffect(state = hazeState) {
-            blurRadius = if (isSheetOrDialog) 22.dp else 18.dp
+            blurRadius = if (isSheetOrDialog) 24.dp else 18.dp
         }
     } else {
         Modifier
@@ -172,30 +174,31 @@ fun Modifier.pluginsRowGlass(
     )
 
 /**
- * Subtle 98% scale press feedback.
+ * Tactile spring press feedback with Emil Kowalski standard scale and natural bounce.
  * Uses collectIsPressedAsState for zero-latency scroll/swipe gesture compatibility.
  * Respects Reduce Motion by falling back to quick opacity fades (120ms in, 100ms out).
  */
 fun Modifier.pluginsPressable(
     enabled: Boolean = true,
-    scaleDown: Float = 0.98f,
-    pressedAlpha: Float = 0.88f,
+    scaleDown: Float = EuthopiarMotionTokens.PressScaleLarge,
+    pressedAlpha: Float = 0.90f,
     role: Role? = Role.Button,
     onClick: () -> Unit
 ): Modifier = composed {
     val reduceMotion = LocalReduceMotion.current
+    val haptic = LocalHapticFeedback.current
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
 
     val scale by animateFloatAsState(
         targetValue = if (isPressed && enabled && !reduceMotion) scaleDown else 1f,
-        animationSpec = tween(durationMillis = 80, easing = FastOutSlowInEasing),
+        animationSpec = if (reduceMotion) snap() else EuthopiarMotionTokens.SpringPress,
         label = "pluginsPressScale"
     )
 
     val alpha by animateFloatAsState(
         targetValue = if (isPressed && enabled) pressedAlpha else 1f,
-        animationSpec = tween(durationMillis = if (reduceMotion) 120 else 80, easing = FastOutSlowInEasing),
+        animationSpec = if (reduceMotion) snap() else EuthopiarMotionTokens.SpringPress,
         label = "pluginsPressAlpha"
     )
 
@@ -210,7 +213,12 @@ fun Modifier.pluginsPressable(
             indication = null,
             enabled = enabled,
             role = role,
-            onClick = onClick
+            onClick = {
+                try {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                } catch (_: Exception) {}
+                onClick()
+            }
         )
 }
 
@@ -230,10 +238,10 @@ fun PluginsHairlineDivider(
 }
 
 /**
- * 44x26dp Custom Glass Toggle Switch with 48dp minimum touch target.
+ * 48x28dp Custom Glass Toggle Switch with 48dp minimum touch target.
  * - When ON: solid white track with near-black 20dp knob.
  * - When OFF: glass track (7% fill, 0.5dp hairline border) with 60% white knob.
- * - Smooth 140ms ease-out synchronized knob travel and track crossfade.
+ * - Snappy spring-driven knob travel (Apple UISwitch standard) and smooth track crossfade.
  */
 @Composable
 fun PluginsGlassToggle(
@@ -247,34 +255,33 @@ fun PluginsGlassToggle(
 
     val trackBg by animateColorAsState(
         targetValue = if (checked) Color.White else PluginsGlassTokens.GlassFill,
-        animationSpec = tween(durationMillis = if (reduceMotion) 0 else 140, easing = FastOutSlowInEasing),
+        animationSpec = tween(durationMillis = if (reduceMotion) 0 else 180, easing = FastOutSlowInEasing),
         label = "pluginsToggleTrackBg"
     )
     val knobColor by animateColorAsState(
         targetValue = if (checked) PluginsGlassTokens.TextDark else Color.White.copy(alpha = 0.60f),
-        animationSpec = tween(durationMillis = if (reduceMotion) 0 else 140, easing = FastOutSlowInEasing),
+        animationSpec = tween(durationMillis = if (reduceMotion) 0 else 180, easing = FastOutSlowInEasing),
         label = "pluginsToggleKnobColor"
     )
 
-    // Travel from 3.dp (left) to 21.dp (right) within 44.dp track
+    // Travel from 4.dp (left) to 24.dp (right) within 48.dp track using iOS-grade spring snap
     val knobOffset by animateDpAsState(
-        targetValue = if (checked) 21.dp else 3.dp,
-        animationSpec = tween(durationMillis = if (reduceMotion) 0 else 140, easing = FastOutSlowInEasing),
+        targetValue = if (checked) 24.dp else 4.dp,
+        animationSpec = if (reduceMotion) tween(0) else EuthopiarMotionTokens.SpringToggleKnob,
         label = "toggleKnobOffset"
     )
 
     Box(
         modifier = modifier
             .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
-            .pluginsPressable(enabled = enabled, scaleDown = 0.98f) {
-                try { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) } catch (_: Exception) {}
+            .pluginsPressable(enabled = enabled, scaleDown = 1f) {
                 onCheckedChange(!checked)
             },
         contentAlignment = Alignment.Center
     ) {
         Box(
             modifier = Modifier
-                .size(width = 44.dp, height = 26.dp)
+                .size(width = 48.dp, height = 28.dp)
                 .clip(RoundedCornerShape(PluginsGlassTokens.RadiusPill))
                 .background(trackBg)
                 .then(
@@ -419,32 +426,42 @@ fun PluginsGlassCircleButton(
 
     Box(
         modifier = modifier
-            .size(size)
-            .clip(CircleShape)
-            .background(bg)
-            .then(
-                if (!isWhite) Modifier.border(
-                    PluginsGlassTokens.HairlineWidth,
-                    PluginsGlassTokens.HairlineBorder,
-                    CircleShape
-                ) else Modifier
-            )
-            .pluginsPressable(enabled = enabled && !isLoading, scaleDown = 0.98f, onClick = onClick),
+            .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+            .pluginsPressable(
+                enabled = enabled && !isLoading,
+                scaleDown = EuthopiarMotionTokens.PressScaleLarge,
+                onClick = onClick
+            ),
         contentAlignment = Alignment.Center
     ) {
-        if (isLoading) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(18.dp),
-                strokeWidth = 2.dp,
-                color = iconTint
-            )
-        } else {
-            Icon(
-                imageVector = icon,
-                contentDescription = contentDescription,
-                tint = iconTint,
-                modifier = Modifier.size(20.dp)
-            )
+        Box(
+            modifier = Modifier
+                .size(size)
+                .clip(CircleShape)
+                .background(bg)
+                .then(
+                    if (!isWhite) Modifier.border(
+                        PluginsGlassTokens.HairlineWidth,
+                        PluginsGlassTokens.HairlineBorder,
+                        CircleShape
+                    ) else Modifier
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            if (isLoading) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    strokeWidth = 2.dp,
+                    color = iconTint
+                )
+            } else {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = contentDescription,
+                    tint = iconTint,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
         }
     }
 }
@@ -683,21 +700,56 @@ fun PluginsInstallStatusDialog(
     onDismiss: () -> Unit
 ) {
     val isBusy = state is StatusDialogState.Installing
+    val reduceMotion = LocalReduceMotion.current
+    var dialogVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { dialogVisible = true }
+    val scrimAlpha by animateFloatAsState(
+        targetValue = if (dialogVisible) 0.65f else 0f,
+        animationSpec = tween(180),
+        label = "statusScrim"
+    )
+    val cardScale by animateFloatAsState(
+        targetValue = if (dialogVisible) 1f else EuthopiarMotionTokens.DialogInitialScale,
+        animationSpec = if (reduceMotion) snap() else EuthopiarMotionTokens.SpringDialogScale,
+        label = "statusCardScale"
+    )
 
     Dialog(
         onDismissRequest = { onDismiss() },
-        properties = DialogProperties(dismissOnBackPress = true, dismissOnClickOutside = !isBusy)
+        properties = DialogProperties(dismissOnBackPress = true, dismissOnClickOutside = !isBusy, usePlatformDefaultWidth = false)
     ) {
         Box(
             modifier = Modifier
-                .widthIn(max = 360.dp)
-                .fillMaxWidth()
-                .pluginsGlassSurface(
-                    shape = RoundedCornerShape(PluginsGlassTokens.RadiusDialog),
-                    isSheetOrDialog = true
-                )
-                .padding(24.dp)
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = scrimAlpha))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = { if (!isBusy) onDismiss() }
+                ),
+            contentAlignment = Alignment.Center
         ) {
+            Box(
+                modifier = Modifier
+                    .widthIn(max = 360.dp)
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp)
+                    .graphicsLayer {
+                        scaleX = cardScale
+                        scaleY = cardScale
+                        alpha = if (dialogVisible) 1f else 0f
+                    }
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = {}
+                    )
+                    .pluginsGlassSurface(
+                        shape = RoundedCornerShape(PluginsGlassTokens.RadiusDialog),
+                        isSheetOrDialog = true
+                    )
+                    .padding(24.dp)
+            ) {
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -923,6 +975,7 @@ fun PluginsInstallStatusDialog(
             }
         }
     }
+}
 }
 
 /**

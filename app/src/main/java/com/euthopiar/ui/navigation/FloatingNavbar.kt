@@ -99,6 +99,7 @@ import com.euthopiar.ui.theme.Accent
 import com.euthopiar.ui.theme.AppleDecelCurve
 import com.euthopiar.ui.theme.AppTypography
 import com.euthopiar.ui.theme.Dimens
+import com.euthopiar.ui.theme.EuthopiarMotionTokens
 import com.euthopiar.ui.theme.HairlineWidth
 import com.euthopiar.ui.theme.HudExitEasing
 import com.euthopiar.ui.theme.LocalReduceMotion
@@ -124,7 +125,7 @@ enum class NavTab(
     LIBRARY("library", "Library", EuthopiarIcons.Library),
     PROFILE("profile", "Profile", EuthopiarIcons.Profile);
 
-    val selectedIcon: ImageVector get() = iconSet.outlined
+    val selectedIcon: ImageVector get() = iconSet.filled
     val unselectedIcon: ImageVector get() = iconSet.outlined
 }
 
@@ -177,9 +178,9 @@ fun FloatingNavbar(
         animationSpec = if (reduceMotion) {
             snap()
         } else if (effectivelyVisible) {
-            tween(durationMillis = 220, easing = AppleDecelCurve)
+            spring(dampingRatio = 0.82f, stiffness = 380f)
         } else {
-            tween(durationMillis = 140, easing = HudExitEasing)
+            spring(dampingRatio = 0.88f, stiffness = 420f)
         },
         label = "navbarScrollOffset"
     )
@@ -272,8 +273,8 @@ private fun NavbarRow(
             snap()
         } else {
             spring(
-                dampingRatio = Spring.DampingRatioNoBouncy,
-                stiffness = 450f
+                dampingRatio = 0.76f,
+                stiffness = 420f
             )
         },
         label = "pillIndicator"
@@ -312,14 +313,11 @@ private fun NavbarRow(
                 val interaction = remember { MutableInteractionSource() }
                 val pressed by interaction.collectIsPressedAsState()
                 val scale = animateFloatAsState(
-                    targetValue = if (pressed) 0.96f else 1f,
+                    targetValue = if (pressed) EuthopiarMotionTokens.PressScaleCompact else 1f,
                     animationSpec = if (reduceMotion) {
                         snap()
                     } else {
-                        spring(
-                            dampingRatio = Spring.DampingRatioNoBouncy,
-                            stiffness = Spring.StiffnessMedium
-                        )
+                        EuthopiarMotionTokens.SpringPress
                     },
                     label = "press_${tab.name}"
                 )
@@ -411,7 +409,7 @@ private fun NavbarRow(
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            imageVector = tab.iconSet.outlined,
+                            imageVector = tab.iconSet.forState(isSelected),
                             contentDescription = null,
                             tint = tint,
                             modifier = Modifier.size(24.dp)
@@ -654,6 +652,8 @@ fun AdaptiveNavigationRail(
 
             Spacer(modifier = Modifier.height(Dimens.spacing16))
 
+            val railDensity = androidx.compose.ui.platform.LocalDensity.current
+
             NavTab.entries.forEach { tab ->
                 val isSelected = normalizedRoute == tab.route
 
@@ -672,12 +672,31 @@ fun AdaptiveNavigationRail(
                             this.role = Role.Tab
                             this.selected = isSelected
                         }
+                        .then(
+                            if (tab == NavTab.PROFILE || tab.route == NavTab.PROFILE.route) {
+                                Modifier.onGloballyPositioned { coordinates ->
+                                    val bounds = coordinates.boundsInRoot()
+                                    val radiusPx = with(railDensity) { 24.dp.toPx() }
+                                    com.euthopiar.ui.walkthrough.WalkthroughCoordinator.instance.reportTarget(
+                                        step = com.euthopiar.ui.walkthrough.WalkthroughStep.STEP_1_PROFILE,
+                                        bounds = bounds,
+                                        cornerRadiusPx = radiusPx,
+                                        isInteractive = false
+                                    )
+                                }
+                            } else Modifier
+                        )
                         .pressable(
                             role = Role.Tab,
                             onClick = {
                                 if (isSelected) {
                                     onTabReselected?.invoke(tab)
                                 } else {
+                                    if (tab == NavTab.PROFILE || tab.route == NavTab.PROFILE.route) {
+                                        com.euthopiar.ui.walkthrough.WalkthroughCoordinator.instance.onTargetTapped(
+                                            com.euthopiar.ui.walkthrough.WalkthroughStep.STEP_1_PROFILE
+                                        )
+                                    }
                                     onTabSelected(tab)
                                 }
                             }

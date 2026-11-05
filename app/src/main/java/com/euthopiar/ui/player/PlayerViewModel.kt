@@ -1524,6 +1524,8 @@ class PlayerViewModel(
 
         // Check in-memory TMDB enriched cache (0ms lookup, 0 network bytes)
         val cachedEnriched = com.euthopiar.core.util.TmdbBridge.getCachedEnrichedDetails(mediaId, isTv)
+        currentPosterUrl = cachedEnriched?.posterUrl?.takeIf { it.isNotBlank() }
+        currentBackdropUrl = cachedEnriched?.backdropUrl?.takeIf { it.isNotBlank() } ?: currentPosterUrl
         if (cachedEnriched != null) {
             if (currentImdbId == null && !cachedEnriched.imdbId.isNullOrBlank()) {
                 currentImdbId = cachedEnriched.imdbId
@@ -1533,9 +1535,6 @@ class PlayerViewModel(
             }
             if (currentYear == null && (cachedEnriched.premiereYear != null || cachedEnriched.year != null)) {
                 currentYear = cachedEnriched.premiereYear ?: cachedEnriched.year
-            }
-            if (currentBackdropUrl == null && !cachedEnriched.backdropUrl.isNullOrBlank()) {
-                currentBackdropUrl = cachedEnriched.backdropUrl
             }
         }
 
@@ -1619,6 +1618,14 @@ class PlayerViewModel(
             val legacyId = if (isTv && season != null && episode != null) "${mediaId}_s${season}_e${episode}" else mediaId
             val savedProgress = libraryRepository.getPlaybackProgress(historyId, provider, mediaId, season, episode)
                 ?: libraryRepository.getPlaybackProgress(legacyId)
+            if (savedProgress != null) {
+                if (currentPosterUrl.isNullOrBlank() && !savedProgress.posterUrl.isNullOrBlank()) {
+                    currentPosterUrl = savedProgress.posterUrl
+                }
+                if (currentBackdropUrl.isNullOrBlank()) {
+                    currentBackdropUrl = savedProgress.backdropUrl?.takeIf { it.isNotBlank() } ?: savedProgress.posterUrl?.takeIf { it.isNotBlank() }
+                }
+            }
             val resumePosition = if (savedProgress != null && savedProgress.currentPositionMs > 5000L && !savedProgress.isCompleted) {
                 savedProgress.currentPositionMs
             } else {
@@ -1640,8 +1647,8 @@ class PlayerViewModel(
                         val nextEp = findNextEpisode(loadedEpisodes, curSeason, curEpisode)
                         val prevEp = findPrevEpisode(loadedEpisodes, curSeason, curEpisode)
 
-                        currentPosterUrl = detail.posterUrl
-                        currentBackdropUrl = detail.backdropUrl ?: detail.posterUrl ?: currentEpItem?.thumbnail
+                        currentPosterUrl = detail.posterUrl?.takeIf { it.isNotBlank() } ?: currentPosterUrl
+                        currentBackdropUrl = (detail.backdropUrl ?: detail.posterUrl ?: currentEpItem?.thumbnail)?.takeIf { it.isNotBlank() } ?: currentBackdropUrl
 
                         _uiState.update {
                             it.copy(
@@ -1678,8 +1685,8 @@ class PlayerViewModel(
                 launch {
                     try {
                         val detail = repository.getDetails(mediaId, type, provider)
-                        currentPosterUrl = detail.posterUrl
-                        currentBackdropUrl = detail.backdropUrl ?: detail.posterUrl
+                        currentPosterUrl = detail.posterUrl?.takeIf { it.isNotBlank() } ?: currentPosterUrl
+                        currentBackdropUrl = (detail.backdropUrl ?: detail.posterUrl)?.takeIf { it.isNotBlank() } ?: currentBackdropUrl
                         _uiState.update {
                             it.copy(
                                 mediaTitle = detail.title.ifBlank { it.mediaTitle },
@@ -1728,8 +1735,8 @@ class PlayerViewModel(
                     }
             }
             if (downloadedItem != null) {
-                currentPosterUrl = downloadedItem.posterUrl
-                currentBackdropUrl = downloadedItem.backdropUrl
+                currentPosterUrl = downloadedItem.posterUrl?.takeIf { it.isNotBlank() } ?: currentPosterUrl
+                currentBackdropUrl = downloadedItem.backdropUrl?.takeIf { it.isNotBlank() } ?: currentBackdropUrl
                 _uiState.update {
                     it.copy(
                         isOfflinePlayback = true,
@@ -5528,11 +5535,16 @@ class PlayerViewModel(
                 if (!enabled || token.isBlank()) return@launch
                 val isTv = currentType == MediaType.TV_SERIES ||
                     (currentType == MediaType.ANIME && (_uiState.value.seasonNumber != null || _uiState.value.episodeNumber != null || _uiState.value.availableEpisodes.isNotEmpty()))
+                val cleanId = currentMediaId?.trim()?.removePrefix("tmdb:")?.removePrefix("tmdb/")
+                val tmdbLong = cleanId?.toLongOrNull()
+                val imdbStr = currentImdbId?.takeIf { it.startsWith("tt") } ?: cleanId?.takeIf { it.startsWith("tt") }
+                val traktIds = com.euthopiar.core.sync.trakt.TraktIds(tmdb = tmdbLong, imdb = imdbStr)
                 val body = if (isTv) {
                     com.euthopiar.core.sync.trakt.TraktScrobbleBody(
                         show = com.euthopiar.core.sync.trakt.TraktShow(
                             title = _uiState.value.mediaTitle,
-                            ids = com.euthopiar.core.sync.trakt.TraktIds(imdb = currentMediaId?.takeIf { it.startsWith("tt") })
+                            year = currentYear,
+                            ids = traktIds
                         ),
                         episode = com.euthopiar.core.sync.trakt.TraktEpisode(
                             season = _uiState.value.seasonNumber ?: 1,
@@ -5545,7 +5557,8 @@ class PlayerViewModel(
                     com.euthopiar.core.sync.trakt.TraktScrobbleBody(
                         movie = com.euthopiar.core.sync.trakt.TraktMovie(
                             title = _uiState.value.mediaTitle,
-                            ids = com.euthopiar.core.sync.trakt.TraktIds(imdb = currentMediaId?.takeIf { it.startsWith("tt") })
+                            year = currentYear,
+                            ids = traktIds
                         ),
                         progress = progressPercent.coerceIn(0f, 100f)
                     )
@@ -5570,7 +5583,7 @@ class PlayerViewModel(
                 put("refresh_token", refreshToken)
                 put("client_id", com.euthopiar.core.sync.trakt.TraktClient.DEFAULT_CLIENT_ID)
                 put("client_secret", com.euthopiar.core.sync.trakt.TraktClient.DEFAULT_CLIENT_SECRET)
-                put("redirect_uri", "urn:ietf:wg:oauth:2.0:oob")
+                put("redirect_uri", com.euthopiar.core.sync.trakt.TraktClient.REDIRECT_URI)
                 put("grant_type", "refresh_token")
             }
             val mediaType = with(okhttp3.MediaType.Companion) { "application/json; charset=utf-8".toMediaType() }
@@ -5607,10 +5620,16 @@ class PlayerViewModel(
                 if (!enabled || token.isBlank()) return@launch
                 val isTv = currentType == MediaType.TV_SERIES ||
                     (currentType == MediaType.ANIME && (_uiState.value.seasonNumber != null || _uiState.value.episodeNumber != null || _uiState.value.availableEpisodes.isNotEmpty()))
+                val cleanId = currentMediaId?.trim()?.removePrefix("tmdb:")?.removePrefix("tmdb/")
+                val tmdbLong = cleanId?.toLongOrNull()
+                val imdbStr = currentImdbId?.takeIf { it.startsWith("tt") } ?: cleanId?.takeIf { it.startsWith("tt") }
+                val simklIds = com.euthopiar.core.sync.simkl.SimklIds(tmdb = tmdbLong, imdb = imdbStr)
                 val payload = if (isTv) {
                     com.euthopiar.core.sync.simkl.SimklScrobblePayload(
                         show = com.euthopiar.core.sync.simkl.SimklScrobbleItem(
-                            title = _uiState.value.mediaTitle
+                            title = _uiState.value.mediaTitle,
+                            year = currentYear,
+                            ids = simklIds
                         ),
                         episode = com.euthopiar.core.sync.simkl.SimklEpisodeItem(
                             season = _uiState.value.seasonNumber ?: 1,
@@ -5621,12 +5640,26 @@ class PlayerViewModel(
                 } else {
                     com.euthopiar.core.sync.simkl.SimklScrobblePayload(
                         movie = com.euthopiar.core.sync.simkl.SimklScrobbleItem(
-                            title = _uiState.value.mediaTitle
+                            title = _uiState.value.mediaTitle,
+                            year = currentYear,
+                            ids = simklIds
                         ),
                         progress = progressPercent
                     )
                 }
                 com.euthopiar.core.sync.simkl.SimklClient.getInstance().scrobble(token, payload)
+                val toStatus = if (progressPercent >= 90f) "completed" else "watching"
+                val syncItem = com.euthopiar.core.sync.simkl.SimklSyncItem(
+                    title = _uiState.value.mediaTitle,
+                    to = toStatus,
+                    ids = simklIds
+                )
+                val listPayload = if (isTv) {
+                    com.euthopiar.core.sync.simkl.SimklSyncPayload(shows = listOf(syncItem))
+                } else {
+                    com.euthopiar.core.sync.simkl.SimklSyncPayload(movies = listOf(syncItem))
+                }
+                com.euthopiar.core.sync.simkl.SimklClient.getInstance().addToLibrary(token, listPayload)
             } catch (_: Exception) {}
         }
     }

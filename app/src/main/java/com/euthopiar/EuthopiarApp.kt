@@ -127,7 +127,50 @@ class EuthopiarApp : Application(), SingletonImageLoader.Factory {
                     android.util.Log.w("EuthopiarApp", "Startup plugin auto-update error: ${e.message}")
                 }
             }
+
+            launch(Dispatchers.IO) {
+                try {
+                    com.euthopiar.data.sync.MediaSyncManager.getInstance(this@EuthopiarApp)
+                        .repairMissingLocalPosters()
+                } catch (_: Exception) {}
+            }
         }
+    }
+
+    private val imageHttpClient by lazy {
+        DohDns.sharedBaseClient.newBuilder()
+            .dispatcher(
+                okhttp3.Dispatcher().apply {
+                    maxRequests = 64
+                    maxRequestsPerHost = 16
+                }
+            )
+            .addInterceptor { chain ->
+                val orig = chain.request()
+                val req = if (orig.header("User-Agent") == null) {
+                    orig.newBuilder()
+                        .header(
+                            "User-Agent",
+                            "Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+                        )
+                        .build()
+                } else {
+                    orig
+                }
+                try {
+                    val response = chain.proceed(req)
+                    if (!response.isSuccessful && (response.code == 429 || response.code in 500..599)) {
+                        response.close()
+                        chain.proceed(req)
+                    } else {
+                        response
+                    }
+                } catch (e: java.io.IOException) {
+                    if (chain.call().isCanceled()) throw e
+                    chain.proceed(req)
+                }
+            }
+            .build()
     }
 
     override fun newImageLoader(context: PlatformContext): ImageLoader {
@@ -135,7 +178,7 @@ class EuthopiarApp : Application(), SingletonImageLoader.Factory {
             .components {
                 add(
                     OkHttpNetworkFetcherFactory(
-                        callFactory = { DohDns.sharedBaseClient }
+                        callFactory = { imageHttpClient }
                     )
                 )
             }

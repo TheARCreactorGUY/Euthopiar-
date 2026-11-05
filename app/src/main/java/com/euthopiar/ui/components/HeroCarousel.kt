@@ -51,6 +51,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.rounded.PlayArrow
+import com.euthopiar.ui.icons.LucideIcons
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -110,6 +111,7 @@ import com.euthopiar.ui.details.PlaybackActionState
 import com.euthopiar.ui.details.PlaybackTargetHelper
 import com.euthopiar.ui.theme.AppFontFamily
 import com.euthopiar.ui.theme.AppTypography
+import com.euthopiar.ui.theme.EuthopiarMotionTokens
 import com.euthopiar.ui.theme.Background
 import com.euthopiar.ui.theme.Dimens
 import com.euthopiar.ui.theme.HairlineWidth
@@ -408,6 +410,7 @@ fun HeroCarousel(
                     currentVirtualPage = currentVirtualPage,
                     progressProvider = { autoAdvanceProgress.value },
                     reduceMotion = reduceMotion,
+                    currentPageOffsetFractionProvider = { pagerState.currentPageOffsetFraction },
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(bottom = contentBottomPadding)
@@ -570,7 +573,7 @@ private fun BoxScope.HeroHudContent(
                     .clip(ShapeFull)
                     .background(Color.White)
                     .pressable(
-                        scaleDown = 0.98f,
+                        scaleDown = 0.96f,
                         pressedAlpha = 0.92f,
                         onClickLabel = "${actionState.label}, ${item.title}",
                         enabled = isInteractive,
@@ -590,7 +593,7 @@ private fun BoxScope.HeroHudContent(
                     horizontalArrangement = Arrangement.Center
                 ) {
                     Icon(
-                        imageVector = Icons.Rounded.PlayArrow,
+                        imageVector = LucideIcons.Play,
                         contentDescription = null,
                         tint = Color(0xFF0B0B0F),
                         modifier = Modifier.size(24.dp)
@@ -724,8 +727,8 @@ private fun BoxScope.HeroHudContent(
                 AnimatedContent(
                     targetState = isBookmarked,
                     transitionSpec = {
-                        (scaleIn(tween(200)) + fadeIn(tween(150)))
-                            .togetherWith(scaleOut(tween(150)) + fadeOut(tween(120)))
+                        (fadeIn(tween(150)) + scaleIn(initialScale = 0.92f, animationSpec = EuthopiarMotionTokens.SpringMicro))
+                            .togetherWith(fadeOut(tween(120)) + scaleOut(targetScale = 0.92f))
                     },
                     label = "heroWatchlistTransition"
                 ) { bookmarked ->
@@ -816,6 +819,7 @@ private fun HeroPagination(
     currentVirtualPage: Int,
     progressProvider: () -> Float,
     reduceMotion: Boolean,
+    currentPageOffsetFractionProvider: () -> Float = { 0f },
     modifier: Modifier = Modifier
 ) {
     if (itemsCount <= 1) return
@@ -827,25 +831,11 @@ private fun HeroPagination(
     val density = LocalDensity.current
     val gapPx = with(density) { 5.dp.toPx() }
     val heightPx = with(density) { 2.dp.toPx() }
+    val selectedWidthPx = with(density) { 28.dp.toPx() }
+    val unselectedSizePx = with(density) { 16.dp.toPx() }
     val cornerRadius = CornerRadius(heightPx / 2f, heightPx / 2f)
 
-    if (itemsCount <= 8) {
-        val segmentWidths = (0 until itemsCount).map { index ->
-            val targetWidth = if (index == activeIndex) 28.dp else 16.dp
-            val targetAlpha = if (index == activeIndex) 0.90f else 0.35f
-            val animWidth by animateDpAsState(
-                targetValue = targetWidth,
-                animationSpec = tween(durationMillis = 250, easing = LinearOutSlowInEasing),
-                label = "paginationWidth_$index"
-            )
-            val animAlpha by animateFloatAsState(
-                targetValue = targetAlpha,
-                animationSpec = tween(durationMillis = 250, easing = LinearOutSlowInEasing),
-                label = "paginationAlpha_$index"
-            )
-            Pair(animWidth, animAlpha)
-        }
-
+    if (itemsCount <= 8) { val dotWidths = remember(itemsCount) { FloatArray(itemsCount) }; val dotAlphas = remember(itemsCount) { FloatArray(itemsCount) }
         Box(
             modifier = modifier
                 .fillMaxWidth()
@@ -860,40 +850,58 @@ private fun HeroPagination(
                         contentDescription = "Slide ${activeIndex + 1} of $itemsCount"
                     }
             ) {
-            val widthsPx = segmentWidths.map { with(density) { it.first.toPx() } }
-            val totalWidthPx = widthsPx.sum() + (itemsCount - 1) * gapPx
-            var startX = (size.width - totalWidthPx) / 2f
+                val offsetFraction = currentPageOffsetFractionProvider().coerceIn(-1f, 1f)
+                val continuousPage = ((activeIndex.toFloat() + offsetFraction) % itemsCount + itemsCount) % itemsCount; var totalWidthPx = (itemsCount - 1) * gapPx
 
-            for (index in 0 until itemsCount) {
-                val segWidthPx = widthsPx[index]
-                val (_, alpha) = segmentWidths[index]
-                val isActive = index == activeIndex
 
-                // Background segment pill
-                drawRoundRect(
-                    color = Color.White.copy(alpha = if (isActive) 0.35f else alpha),
-                    topLeft = Offset(startX, 0f),
-                    size = Size(segWidthPx, heightPx),
-                    cornerRadius = cornerRadius
-                )
 
-                if (isActive) {
-                    val fraction = if (!reduceMotion) progressProvider().coerceIn(0f, 1f) else 1f
-                    if (fraction > 0f) {
-                        drawRoundRect(
-                            color = Color.White.copy(alpha = alpha),
-                            topLeft = Offset(startX, 0f),
-                            size = Size(segWidthPx * fraction, heightPx),
-                            cornerRadius = cornerRadius
-                        )
-                    }
+
+
+                for (index in 0 until itemsCount) {
+
+                    val rawDiff = kotlin.math.abs(index.toFloat() - continuousPage)
+                    val dist = minOf(rawDiff, itemsCount.toFloat() - rawDiff)
+                    val sel = (1f - dist).coerceIn(0f, 1f)
+                    val dotWidthPx = unselectedSizePx + (selectedWidthPx - unselectedSizePx) * sel
+                    val dotAlpha = 0.22f + (0.90f - 0.22f) * sel
+                    dotWidths[index] = dotWidthPx
+                    dotAlphas[index] = dotAlpha
+                    totalWidthPx += dotWidthPx
                 }
 
-                startX += segWidthPx + gapPx
+                var startX = (size.width - totalWidthPx) / 2f
+
+                for (index in 0 until itemsCount) {
+
+                    val segWidthPx = dotWidths[index]
+                    val dotAlpha = dotAlphas[index]
+                    val isActive = index == activeIndex
+
+                    // Background segment pill
+                    drawRoundRect(
+                        color = Color.White.copy(alpha = if (isActive) 0.35f else dotAlpha.coerceAtMost(0.35f)),
+                        topLeft = Offset(startX, 0f),
+                        size = Size(segWidthPx, heightPx),
+                        cornerRadius = cornerRadius
+                    )
+
+                    if (isActive) {
+                        val fraction = if (!reduceMotion) progressProvider().coerceIn(0f, 1f) else 1f
+                        if (fraction > 0f) {
+                            drawRoundRect(
+                                color = Color.White.copy(alpha = dotAlpha),
+                                topLeft = Offset(startX, 0f),
+                                size = Size(segWidthPx * fraction, heightPx),
+                                cornerRadius = cornerRadius
+                            )
+                        }
+                    }
+
+                    startX += segWidthPx + gapPx
+                }
             }
         }
-    }
-} else {
+    } else {
         // Compact sliding window for >8 slides
         val maxVisible = 7
         val windowStart = (activeIndex - maxVisible / 2).coerceIn(0, itemsCount - maxVisible)
@@ -1189,159 +1197,6 @@ private fun resolveSlideHazeColor(item: MediaItem): Color {
     }
 }
 
-/**
- * Hero Carousel Shimmer Skeleton matching Part 5:
- *
- * Dark image block with shimmer, logo-shaped skeleton bar,
- * row of chip skeleton blocks, two pill skeletons (one wide white-ish, one glass),
- * and centered pagination skeleton segments.
- */
-@Composable
-fun HeroCarouselSkeleton(
-    modifier: Modifier = Modifier
-) {
-    val configuration = LocalConfiguration.current
-    val windowDimensions = rememberWindowDimensions()
-    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-    val isLargeScreen = windowDimensions.isTablet || windowDimensions.isTV
-
-    val carouselHeight = if (isLandscape) {
-        if (isLargeScreen) {
-            (configuration.screenHeightDp * 0.65f).coerceIn(400f, 600f).dp
-        } else {
-            (configuration.screenHeightDp * 0.85f).coerceIn(280f, 380f).dp
-        }
-    } else {
-        (configuration.screenHeightDp * 0.60f + 40f).coerceIn(480f, 600f).dp
-    }
-    val contentBottomPadding = if (isLandscape && !isLargeScreen) Dimens.spacing12 else Dimens.spacing24
-    val isAmoled = LocalAmoledMode.current
-    val skeletonBg = if (isAmoled) Color.Black else Background
-
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(carouselHeight)
-            .background(skeletonBg)
-    ) {
-        // Shimmering backdrop base
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .shimmerEffect()
-        )
-
-        // Bottom dark melt
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        0.0f to Color.Transparent,
-                        0.45f to skeletonBg.copy(alpha = 0.45f),
-                        0.80f to skeletonBg.copy(alpha = 0.90f),
-                        1.0f to skeletonBg,
-                    )
-                )
-        )
-
-        // Content skeleton overlay
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .align(Alignment.BottomStart)
-                .padding(horizontal = 16.dp)
-                .padding(bottom = contentBottomPadding),
-            horizontalAlignment = Alignment.Start
-        ) {
-            // Logo skeleton bar
-            Box(
-                modifier = Modifier
-                    .width(180.dp)
-                    .height(48.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .shimmerEffect()
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Row of chip skeletons
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                repeat(4) { i ->
-                    val chipWidth = when (i) {
-                        0 -> 48.dp
-                        1 -> 64.dp
-                        2 -> 44.dp
-                        else -> 54.dp
-                    }
-                    Box(
-                        modifier = Modifier
-                            .width(chipWidth)
-                            .height(24.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .shimmerEffect()
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Action row skeletons
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                // Wide white-ish primary pill skeleton
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp)
-                        .clip(ShapeFull)
-                        .shimmerEffect()
-                )
-
-                // Glass details pill skeleton
-                Box(
-                    modifier = Modifier
-                        .width(108.dp)
-                        .height(48.dp)
-                        .clip(ShapeFull)
-                        .shimmerEffect()
-                )
-
-                // Watchlist pill skeleton
-                Box(
-                    modifier = Modifier
-                        .size(48.dp)
-                        .clip(ShapeFull)
-                        .shimmerEffect()
-                )
-            }
-
-            Spacer(modifier = Modifier.height(20.dp))
-
-            // Centered pagination skeleton segments
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center
-            ) {
-                repeat(5) { i ->
-                    if (i > 0) Spacer(modifier = Modifier.width(5.dp))
-                    Box(
-                        modifier = Modifier
-                            .width(if (i == 0) 28.dp else 16.dp)
-                            .height(2.dp)
-                            .clip(RoundedCornerShape(1.dp))
-                            .background(Color.White.copy(alpha = if (i == 0) 0.50f else 0.20f))
-                    )
-                }
-            }
-        }
-    }
-}
-
 private data class HeroPageLayer(
     val page: Int,
     val itemIndex: Int,
@@ -1441,13 +1296,16 @@ private fun Modifier.heroPagerGesture(
                             }
                             onUserTouchChange(false)
                             if (abs(pagerState.currentPageOffsetFraction) > 0.001f) {
-                                // If vertical drag interrupted an auto-shift in flight, settle cleanly
+                                // If vertical drag interrupted an auto-shift in flight, settle cleanly with fluid spring
                                 coroutineScope.launch {
                                     val targetPage = (pagerState.currentPage + pagerState.currentPageOffsetFraction.roundToInt())
                                         .coerceIn(0, pagerState.pageCount - 1)
                                     pagerState.animateScrollToPage(
                                         targetPage,
-                                        animationSpec = tween(Motion.DurationEmphasized, easing = Motion.EmphasizedDecelerateEasing)
+                                        animationSpec = spring(
+                                            dampingRatio = Spring.DampingRatioNoBouncy,
+                                            stiffness = Spring.StiffnessMediumLow
+                                        )
                                     )
                                 }
                             }

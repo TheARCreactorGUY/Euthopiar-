@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.PlaylistAdd
 import com.euthopiar.ui.library.sanitizeTitle
 import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.BookmarkBorder
+import com.euthopiar.ui.icons.LucideIcons
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.FileDownload
 import androidx.compose.material.icons.rounded.Share
@@ -250,7 +251,7 @@ fun HeroPeekSheet(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     CircleAction(
-                        icon = if (item.inWatchlist) Icons.Rounded.Bookmark else Icons.Rounded.BookmarkBorder,
+                        icon = if (item.inWatchlist) LucideIcons.BookmarkFilled else LucideIcons.Bookmark,
                         label = "Watchlist",
                         isActive = item.inWatchlist,
                         onClick = actions.onToggleWatchlist

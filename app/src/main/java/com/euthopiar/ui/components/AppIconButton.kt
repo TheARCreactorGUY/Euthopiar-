@@ -6,7 +6,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.PlayArrow
+import com.euthopiar.ui.icons.LucideIcons
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -51,12 +51,9 @@ fun AppIconButton(
             .clip(shape)
             .background(backgroundColor)
             .tvFocusable(shape = shape)
-            .pressable(enabled = enabled, onClick = onClick)
-            .clickable(
-                interactionSource = interactionSource,
-                indication = null,
+            .pressable(
                 enabled = enabled,
-                role = Role.Button,
+                interactionSource = interactionSource,
                 onClickLabel = contentDescription,
                 onClick = onClick
             )
@@ -79,7 +76,7 @@ fun AppIconButton(
 @Composable
 private fun AppIconButtonPreview() {
     AppIconButton(
-        imageVector = Icons.Filled.PlayArrow,
+        imageVector = LucideIcons.Play,
         contentDescription = "Play",
         onClick = {}
     )

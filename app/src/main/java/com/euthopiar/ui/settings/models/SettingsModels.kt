@@ -1,6 +1,7 @@
 package com.euthopiar.ui.settings.models
 
 import androidx.compose.material.icons.Icons
+import com.euthopiar.ui.icons.LucideIcons
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.euthopiar.data.profile.UserProfile
@@ -49,7 +50,7 @@ enum class SettingsPage(
         title = "Playback",
         subtitle = "Quality, auto-skip, buffer and captions",
         category = SettingsCategory.General,
-        icon = androidx.compose.material.icons.Icons.Outlined.PlayArrow
+        icon = LucideIcons.Play
     ),
     Appearance(
         route = "settings/appearance",

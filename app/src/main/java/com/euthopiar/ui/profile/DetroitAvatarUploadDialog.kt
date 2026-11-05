@@ -1,5 +1,6 @@
 package com.euthopiar.ui.profile
 
+import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -18,7 +19,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.Upload
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -37,10 +37,14 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.euthopiar.data.profile.CustomAvatarRepository
 import com.euthopiar.ui.theme.AppFontFamily
+import com.euthopiar.ui.theme.EuthopiarGlassTokens
 import com.euthopiar.ui.theme.LocalAmoledMode
+import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.HazeTint
+import dev.chrisbanes.haze.hazeEffect
 
 /**
- * Avatar Upload Dialog matching Euthopiar minimal glass design language.
+ * Avatar Upload Dialog matching Euthopiar frosted glass design language.
  */
 @Composable
 fun DetroitAvatarUploadDialog(
@@ -48,10 +52,14 @@ fun DetroitAvatarUploadDialog(
     onDismissRequest: () -> Unit,
     onAvatarSelected: (String) -> Unit,
     onChooseFromGallery: () -> Unit,
+    hazeState: HazeState? = null,
 ) {
     val recentAvatars by CustomAvatarRepository.recentAvatars.collectAsState()
     val isAmoled = LocalAmoledMode.current
-    val dialogBg = if (isAmoled) ProfileGlassTokens.AmoledBackground else ProfileGlassTokens.BaseDarkBackground
+
+    val cardShape = RoundedCornerShape(EuthopiarGlassTokens.RadiusDialog)
+    val cardFill = EuthopiarGlassTokens.cardFill(isAmoled)
+    val fallbackColor = EuthopiarGlassTokens.fallbackFill(isAmoled)
 
     Dialog(
         onDismissRequest = onDismissRequest,
@@ -60,7 +68,7 @@ fun DetroitAvatarUploadDialog(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.72f))
+                .background(Color.Black.copy(alpha = EuthopiarGlassTokens.ScrimAlpha))
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -71,47 +79,49 @@ fun DetroitAvatarUploadDialog(
             Box(
                 modifier = Modifier
                     .fillMaxWidth(0.92f)
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(dialogBg)
-                    .border(ProfileGlassTokens.HairlineWidthDp, ProfileGlassTokens.HairlineBorder, RoundedCornerShape(20.dp))
+                    .clip(cardShape)
+                    .then(
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hazeState != null) {
+                            Modifier.hazeEffect(state = hazeState) {
+                                blurRadius = EuthopiarGlassTokens.BlurRadius
+                                tints = listOf(HazeTint(cardFill))
+                                fallbackTint = HazeTint(fallbackColor)
+                            }
+                        } else {
+                            Modifier.background(fallbackColor)
+                        }
+                    )
+                    .border(
+                        width = EuthopiarGlassTokens.HairlineWidth,
+                        color = EuthopiarGlassTokens.HairlineBorder,
+                        shape = cardShape
+                    )
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
                         onClick = {}
                     )
-                    .padding(22.dp),
             ) {
                 Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.fillMaxWidth()
                 ) {
                     // Header Row
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp, vertical = 20.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = "Custom Avatar",
-                                style = TextStyle(
-                                    fontFamily = AppFontFamily,
-                                    fontWeight = FontWeight.Medium,
-                                    fontSize = 20.sp,
-                                    lineHeight = 24.sp,
-                                    color = Color.White,
-                                ),
+                                style = EuthopiarGlassTokens.HeaderTitle,
                             )
-                            Spacer(modifier = Modifier.height(2.dp))
+                            Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 text = "Upload image or reuse recent photos",
-                                style = TextStyle(
-                                    fontFamily = AppFontFamily,
-                                    fontWeight = FontWeight.Normal,
-                                    fontSize = 12.sp,
-                                    lineHeight = 16.sp,
-                                    color = ProfileGlassTokens.TextMuted50,
-                                ),
+                                style = EuthopiarGlassTokens.HeaderSubtitle,
                             )
                         }
 
@@ -119,71 +129,84 @@ fun DetroitAvatarUploadDialog(
                             modifier = Modifier
                                 .size(36.dp)
                                 .clip(CircleShape)
-                                .background(ProfileGlassTokens.GlassFill)
-                                .border(ProfileGlassTokens.HairlineWidthDp, ProfileGlassTokens.HairlineBorder, CircleShape)
+                                .background(Color.White.copy(alpha = 0.08f))
+                                .border(EuthopiarGlassTokens.HairlineWidth, EuthopiarGlassTokens.HairlineBorder, CircleShape)
                                 .clickable { onDismissRequest() },
                             contentAlignment = Alignment.Center,
                         ) {
                             Icon(
                                 imageVector = Icons.Outlined.Close,
                                 contentDescription = "Close",
-                                tint = Color.White.copy(alpha = 0.70f),
+                                tint = Color.White.copy(alpha = 0.72f),
                                 modifier = Modifier.size(18.dp),
                             )
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(22.dp))
-
-                    // Choose from Gallery: White primary pill
-                    ProfileWhitePillButton(
-                        text = "Choose from Gallery",
-                        onClick = onChooseFromGallery
+                    // Subtle Hairline Divider
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(EuthopiarGlassTokens.HairlineWidth)
+                            .background(EuthopiarGlassTokens.HairlineDivider)
                     )
 
-                    if (recentAvatars.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(24.dp))
-
-                        Text(
-                            text = "RECENT CUSTOM UPLOADS",
-                            style = TextStyle(
-                                fontFamily = AppFontFamily,
-                                fontWeight = FontWeight.Medium,
-                                fontSize = 11.sp,
-                                lineHeight = 14.sp,
-                                letterSpacing = 0.08.sp,
-                                color = ProfileGlassTokens.TextLabel45,
-                            ),
-                            modifier = Modifier.align(Alignment.Start),
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp, vertical = 20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        // Choose from Gallery: 48dp solid white primary pill
+                        ProfileWhitePillButton(
+                            text = "Choose from Gallery",
+                            onClick = onChooseFromGallery
                         )
 
-                        Spacer(modifier = Modifier.height(12.dp))
+                        if (recentAvatars.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(24.dp))
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            recentAvatars.forEach { fileName ->
-                                val fullId = "custom:$fileName"
-                                val isSelected = currentAvatarId == fullId
+                            Text(
+                                text = "RECENT CUSTOM UPLOADS",
+                                style = TextStyle(
+                                    fontFamily = AppFontFamily,
+                                    fontWeight = FontWeight.Medium,
+                                    fontSize = 11.sp,
+                                    lineHeight = 14.sp,
+                                    letterSpacing = 0.08.sp,
+                                    color = ProfileGlassTokens.TextLabel45,
+                                ),
+                                modifier = Modifier.align(Alignment.Start),
+                            )
 
-                                AvatarWithThinRing(
-                                    avatarId = fullId,
-                                    avatarSize = 52.dp,
-                                    ringGap = 2.dp,
-                                    isSelected = isSelected,
-                                    showSelectedCheck = true,
-                                    onClick = {
-                                        onAvatarSelected(fullId)
-                                        onDismissRequest()
-                                    }
-                                )
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                recentAvatars.forEach { fileName ->
+                                    val fullId = "custom:$fileName"
+                                    val isSelected = currentAvatarId == fullId
+
+                                    AvatarWithThinRing(
+                                        avatarId = fullId,
+                                        avatarSize = 52.dp,
+                                        ringGap = 2.dp,
+                                        isSelected = isSelected,
+                                        showSelectedCheck = true,
+                                        onClick = {
+                                            onAvatarSelected(fullId)
+                                            onDismissRequest()
+                                        }
+                                    )
+                                }
                             }
                         }
-                    }
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
                 }
             }
         }

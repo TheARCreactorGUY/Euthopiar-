@@ -76,4 +76,14 @@ class SettingsPagesOverhaulTest {
         assertEquals("https://api.trakt.tv", com.euthopiar.core.sync.trakt.TraktClient.BASE_URL)
         assertEquals("https://api.simkl.com", com.euthopiar.core.sync.simkl.SimklClient.BASE_URL)
     }
+
+    @Test
+    fun testIntegrationDialogTokensAndGeometry() {
+        assertEquals(28.dp, com.euthopiar.ui.theme.EuthopiarGlassTokens.RadiusDialog)
+        assertEquals(24.dp, com.euthopiar.ui.theme.EuthopiarGlassTokens.BlurRadius)
+        assertEquals(0.5.dp, com.euthopiar.ui.theme.EuthopiarGlassTokens.HairlineWidth)
+        assertEquals(0.65f, com.euthopiar.ui.theme.EuthopiarGlassTokens.ScrimAlpha, 0.001f)
+        assertEquals(Color(0xFF0F1219), com.euthopiar.ui.theme.EuthopiarGlassTokens.BaseDark)
+        assertEquals(Color(0xFF0B0B0F), com.euthopiar.ui.theme.EuthopiarGlassTokens.TextDark)
+    }
 }

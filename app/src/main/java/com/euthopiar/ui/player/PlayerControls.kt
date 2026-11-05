@@ -123,6 +123,7 @@ import androidx.compose.material.icons.outlined.Subtitles
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.VideoLibrary
+import com.euthopiar.ui.icons.LucideIcons
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -138,6 +139,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -732,7 +734,7 @@ fun PlayerCenterCluster(
                                 label = "PlayPauseMorph"
                             ) { playing ->
                                 Icon(
-                                    imageVector = if (playing) Icons.Outlined.Pause else Icons.Outlined.PlayArrow,
+                                    imageVector = if (playing) LucideIcons.Pause else LucideIcons.Play,
                                     contentDescription = if (playing) "Pause" else "Play",
                                     tint = PlayerTokens.LabelDark,
                                     modifier = Modifier.size(PlayerTokens.IconPlayPause)
@@ -1224,10 +1226,10 @@ fun PlayerActionDock(
     var showRemainingTime by remember { mutableStateOf(false) }
     val reduceMotion = LocalReduceMotion.current
 
-    // Chevron rotation 180 degrees over 200 ms
+    // Chevron rotation 180 degrees via fluid rotational spring
     val chevronRotation by animateFloatAsState(
         targetValue = if (isExpanded) 180f else 0f,
-        animationSpec = tween(PlayerTokens.DockChevronRotateMs, easing = PlayerTokens.EaseOut),
+        animationSpec = if (reduceMotion) tween(0) else spring(dampingRatio = 0.80f, stiffness = 420f),
         label = "dockChevronRotate"
     )
 
@@ -1246,6 +1248,7 @@ fun PlayerActionDock(
         Row(
             modifier = Modifier
                 .weight(1f)
+                .clipToBounds()
                 .horizontalScroll(rememberScrollState()),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(2.dp)
@@ -1852,7 +1855,7 @@ fun PlayerBottomControls(
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
-                                    imageVector = Icons.Outlined.AspectRatio,
+                                    imageVector = LucideIcons.AspectRatio,
                                     contentDescription = "Aspect Ratio",
                                     tint = Color.White,
                                     modifier = Modifier.size(16.dp)

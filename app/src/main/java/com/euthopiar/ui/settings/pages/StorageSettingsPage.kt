@@ -263,7 +263,6 @@ fun StorageSettingsPage(
                         strokeWidth = SettingsTokens.HairlineWidth.toPx()
                     )
                 }
-                .padding(bottom = 20.dp)
         ) {
             // Eyebrow Label: "LOCAL DISK USAGE"
             Text(

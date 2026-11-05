@@ -2,6 +2,8 @@ package com.euthopiar.ui.onboarding
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -54,7 +56,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.offset
 import com.euthopiar.ui.components.tvFocusable
+import com.euthopiar.ui.theme.EuthopiarMotionTokens
+import com.euthopiar.ui.theme.pressable
 import com.euthopiar.ui.theme.AppFontFamily
 import com.euthopiar.ui.theme.LocalReduceMotion
 import dev.chrisbanes.haze.HazeState
@@ -85,12 +93,10 @@ fun OnboardingProgressBar(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         for (i in 1..totalSteps) {
-            val isCompletedOrCurrent = i <= currentStep
-            val targetColor = if (isCompletedOrCurrent) OnboardingTokens.TextWhite90 else OnboardingTokens.TextWhite18
-            val animatedColor by animateColorAsState(
-                targetValue = targetColor,
-                animationSpec = tween(durationMillis = 240, easing = FastOutSlowInEasing),
-                label = "progressSegment_$i",
+            val fillFraction by animateFloatAsState(
+                targetValue = if (i <= currentStep) 1f else 0f,
+                animationSpec = EuthopiarMotionTokens.SpringSnappy,
+                label = "progressSegmentFill_$i"
             )
 
             Box(
@@ -98,8 +104,18 @@ fun OnboardingProgressBar(
                     .weight(1f)
                     .fillMaxHeight()
                     .clip(CircleShape)
-                    .background(animatedColor),
-            )
+                    .background(Color.White.copy(alpha = 0.14f)),
+            ) {
+                if (fillFraction > 0f) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(fraction = fillFraction)
+                            .fillMaxHeight()
+                            .clip(CircleShape)
+                            .background(Color.White),
+                    )
+                }
+            }
         }
     }
 }
@@ -162,8 +178,8 @@ fun OnboardingBackButton(
     val reduceMotion = LocalReduceMotion.current
 
     val scale by animateFloatAsState(
-        targetValue = if (isPressed && !reduceMotion) 0.98f else 1f,
-        animationSpec = tween(120),
+        targetValue = if (isPressed && !reduceMotion) 0.96f else 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessMediumLow),
         label = "backPressScale",
     )
 
@@ -220,8 +236,8 @@ fun OnboardingSkipChip(
     val reduceMotion = LocalReduceMotion.current
 
     val scale by animateFloatAsState(
-        targetValue = if (isPressed && !reduceMotion) 0.98f else 1f,
-        animationSpec = tween(120),
+        targetValue = if (isPressed && !reduceMotion) 0.96f else 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessMediumLow),
         label = "skipPressScale",
     )
 
@@ -291,14 +307,14 @@ fun OnboardingWhitePillButton(
     val reduceMotion = LocalReduceMotion.current
 
     val scale by animateFloatAsState(
-        targetValue = if (isPressed && enabled && !isLoading && !reduceMotion) 0.98f else 1f,
-        animationSpec = tween(durationMillis = 120, easing = FastOutSlowInEasing),
+        targetValue = if (isPressed && enabled && !isLoading && !reduceMotion) 0.965f else 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessMediumLow),
         label = "onboardingPillScale",
     )
 
     val backgroundAlpha by animateFloatAsState(
         targetValue = if (isPressed && enabled && !isLoading) 0.88f else 1.0f,
-        animationSpec = tween(durationMillis = 120),
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
         label = "onboardingPillAlpha",
     )
 
@@ -377,6 +393,7 @@ fun <T> OnboardingSegmentedControl(
     isAmoled: Boolean = false,
 ) {
     val reduceMotion = LocalReduceMotion.current
+    val selectedIndex = options.indexOf(selectedOption).coerceAtLeast(0)
 
     Box(
         modifier = modifier
@@ -388,56 +405,71 @@ fun <T> OnboardingSegmentedControl(
             )
             .padding(3.dp),
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .selectableGroup(),
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        BoxWithConstraints(
+            modifier = Modifier.fillMaxWidth()
         ) {
-            options.forEach { option ->
-                val isSelected = option == selectedOption
-                val label = labelProvider(option)
+            val totalWidth = maxWidth
+            val segmentCount = options.size.coerceAtLeast(1)
+            val segmentWidth = totalWidth / segmentCount
 
-                val backgroundColor by animateColorAsState(
-                    targetValue = if (isSelected) Color.White else Color.Transparent,
-                    animationSpec = if (reduceMotion) tween(0) else tween(200, easing = FastOutSlowInEasing),
-                    label = "segmentBg_${label}",
-                )
+            val thumbOffset by animateDpAsState(
+                targetValue = segmentWidth * selectedIndex,
+                animationSpec = if (reduceMotion) snap() else spring(dampingRatio = 0.82f, stiffness = 400f),
+                label = "segmentedThumbOffset"
+            )
 
-                val textColor by animateColorAsState(
-                    targetValue = if (isSelected) OnboardingTokens.TextDarkButton else OnboardingTokens.TextMuted70,
-                    animationSpec = if (reduceMotion) tween(100) else tween(120),
-                    label = "segmentText_${label}",
-                )
+            // Sliding thumb indicator behind the options
+            Box(
+                modifier = Modifier
+                    .offset(x = thumbOffset)
+                    .width(segmentWidth)
+                    .height(44.dp)
+                    .clip(RoundedCornerShape(11.dp))
+                    .background(Color.White)
+            )
 
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(38.dp)
-                        .clip(RoundedCornerShape(11.dp))
-                        .background(backgroundColor)
-                        .selectable(
-                            selected = isSelected,
-                            role = Role.RadioButton,
-                            onClick = { onOptionSelected(option) },
-                        )
-                        .tvFocusable(shape = RoundedCornerShape(11.dp)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = label,
-                        style = TextStyle(
-                            fontFamily = AppFontFamily,
-                            fontWeight = FontWeight.Medium,
-                            fontSize = 13.sp,
-                            lineHeight = 16.sp,
-                            color = textColor,
-                        ),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        textAlign = TextAlign.Center,
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .selectableGroup(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                options.forEachIndexed { index, option ->
+                    val isSelected = option == selectedOption
+                    val label = labelProvider(option)
+
+                    val textColor by animateColorAsState(
+                        targetValue = if (isSelected) OnboardingTokens.TextDarkButton else OnboardingTokens.TextMuted70,
+                        animationSpec = if (reduceMotion) tween(100) else tween(120),
+                        label = "segmentText_${label}",
                     )
+
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(44.dp)
+                            .clip(RoundedCornerShape(11.dp))
+                            .pressable(
+                                scaleDown = 0.96f,
+                                onClick = { onOptionSelected(option) }
+                            )
+                            .tvFocusable(shape = RoundedCornerShape(11.dp)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = label,
+                            style = TextStyle(
+                                fontFamily = AppFontFamily,
+                                fontWeight = FontWeight.Medium,
+                                fontSize = 13.sp,
+                                lineHeight = 16.sp,
+                                color = textColor,
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
                 }
             }
         }

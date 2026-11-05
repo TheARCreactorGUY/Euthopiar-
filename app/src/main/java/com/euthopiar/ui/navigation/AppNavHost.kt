@@ -12,7 +12,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.graphicsLayer
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -283,6 +286,23 @@ fun AppNavHost(
     ) {
         val profileManager = remember { com.euthopiar.data.profile.ProfileManager.getInstance(context) }
         val activeProfile by profileManager.activeProfile.collectAsState()
+        val unlockedProfileIds by profileManager.unlockedProfileIds.collectAsState()
+        val isCurrentProfileUnlocked = !activeProfile.isPinLocked || unlockedProfileIds.contains(activeProfile.id)
+        var showColdStartSwitcher by remember { mutableStateOf(false) }
+
+        LaunchedEffect(firstRunCompleted, isCurrentProfileUnlocked) {
+            when {
+                firstRunCompleted == false -> com.euthopiar.ui.splash.AppLaunchCoordinator.notifyDestinationMode(
+                    com.euthopiar.ui.splash.LaunchDestinationMode.ONBOARDING
+                )
+                firstRunCompleted == true && !isCurrentProfileUnlocked -> com.euthopiar.ui.splash.AppLaunchCoordinator.notifyDestinationMode(
+                    com.euthopiar.ui.splash.LaunchDestinationMode.PIN_LOCK
+                )
+                firstRunCompleted == true && isCurrentProfileUnlocked -> com.euthopiar.ui.splash.AppLaunchCoordinator.notifyDestinationMode(
+                    com.euthopiar.ui.splash.LaunchDestinationMode.HOME
+                )
+            }
+        }
 
         if (firstRunCompleted == null) {
             Box(
@@ -293,20 +313,33 @@ fun AppNavHost(
             return@CompositionLocalProvider
         }
 
+        var isOnboardingExiting by remember { mutableStateOf(false) }
+        val onboardingAlpha by animateFloatAsState(
+            targetValue = if (isOnboardingExiting) 0f else 1f,
+            animationSpec = tween<Float>(durationMillis = 300),
+            label = "onboardingExitAlpha"
+        )
+
         if (firstRunCompleted == false) {
-            com.euthopiar.ui.onboarding.OnboardingScreen(
-                onComplete = {
-                    coroutineScope.launch {
-                        preferencesRepository.setFirstRunCompleted(true)
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        alpha = onboardingAlpha; val s = 1f + (1f - onboardingAlpha) * 0.02f; scaleX = s; scaleY = s
                     }
-                }
-            )
+            ) {
+                com.euthopiar.ui.onboarding.OnboardingScreen(
+                    onComplete = {
+                        coroutineScope.launch {
+                            isOnboardingExiting = true
+                            delay(300L)
+                            preferencesRepository.setFirstRunCompleted(true)
+                        }
+                    }
+                )
+            }
             return@CompositionLocalProvider
         }
-
-        val unlockedProfileIds by profileManager.unlockedProfileIds.collectAsState()
-        val isCurrentProfileUnlocked = !activeProfile.isPinLocked || unlockedProfileIds.contains(activeProfile.id)
-        var showColdStartSwitcher by remember { mutableStateOf(false) }
 
         if (!isCurrentProfileUnlocked) {
             Box(
@@ -361,8 +394,9 @@ fun AppNavHost(
             }
         }
 
-        LaunchedEffect(firstRunCompleted, lastSavedVersion, walkthroughCompletedVersion) {
+        LaunchedEffect(firstRunCompleted, lastSavedVersion, walkthroughCompletedVersion, activeProfile.isKids) {
             if (firstRunCompleted != true) return@LaunchedEffect
+            if (activeProfile.isKids) return@LaunchedEffect
             val lastVer = lastSavedVersion ?: return@LaunchedEffect
             val completedVer = walkthroughCompletedVersion ?: return@LaunchedEffect
 
@@ -564,8 +598,26 @@ fun AppNavHost(
                         ) + fadeIn(animationSpec = tween(200))
                     }
                 },
-                exitTransition = { fadeOut(animationSpec = tween(180)) },
-                popEnterTransition = { fadeIn(animationSpec = tween(180)) },
+                exitTransition = {
+                    if (reduceMotion) {
+                        fadeOut(animationSpec = tween(180))
+                    } else {
+                        slideOutHorizontally(
+                            targetOffsetX = { -it / 4 },
+                            animationSpec = tween(280, easing = FastOutSlowInEasing)
+                        ) + fadeOut(animationSpec = tween(200))
+                    }
+                },
+                popEnterTransition = {
+                    if (reduceMotion) {
+                        fadeIn(animationSpec = tween(180))
+                    } else {
+                        slideInHorizontally(
+                            initialOffsetX = { -it / 4 },
+                            animationSpec = tween(250, easing = FastOutSlowInEasing)
+                        ) + fadeIn(animationSpec = tween(200))
+                    }
+                },
                 popExitTransition = {
                     if (reduceMotion) {
                         fadeOut(animationSpec = tween(180))
@@ -901,8 +953,26 @@ fun AppNavHost(
                         animationSpec = tween(280, easing = FastOutSlowInEasing)
                     ) + fadeIn(animationSpec = tween(200))
                 },
-                exitTransition = { fadeOut(animationSpec = tween(180)) },
-                popEnterTransition = { fadeIn(animationSpec = tween(180)) },
+                exitTransition = {
+                    if (reduceMotion) {
+                        fadeOut(animationSpec = tween(180))
+                    } else {
+                        slideOutHorizontally(
+                            targetOffsetX = { -it / 4 },
+                            animationSpec = tween(280, easing = FastOutSlowInEasing)
+                        ) + fadeOut(animationSpec = tween(200))
+                    }
+                },
+                popEnterTransition = {
+                    if (reduceMotion) {
+                        fadeIn(animationSpec = tween(180))
+                    } else {
+                        slideInHorizontally(
+                            initialOffsetX = { -it / 4 },
+                            animationSpec = tween(250, easing = FastOutSlowInEasing)
+                        ) + fadeIn(animationSpec = tween(200))
+                    }
+                },
                 popExitTransition = {
                     if (reduceMotion) fadeOut(animationSpec = tween(140)) else slideOutHorizontally(
                         targetOffsetX = { it },
@@ -923,8 +993,26 @@ fun AppNavHost(
                         animationSpec = tween(280, easing = FastOutSlowInEasing)
                     ) + fadeIn(animationSpec = tween(200))
                 },
-                exitTransition = { fadeOut(animationSpec = tween(180)) },
-                popEnterTransition = { fadeIn(animationSpec = tween(180)) },
+                exitTransition = {
+                    if (reduceMotion) {
+                        fadeOut(animationSpec = tween(180))
+                    } else {
+                        slideOutHorizontally(
+                            targetOffsetX = { -it / 4 },
+                            animationSpec = tween(280, easing = FastOutSlowInEasing)
+                        ) + fadeOut(animationSpec = tween(200))
+                    }
+                },
+                popEnterTransition = {
+                    if (reduceMotion) {
+                        fadeIn(animationSpec = tween(180))
+                    } else {
+                        slideInHorizontally(
+                            initialOffsetX = { -it / 4 },
+                            animationSpec = tween(250, easing = FastOutSlowInEasing)
+                        ) + fadeIn(animationSpec = tween(200))
+                    }
+                },
                 popExitTransition = {
                     if (reduceMotion) fadeOut(animationSpec = tween(140)) else slideOutHorizontally(
                         targetOffsetX = { it },
@@ -945,8 +1033,26 @@ fun AppNavHost(
                         animationSpec = tween(280, easing = FastOutSlowInEasing)
                     ) + fadeIn(animationSpec = tween(200))
                 },
-                exitTransition = { fadeOut(animationSpec = tween(180)) },
-                popEnterTransition = { fadeIn(animationSpec = tween(180)) },
+                exitTransition = {
+                    if (reduceMotion) {
+                        fadeOut(animationSpec = tween(180))
+                    } else {
+                        slideOutHorizontally(
+                            targetOffsetX = { -it / 4 },
+                            animationSpec = tween(280, easing = FastOutSlowInEasing)
+                        ) + fadeOut(animationSpec = tween(200))
+                    }
+                },
+                popEnterTransition = {
+                    if (reduceMotion) {
+                        fadeIn(animationSpec = tween(180))
+                    } else {
+                        slideInHorizontally(
+                            initialOffsetX = { -it / 4 },
+                            animationSpec = tween(250, easing = FastOutSlowInEasing)
+                        ) + fadeIn(animationSpec = tween(200))
+                    }
+                },
                 popExitTransition = {
                     if (reduceMotion) fadeOut(animationSpec = tween(140)) else slideOutHorizontally(
                         targetOffsetX = { it },
@@ -967,8 +1073,26 @@ fun AppNavHost(
                         animationSpec = tween(280, easing = FastOutSlowInEasing)
                     ) + fadeIn(animationSpec = tween(200))
                 },
-                exitTransition = { fadeOut(animationSpec = tween(180)) },
-                popEnterTransition = { fadeIn(animationSpec = tween(180)) },
+                exitTransition = {
+                    if (reduceMotion) {
+                        fadeOut(animationSpec = tween(180))
+                    } else {
+                        slideOutHorizontally(
+                            targetOffsetX = { -it / 4 },
+                            animationSpec = tween(280, easing = FastOutSlowInEasing)
+                        ) + fadeOut(animationSpec = tween(200))
+                    }
+                },
+                popEnterTransition = {
+                    if (reduceMotion) {
+                        fadeIn(animationSpec = tween(180))
+                    } else {
+                        slideInHorizontally(
+                            initialOffsetX = { -it / 4 },
+                            animationSpec = tween(250, easing = FastOutSlowInEasing)
+                        ) + fadeIn(animationSpec = tween(200))
+                    }
+                },
                 popExitTransition = {
                     if (reduceMotion) fadeOut(animationSpec = tween(140)) else slideOutHorizontally(
                         targetOffsetX = { it },
@@ -995,8 +1119,26 @@ fun AppNavHost(
                         animationSpec = tween(280, easing = FastOutSlowInEasing)
                     ) + fadeIn(animationSpec = tween(200))
                 },
-                exitTransition = { fadeOut(animationSpec = tween(180)) },
-                popEnterTransition = { fadeIn(animationSpec = tween(180)) },
+                exitTransition = {
+                    if (reduceMotion) {
+                        fadeOut(animationSpec = tween(180))
+                    } else {
+                        slideOutHorizontally(
+                            targetOffsetX = { -it / 4 },
+                            animationSpec = tween(280, easing = FastOutSlowInEasing)
+                        ) + fadeOut(animationSpec = tween(200))
+                    }
+                },
+                popEnterTransition = {
+                    if (reduceMotion) {
+                        fadeIn(animationSpec = tween(180))
+                    } else {
+                        slideInHorizontally(
+                            initialOffsetX = { -it / 4 },
+                            animationSpec = tween(250, easing = FastOutSlowInEasing)
+                        ) + fadeIn(animationSpec = tween(200))
+                    }
+                },
                 popExitTransition = {
                     if (reduceMotion) fadeOut(animationSpec = tween(140)) else slideOutHorizontally(
                         targetOffsetX = { it },
@@ -1024,8 +1166,26 @@ fun AppNavHost(
                         animationSpec = tween(280, easing = FastOutSlowInEasing)
                     ) + fadeIn(animationSpec = tween(200))
                 },
-                exitTransition = { fadeOut(animationSpec = tween(180)) },
-                popEnterTransition = { fadeIn(animationSpec = tween(180)) },
+                exitTransition = {
+                    if (reduceMotion) {
+                        fadeOut(animationSpec = tween(180))
+                    } else {
+                        slideOutHorizontally(
+                            targetOffsetX = { -it / 4 },
+                            animationSpec = tween(280, easing = FastOutSlowInEasing)
+                        ) + fadeOut(animationSpec = tween(200))
+                    }
+                },
+                popEnterTransition = {
+                    if (reduceMotion) {
+                        fadeIn(animationSpec = tween(180))
+                    } else {
+                        slideInHorizontally(
+                            initialOffsetX = { -it / 4 },
+                            animationSpec = tween(250, easing = FastOutSlowInEasing)
+                        ) + fadeIn(animationSpec = tween(200))
+                    }
+                },
                 popExitTransition = {
                     if (reduceMotion) fadeOut(animationSpec = tween(140)) else slideOutHorizontally(
                         targetOffsetX = { it },
@@ -1046,8 +1206,26 @@ fun AppNavHost(
                         animationSpec = tween(280, easing = FastOutSlowInEasing)
                     ) + fadeIn(animationSpec = tween(200))
                 },
-                exitTransition = { fadeOut(animationSpec = tween(180)) },
-                popEnterTransition = { fadeIn(animationSpec = tween(180)) },
+                exitTransition = {
+                    if (reduceMotion) {
+                        fadeOut(animationSpec = tween(180))
+                    } else {
+                        slideOutHorizontally(
+                            targetOffsetX = { -it / 4 },
+                            animationSpec = tween(280, easing = FastOutSlowInEasing)
+                        ) + fadeOut(animationSpec = tween(200))
+                    }
+                },
+                popEnterTransition = {
+                    if (reduceMotion) {
+                        fadeIn(animationSpec = tween(180))
+                    } else {
+                        slideInHorizontally(
+                            initialOffsetX = { -it / 4 },
+                            animationSpec = tween(250, easing = FastOutSlowInEasing)
+                        ) + fadeIn(animationSpec = tween(200))
+                    }
+                },
                 popExitTransition = {
                     if (reduceMotion) fadeOut(animationSpec = tween(140)) else slideOutHorizontally(
                         targetOffsetX = { it },
@@ -1076,8 +1254,26 @@ fun AppNavHost(
                         animationSpec = tween(280, easing = FastOutSlowInEasing)
                     ) + fadeIn(animationSpec = tween(200))
                 },
-                exitTransition = { fadeOut(animationSpec = tween(180)) },
-                popEnterTransition = { fadeIn(animationSpec = tween(180)) },
+                exitTransition = {
+                    if (reduceMotion) {
+                        fadeOut(animationSpec = tween(180))
+                    } else {
+                        slideOutHorizontally(
+                            targetOffsetX = { -it / 4 },
+                            animationSpec = tween(280, easing = FastOutSlowInEasing)
+                        ) + fadeOut(animationSpec = tween(200))
+                    }
+                },
+                popEnterTransition = {
+                    if (reduceMotion) {
+                        fadeIn(animationSpec = tween(180))
+                    } else {
+                        slideInHorizontally(
+                            initialOffsetX = { -it / 4 },
+                            animationSpec = tween(250, easing = FastOutSlowInEasing)
+                        ) + fadeIn(animationSpec = tween(200))
+                    }
+                },
                 popExitTransition = {
                     if (reduceMotion) fadeOut(animationSpec = tween(140)) else slideOutHorizontally(
                         targetOffsetX = { it },
@@ -1103,8 +1299,26 @@ fun AppNavHost(
                         ) + fadeIn(animationSpec = tween(200))
                     }
                 },
-                exitTransition = { fadeOut(animationSpec = tween(180)) },
-                popEnterTransition = { fadeIn(animationSpec = tween(180)) },
+                exitTransition = {
+                    if (reduceMotion) {
+                        fadeOut(animationSpec = tween(180))
+                    } else {
+                        slideOutHorizontally(
+                            targetOffsetX = { -it / 4 },
+                            animationSpec = tween(280, easing = FastOutSlowInEasing)
+                        ) + fadeOut(animationSpec = tween(200))
+                    }
+                },
+                popEnterTransition = {
+                    if (reduceMotion) {
+                        fadeIn(animationSpec = tween(180))
+                    } else {
+                        slideInHorizontally(
+                            initialOffsetX = { -it / 4 },
+                            animationSpec = tween(250, easing = FastOutSlowInEasing)
+                        ) + fadeIn(animationSpec = tween(200))
+                    }
+                },
                 popExitTransition = {
                     if (reduceMotion) {
                         fadeOut(animationSpec = tween(180))

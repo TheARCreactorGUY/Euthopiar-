@@ -23,19 +23,18 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -45,15 +44,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowBack
-import androidx.compose.material.icons.filled.PlayArrow
+import com.euthopiar.ui.icons.LucideIcons
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -72,35 +70,31 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
-import coil3.compose.AsyncImage
 import com.euthopiar.core.model.MediaItem
 import com.euthopiar.core.model.MediaType
+import com.euthopiar.ui.components.AppAsyncImage
+import com.euthopiar.ui.components.tvFocusable
 import com.euthopiar.ui.library.sanitizeTitle
 import com.euthopiar.ui.theme.AppFontFamily
 import com.euthopiar.ui.theme.LocalReduceMotion
 import com.euthopiar.ui.theme.playButtonSpringPress
 import com.euthopiar.ui.theme.pressable
-import com.euthopiar.ui.components.tvFocusable
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeTint
 import dev.chrisbanes.haze.hazeEffect
-import kotlinx.coroutines.delay
 
 object SearchTokens {
     val BaseBackground = Color(0xFF0B0B0F)
@@ -115,12 +109,13 @@ object SearchTokens {
     val TextMuted = Color.White.copy(alpha = 0.55f)
     val TextLabel = Color.White.copy(alpha = 0.45f)
     val DarkText = Color(0xFF0B0B0F)
+    val RatingGold = Color(0xFFFFB800)
 
     val HazeBlue = Color(0xFF2E3D64)
     val HazeRose = Color(0xFF6B2F48)
 
-    val DropdownRadius = 12.dp
-    val SearchBarRadius = 16.dp
+    val DropdownRadius = 10.dp
+    val SearchBarRadius = 14.dp
     val BackButtonRadius = 14.dp
     val PopoverRadius = 14.dp
 
@@ -128,8 +123,8 @@ object SearchTokens {
         fontFamily = AppFontFamily,
         fontWeight = FontWeight.Medium,
         fontSize = 40.sp,
-        lineHeight = 40.sp,
-        letterSpacing = (-0.03).sp,
+        lineHeight = 46.sp,
+        letterSpacing = (-0.50).sp,
         color = Color.White
     )
 
@@ -137,8 +132,8 @@ object SearchTokens {
         fontFamily = AppFontFamily,
         fontWeight = FontWeight.Medium,
         fontSize = 34.sp,
-        lineHeight = 36.sp,
-        letterSpacing = (-0.03).sp,
+        lineHeight = 38.sp,
+        letterSpacing = (-0.40).sp,
         color = Color.White
     )
 
@@ -178,6 +173,7 @@ object SearchTokens {
 
 /**
  * Ambient Haze Background with 2-3 soft color blobs drifting slowly in the background.
+ * Automatically bypassed in AMOLED mode to maintain 100% pitch black `#000000` pixels.
  */
 @Composable
 fun SearchAmbientHazeBackground(
@@ -186,6 +182,8 @@ fun SearchAmbientHazeBackground(
     content: @Composable () -> Unit
 ) {
     val reduceMotion = LocalReduceMotion.current
+    val isAmoled = com.euthopiar.ui.theme.LocalAmoledMode.current
+
     val infiniteTransition = rememberInfiniteTransition(label = "ambientHaze")
 
     val driftOffset1 = infiniteTransition.animateFloat(
@@ -208,7 +206,6 @@ fun SearchAmbientHazeBackground(
         label = "drift2"
     )
 
-    val isAmoled = com.euthopiar.ui.theme.LocalAmoledMode.current
     val baseBg = if (isAmoled) Color.Black else SearchTokens.BaseBackground
 
     Box(
@@ -216,36 +213,37 @@ fun SearchAmbientHazeBackground(
             .fillMaxSize()
             .background(baseBg)
             .drawBehind {
-                val washAlphaScale = if (isAmoled) 0.35f else 1.0f
-                val effectiveDrift1 = if (reduceMotion) 0f else driftOffset1.value
-                val effectiveDrift2 = if (reduceMotion) 0f else driftOffset2.value
-                val maxDim = maxOf(size.width, size.height)
+                if (!isAmoled) {
+                    val effectiveDrift1 = if (reduceMotion) 0f else driftOffset1.value
+                    val effectiveDrift2 = if (reduceMotion) 0f else driftOffset2.value
+                    val maxDim = maxOf(size.width, size.height)
 
-                // Soft Indigo/Blue Haze atmospheric wash near Top-Right (no circular boundaries)
-                drawRect(
-                    brush = Brush.radialGradient(
-                        0.00f to SearchTokens.HazeBlue.copy(alpha = 0.24f * washAlphaScale),
-                        0.25f to SearchTokens.HazeBlue.copy(alpha = 0.15f * washAlphaScale),
-                        0.50f to SearchTokens.HazeBlue.copy(alpha = 0.06f * washAlphaScale),
-                        0.75f to SearchTokens.HazeBlue.copy(alpha = 0.015f * washAlphaScale),
-                        1.00f to Color.Transparent,
-                        center = Offset(size.width * 0.95f + effectiveDrift1, size.height * 0.10f + effectiveDrift2),
-                        radius = maxDim * 1.15f
+                    // Soft Indigo/Blue Haze atmospheric wash near Top-Right
+                    drawRect(
+                        brush = Brush.radialGradient(
+                            0.00f to SearchTokens.HazeBlue.copy(alpha = 0.24f),
+                            0.25f to SearchTokens.HazeBlue.copy(alpha = 0.15f),
+                            0.50f to SearchTokens.HazeBlue.copy(alpha = 0.06f),
+                            0.75f to SearchTokens.HazeBlue.copy(alpha = 0.015f),
+                            1.00f to Color.Transparent,
+                            center = Offset(size.width * 0.95f + effectiveDrift1, size.height * 0.10f + effectiveDrift2),
+                            radius = maxDim * 1.15f
+                        )
                     )
-                )
 
-                // Soft Rose/Pink Haze atmospheric wash near Lower-Left (no circular boundaries)
-                drawRect(
-                    brush = Brush.radialGradient(
-                        0.00f to SearchTokens.HazeRose.copy(alpha = 0.20f * washAlphaScale),
-                        0.25f to SearchTokens.HazeRose.copy(alpha = 0.12f * washAlphaScale),
-                        0.50f to SearchTokens.HazeRose.copy(alpha = 0.05f * washAlphaScale),
-                        0.75f to SearchTokens.HazeRose.copy(alpha = 0.01f * washAlphaScale),
-                        1.00f to Color.Transparent,
-                        center = Offset(size.width * 0.05f + effectiveDrift2, size.height * 0.85f + effectiveDrift1),
-                        radius = maxDim * 1.05f
+                    // Soft Rose/Pink Haze atmospheric wash near Lower-Left
+                    drawRect(
+                        brush = Brush.radialGradient(
+                            0.00f to SearchTokens.HazeRose.copy(alpha = 0.20f),
+                            0.25f to SearchTokens.HazeRose.copy(alpha = 0.12f),
+                            0.50f to SearchTokens.HazeRose.copy(alpha = 0.05f),
+                            0.75f to SearchTokens.HazeRose.copy(alpha = 0.01f),
+                            1.00f to Color.Transparent,
+                            center = Offset(size.width * 0.05f + effectiveDrift2, size.height * 0.85f + effectiveDrift1),
+                            radius = maxDim * 1.05f
+                        )
                     )
-                )
+                }
             }
     ) {
         content()
@@ -253,7 +251,7 @@ fun SearchAmbientHazeBackground(
 }
 
 /**
- * Standard glass surface modifier matching Part 1 global design language.
+ * Standard glass surface modifier with top-lit vertical gradient hairline border.
  */
 fun Modifier.searchGlassSurface(
     shape: Shape = RoundedCornerShape(SearchTokens.SearchBarRadius),
@@ -261,6 +259,13 @@ fun Modifier.searchGlassSurface(
     isActive: Boolean = false,
     hasGlow: Boolean = false
 ): Modifier {
+    val borderBrush = Brush.verticalGradient(
+        listOf(
+            Color.White.copy(alpha = if (isActive) 0.40f else 0.24f),
+            Color.White.copy(alpha = if (isActive) 0.18f else 0.08f)
+        )
+    )
+
     return this
         .clip(shape)
         .then(
@@ -279,15 +284,15 @@ fun Modifier.searchGlassSurface(
                 Modifier.drawBehind {
                     drawRoundRect(
                         color = Color.White.copy(alpha = 0.08f),
-                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(16.dp.toPx()),
-                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3.dp.toPx())
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(14.dp.toPx()),
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx())
                     )
                 }
             } else Modifier
         )
         .border(
             width = SearchTokens.HairlineThickness,
-            color = if (isActive) SearchTokens.GlassBorderActive else SearchTokens.GlassBorder,
+            brush = borderBrush,
             shape = shape
         )
 }
@@ -307,23 +312,8 @@ fun SearchHairlineDivider(
 }
 
 /**
- * Press feedback animation modifier using app standard pressable (0.96f scale, Confirm haptics).
- */
-@Composable
-fun searchPressModifier(
-    onClick: () -> Unit,
-    onLongClick: (() -> Unit)? = null,
-    role: Role = Role.Button,
-    onClickLabel: String? = null
-): Modifier = Modifier.pressable(
-    role = role,
-    onClickLabel = onClickLabel,
-    onLongClick = onLongClick,
-    onClick = onClick
-)
-
-/**
  * Equal-width rounded glass dropdown box with anchored popover.
+ * Supports start, center, and trailing inward anchors to prevent screen edge overflow.
  */
 @Composable
 fun SearchGlassDropdown(
@@ -336,22 +326,26 @@ fun SearchGlassDropdown(
     onDismiss: () -> Unit,
     hazeState: HazeState?,
     modifier: Modifier = Modifier,
-    isTrailing: Boolean = false
+    isTrailing: Boolean = false,
+    isCenter: Boolean = false
 ) {
-    val isFiltered = !selectedValue.isNullOrBlank() && selectedValue != "All" && selectedValue != "All types" && selectedValue != "All genres" && selectedValue != "Any year"
+    val isFiltered = !selectedValue.isNullOrBlank() &&
+            selectedValue != "All" &&
+            selectedValue != "All types" &&
+            selectedValue != "All genres" &&
+            selectedValue != "Any year"
     val displayLabel = if (isFiltered) selectedValue!! else label
     val reduceMotion = LocalReduceMotion.current
 
     val chevronAngle by animateFloatAsState(
         targetValue = if (isExpanded) 180f else 0f,
-        animationSpec = if (reduceMotion) tween(0) else tween(180, easing = FastOutSlowInEasing),
+        animationSpec = if (reduceMotion) tween(0) else spring(dampingRatio = 0.82f, stiffness = 380f),
         label = "chevronRotation"
     )
 
-    // Outer box has 48dp height for accessible tap target per design guidelines
+    // Outer box has 48dp height for accessible tap target
     Box(
         modifier = modifier
-            .fillMaxWidth()
             .height(48.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -364,6 +358,7 @@ fun SearchGlassDropdown(
                     hazeState = hazeState,
                     isActive = isFiltered || isExpanded
                 )
+                .tvFocusable(shape = RoundedCornerShape(SearchTokens.DropdownRadius))
                 .pressable(
                     role = Role.DropdownList,
                     onClickLabel = "$label filter, currently $displayLabel",
@@ -383,7 +378,7 @@ fun SearchGlassDropdown(
                         if (reduceMotion) {
                             fadeIn(tween(0)) togetherWith fadeOut(tween(0))
                         } else {
-                            fadeIn(tween(160)) togetherWith fadeOut(tween(130))
+                            fadeIn(tween(140)) togetherWith fadeOut(tween(110))
                         }
                     },
                     modifier = Modifier.weight(1f),
@@ -422,14 +417,14 @@ fun SearchGlassDropdown(
                 if (reduceMotion) {
                     popupAnim.snapTo(1f)
                 } else {
-                    popupAnim.animateTo(1f, tween(180, easing = FastOutSlowInEasing))
+                    popupAnim.animateTo(1f, spring(dampingRatio = 0.78f, stiffness = 460f))
                 }
             } else if (isPopupRendered) {
                 if (reduceMotion) {
                     popupAnim.snapTo(0f)
                     isPopupRendered = false
                 } else {
-                    popupAnim.animateTo(0f, tween(140, easing = FastOutSlowInEasing))
+                    popupAnim.animateTo(0f, tween(120, easing = FastOutSlowInEasing))
                     isPopupRendered = false
                 }
             }
@@ -437,27 +432,30 @@ fun SearchGlassDropdown(
 
         if (isPopupRendered) {
             val density = LocalDensity.current
-            val popoverScale = 0.95f + (0.05f * popupAnim.value)
+            val popoverScale = 0.94f + (0.06f * popupAnim.value)
             val popoverAlpha = popupAnim.value
             val popoverOffsetY = (1f - popupAnim.value) * (-6f) * density.density
 
-            val popupAlignment = if (isTrailing) Alignment.TopEnd else Alignment.TopStart
-            val origin = if (isTrailing) {
-                androidx.compose.ui.graphics.TransformOrigin(1f, 0f)
-            } else {
-                androidx.compose.ui.graphics.TransformOrigin(0f, 0f)
+            val popupAlignment = when {
+                isTrailing -> Alignment.TopEnd
+                isCenter -> Alignment.TopCenter
+                else -> Alignment.TopStart
+            }
+            val origin = when {
+                isTrailing -> TransformOrigin(1f, 0f)
+                isCenter -> TransformOrigin(0.5f, 0f)
+                else -> TransformOrigin(0f, 0f)
             }
 
             Popup(
                 alignment = popupAlignment,
-                offset = IntOffset(0, with(density) { 48.dp.roundToPx() }), // anchored directly under the 48dp target
+                offset = IntOffset(0, with(density) { 48.dp.roundToPx() }),
                 onDismissRequest = onDismiss,
                 properties = PopupProperties(focusable = true)
             ) {
-
                 val isAmoled = com.euthopiar.ui.theme.LocalAmoledMode.current
                 val popoverShape = RoundedCornerShape(SearchTokens.PopoverRadius)
-                val glassFill = if (isAmoled) Color.Black.copy(alpha = 0.85f) else Color(0xFF0F101B).copy(alpha = 0.70f)
+                val glassFill = if (isAmoled) Color(0xFF07070A) else Color(0xFF141522).copy(alpha = 0.96f)
                 val borderBrush = Brush.verticalGradient(
                     listOf(
                         Color.White.copy(alpha = 0.35f),
@@ -481,7 +479,7 @@ fun SearchGlassDropdown(
                         .background(
                             Brush.verticalGradient(
                                 listOf(
-                                    Color.White.copy(alpha = 0.08f),
+                                    Color.White.copy(alpha = 0.06f),
                                     Color.Transparent
                                 )
                             )
@@ -505,13 +503,9 @@ fun SearchGlassDropdown(
                                 option.equals(selectedValue, ignoreCase = true)
                             }
 
-                            val rowAnimSpec: AnimationSpec<Float> = remember(index, reduceMotion) {
-                                if (reduceMotion) tween<Float>(0)
-                                else tween<Float>(durationMillis = 140, delayMillis = if (index < 5) index * 20 else 100)
-                            }
                             val rowAlpha by animateFloatAsState(
                                 targetValue = if (isExpanded) 1f else 0f,
-                                animationSpec = rowAnimSpec,
+                                animationSpec = if (reduceMotion) tween(0) else tween(durationMillis = 140, delayMillis = if (index < 5) index * 15 else 80),
                                 label = "rowAlpha_$index"
                             )
 
@@ -520,6 +514,7 @@ fun SearchGlassDropdown(
                                     .fillMaxWidth()
                                     .height(44.dp)
                                     .graphicsLayer { alpha = rowAlpha }
+                                    .tvFocusable(shape = RoundedCornerShape(8.dp))
                                     .pressable(
                                         role = Role.RadioButton,
                                         onClickLabel = "Select $option",
@@ -547,7 +542,7 @@ fun SearchGlassDropdown(
                                 if (isChosen) {
                                     val checkScale by animateFloatAsState(
                                         targetValue = 1f,
-                                        animationSpec = if (reduceMotion) tween(0) else spring(dampingRatio = 0.5f, stiffness = 500f),
+                                        animationSpec = if (reduceMotion) tween(0) else spring(dampingRatio = 0.6f, stiffness = 500f),
                                         label = "checkScale"
                                     )
                                     Icon(
@@ -578,7 +573,7 @@ fun SearchGlassDropdown(
 }
 
 /**
- * Recent search vertical list row.
+ * Recent search vertical list row flush with the 20dp global rail.
  */
 @Composable
 fun RecentSearchRow(
@@ -592,12 +587,12 @@ fun RecentSearchRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(48.dp)
+                .tvFocusable(shape = RoundedCornerShape(8.dp))
                 .pressable(
                     role = Role.Button,
                     onClickLabel = "Search for $query",
                     onClick = onClick
-                )
-                .padding(horizontal = 4.dp),
+                ),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
@@ -624,7 +619,8 @@ fun RecentSearchRow(
 
             Box(
                 modifier = Modifier
-                    .size(44.dp)
+                    .size(48.dp)
+                    .tvFocusable(shape = CircleShape)
                     .pressable(
                         role = Role.Button,
                         onClickLabel = "Remove $query from recent searches",
@@ -646,7 +642,7 @@ fun RecentSearchRow(
 }
 
 /**
- * Trending today ranked list row ("01", "02", "03"...).
+ * Trending today ranked list row with 2:3 poster art and tabular numerals.
  */
 @Composable
 fun TrendingRankedRow(
@@ -681,7 +677,8 @@ fun TrendingRankedRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(64.dp)
+                .height(68.dp)
+                .tvFocusable(shape = RoundedCornerShape(8.dp))
                 .pressable(
                     onClickLabel = "Open ${item.title}",
                     onClick = onClick
@@ -689,7 +686,7 @@ fun TrendingRankedRow(
                 .padding(vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Rank numeral
+            // Rank numeral with tabular digits
             Text(
                 text = rankStr,
                 style = TextStyle(
@@ -698,36 +695,28 @@ fun TrendingRankedRow(
                     fontSize = 28.sp,
                     lineHeight = 30.sp,
                     letterSpacing = (-0.02).sp,
-                    color = Color.White.copy(alpha = rankAlpha)
+                    color = Color.White.copy(alpha = rankAlpha),
+                    fontFeatureSettings = "tnum"
                 ),
                 modifier = Modifier.width(42.dp)
             )
 
-            // Small poster thumbnail 36x50dp, 10dp radius with faint hairline
+            // Poster thumbnail 36x54dp (exact 2:3 cinematic ratio)
             Box(
                 modifier = Modifier
-                    .size(width = 36.dp, height = 50.dp)
-                    .clip(RoundedCornerShape(10.dp))
+                    .size(width = 36.dp, height = 54.dp)
+                    .clip(RoundedCornerShape(8.dp))
                     .background(Color(0xFF14151F))
-                    .border(SearchTokens.HairlineThickness, SearchTokens.HairlineColor, RoundedCornerShape(10.dp)),
+                    .border(SearchTokens.HairlineThickness, SearchTokens.HairlineColor, RoundedCornerShape(8.dp)),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    imageVector = Icons.Outlined.Movie,
-                    contentDescription = null,
-                    tint = Color.White.copy(alpha = 0.25f),
-                    modifier = Modifier.size(18.dp)
-                )
                 val poster = item.posterUrl ?: item.backdropUrl
-                if (!poster.isNullOrBlank()) {
-                    AsyncImage(
-                        model = poster,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
-
+                AppAsyncImage(
+                    model = poster,
+                    contentDescription = item.title,
+                    titleForFallback = item.title,
+                    modifier = Modifier.fillMaxSize()
+                )
             }
 
             Spacer(modifier = Modifier.width(14.dp))
@@ -759,7 +748,7 @@ fun TrendingRankedRow(
 }
 
 /**
- * First result row: Best Match with poster 62x88, Play pill button, and rating.
+ * First result row: Best Match with exact 2:3 poster (62x93dp), isolated Play button, and golden star rating.
  */
 @Composable
 fun BestMatchResultRow(
@@ -789,37 +778,30 @@ fun BestMatchResultRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .tvFocusable(shape = RoundedCornerShape(10.dp))
                 .pressable(
                     onClickLabel = "Open ${item.title}",
                     onClick = onClick
                 )
-                .padding(vertical = 14.dp),
+                .padding(vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Poster 62 x 88 px, 10 px radius with faint hairline
+            // Poster 62 x 93 px (exact 2:3 cinematic ratio)
             Box(
                 modifier = Modifier
-                    .size(width = 62.dp, height = 88.dp)
+                    .size(width = 62.dp, height = 93.dp)
                     .clip(RoundedCornerShape(10.dp))
                     .background(Color(0xFF14151F))
                     .border(SearchTokens.HairlineThickness, SearchTokens.HairlineColor, RoundedCornerShape(10.dp)),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    imageVector = Icons.Outlined.Movie,
-                    contentDescription = null,
-                    tint = Color.White.copy(alpha = 0.25f),
-                    modifier = Modifier.size(28.dp)
-                )
                 val poster = item.posterUrl ?: item.backdropUrl
-                if (!poster.isNullOrBlank()) {
-                    AsyncImage(
-                        model = poster,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
+                AppAsyncImage(
+                    model = poster,
+                    contentDescription = item.title,
+                    titleForFallback = item.title,
+                    modifier = Modifier.fillMaxSize()
+                )
             }
 
             Spacer(modifier = Modifier.width(14.dp))
@@ -852,46 +834,57 @@ fun BestMatchResultRow(
                     overflow = TextOverflow.Ellipsis
                 )
 
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(6.dp))
 
-                // Small white pill "Play" button (white fill, dark text)
+                // Play pill button with 44dp hit area floor & isolated click consumption
                 Box(
                     modifier = Modifier
-                        .height(30.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(Color.White)
-                        .playButtonSpringPress(
-                            role = Role.Button,
-                            onClickLabel = "Play ${item.title}",
-                            onClick = onPlay
-                        )
-                        .padding(horizontal = 12.dp),
-                    contentAlignment = Alignment.Center
+                        .height(44.dp)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { /* absorb taps to prevent row click bubbling */ },
+                    contentAlignment = Alignment.CenterStart
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.PlayArrow,
-                            contentDescription = null,
-                            tint = SearchTokens.DarkText,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Text(
-                            text = "Play",
-                            style = TextStyle(
-                                fontFamily = AppFontFamily,
-                                fontWeight = FontWeight.Medium,
-                                fontSize = 12.sp,
-                                color = SearchTokens.DarkText
+                    Box(
+                        modifier = Modifier
+                            .height(30.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color.White)
+                            .tvFocusable(shape = RoundedCornerShape(8.dp))
+                            .playButtonSpringPress(
+                                role = Role.Button,
+                                onClickLabel = "Play ${item.title}",
+                                onClick = onPlay
                             )
-                        )
+                            .padding(horizontal = 14.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = LucideIcons.Play,
+                                contentDescription = null,
+                                tint = SearchTokens.DarkText,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = "Play",
+                                style = TextStyle(
+                                    fontFamily = AppFontFamily,
+                                    fontWeight = FontWeight.Medium,
+                                    fontSize = 12.sp,
+                                    color = SearchTokens.DarkText
+                                )
+                            )
+                        }
                     }
                 }
             }
 
-            // Rating aligned to right
+            // Rating aligned to right with filled star and tabular numbers
             if (ratingNum != null) {
                 Spacer(modifier = Modifier.width(8.dp))
                 Row(
@@ -899,9 +892,9 @@ fun BestMatchResultRow(
                     horizontalArrangement = Arrangement.spacedBy(3.dp)
                 ) {
                     Icon(
-                        imageVector = Icons.Outlined.StarBorder,
+                        imageVector = Icons.Filled.Star,
                         contentDescription = "Rating $ratingNum",
-                        tint = Color.White,
+                        tint = SearchTokens.RatingGold,
                         modifier = Modifier.size(14.dp)
                     )
                     Text(
@@ -910,7 +903,8 @@ fun BestMatchResultRow(
                             fontFamily = AppFontFamily,
                             fontWeight = FontWeight.Medium,
                             fontSize = 12.sp,
-                            color = Color.White
+                            color = Color.White,
+                            fontFeatureSettings = "tnum"
                         )
                     )
                 }
@@ -922,7 +916,7 @@ fun BestMatchResultRow(
 }
 
 /**
- * Compact result row: poster 40x56, title, metadata, star rating on right.
+ * Compact result row: poster 40x60 (2:3 ratio), title, quality metadata, and filled star rating.
  */
 @Composable
 fun CompactResultRow(
@@ -940,6 +934,9 @@ fun CompactResultRow(
     val metadata = buildString {
         append(typeLabel)
         item.year?.let { append(" · $it") }
+        if (!item.quality.isNullOrBlank()) {
+            append(" · ${item.quality}")
+        }
     }
 
     val ratingNum = item.rating?.toFloatOrNull()?.let { String.format("%.1f", it) }
@@ -948,7 +945,8 @@ fun CompactResultRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(64.dp)
+                .height(68.dp)
+                .tvFocusable(shape = RoundedCornerShape(8.dp))
                 .pressable(
                     onClickLabel = "Open ${item.title}",
                     onClick = onClick
@@ -956,30 +954,22 @@ fun CompactResultRow(
                 .padding(vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Poster 40 x 56 px, 8 px radius
+            // Poster 40 x 60 px (exact 2:3 cinematic ratio)
             Box(
                 modifier = Modifier
-                    .size(width = 40.dp, height = 56.dp)
+                    .size(width = 40.dp, height = 60.dp)
                     .clip(RoundedCornerShape(8.dp))
                     .background(Color(0xFF14151F))
                     .border(SearchTokens.HairlineThickness, SearchTokens.HairlineColor, RoundedCornerShape(8.dp)),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    imageVector = Icons.Outlined.Movie,
-                    contentDescription = null,
-                    tint = Color.White.copy(alpha = 0.25f),
-                    modifier = Modifier.size(20.dp)
-                )
                 val poster = item.posterUrl ?: item.backdropUrl
-                if (!poster.isNullOrBlank()) {
-                    AsyncImage(
-                        model = poster,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
+                AppAsyncImage(
+                    model = poster,
+                    contentDescription = item.title,
+                    titleForFallback = item.title,
+                    modifier = Modifier.fillMaxSize()
+                )
             }
 
             Spacer(modifier = Modifier.width(14.dp))
@@ -1012,9 +1002,9 @@ fun CompactResultRow(
                     horizontalArrangement = Arrangement.spacedBy(3.dp)
                 ) {
                     Icon(
-                        imageVector = Icons.Outlined.StarBorder,
+                        imageVector = Icons.Filled.Star,
                         contentDescription = "Rating $ratingNum",
-                        tint = Color.White,
+                        tint = SearchTokens.RatingGold,
                         modifier = Modifier.size(13.dp)
                     )
                     Text(
@@ -1023,7 +1013,8 @@ fun CompactResultRow(
                             fontFamily = AppFontFamily,
                             fontWeight = FontWeight.Medium,
                             fontSize = 11.5.sp,
-                            color = Color.White
+                            color = Color.White,
+                            fontFeatureSettings = "tnum"
                         )
                     )
                 }
@@ -1035,54 +1026,28 @@ fun CompactResultRow(
 }
 
 /**
- * Result skeleton row with 1.4s shimmer animation.
+ * Calm, minimal placeholder row respecting v1.0.7 loading rules (no infinite shimmer loops).
  */
 @Composable
 fun ResultSkeletonRow(
     isFirst: Boolean,
     modifier: Modifier = Modifier
 ) {
-    val reduceMotion = LocalReduceMotion.current
-    val transition = rememberInfiniteTransition(label = "skeletonShimmer")
-    val translateAnim by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1000f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1400, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "shimmerTranslate"
-    )
-
-    val shimmerBrush = if (reduceMotion) {
-        Brush.linearGradient(
-            colors = listOf(Color(0xFF1B1C26), Color(0xFF1B1C26))
-        )
-    } else {
-        Brush.linearGradient(
-            colors = listOf(
-                Color(0xFF181924),
-                Color(0xFF27293A),
-                Color(0xFF181924)
-            ),
-            start = Offset(translateAnim - 300f, 0f),
-            end = Offset(translateAnim, 0f)
-        )
-    }
+    val blockColor = Color(0xFF161722)
 
     Column(modifier = modifier.fillMaxWidth()) {
         if (isFirst) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 14.dp),
+                    .padding(vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Box(
                     modifier = Modifier
-                        .size(width = 62.dp, height = 88.dp)
+                        .size(width = 62.dp, height = 93.dp)
                         .clip(RoundedCornerShape(10.dp))
-                        .background(shimmerBrush)
+                        .background(blockColor)
                 )
 
                 Spacer(modifier = Modifier.width(14.dp))
@@ -1092,7 +1057,7 @@ fun ResultSkeletonRow(
                         modifier = Modifier
                             .size(width = 70.dp, height = 10.dp)
                             .clip(RoundedCornerShape(4.dp))
-                            .background(shimmerBrush)
+                            .background(blockColor)
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Box(
@@ -1100,21 +1065,21 @@ fun ResultSkeletonRow(
                             .fillMaxWidth(0.75f)
                             .height(16.dp)
                             .clip(RoundedCornerShape(4.dp))
-                            .background(shimmerBrush)
+                            .background(blockColor)
                     )
                     Spacer(modifier = Modifier.height(6.dp))
                     Box(
                         modifier = Modifier
                             .size(width = 90.dp, height = 11.dp)
                             .clip(RoundedCornerShape(4.dp))
-                            .background(shimmerBrush)
+                            .background(blockColor)
                     )
                     Spacer(modifier = Modifier.height(10.dp))
                     Box(
                         modifier = Modifier
                             .size(width = 60.dp, height = 26.dp)
                             .clip(RoundedCornerShape(8.dp))
-                            .background(shimmerBrush)
+                            .background(blockColor)
                     )
                 }
             }
@@ -1122,15 +1087,15 @@ fun ResultSkeletonRow(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(64.dp)
+                    .height(68.dp)
                     .padding(vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Box(
                     modifier = Modifier
-                        .size(width = 40.dp, height = 56.dp)
+                        .size(width = 40.dp, height = 60.dp)
                         .clip(RoundedCornerShape(8.dp))
-                        .background(shimmerBrush)
+                        .background(blockColor)
                 )
 
                 Spacer(modifier = Modifier.width(14.dp))
@@ -1141,14 +1106,14 @@ fun ResultSkeletonRow(
                             .fillMaxWidth(0.65f)
                             .height(14.dp)
                             .clip(RoundedCornerShape(4.dp))
-                            .background(shimmerBrush)
+                            .background(blockColor)
                     )
                     Spacer(modifier = Modifier.height(6.dp))
                     Box(
                         modifier = Modifier
                             .size(width = 80.dp, height = 10.dp)
                             .clip(RoundedCornerShape(4.dp))
-                            .background(shimmerBrush)
+                            .background(blockColor)
                     )
                 }
 
@@ -1158,7 +1123,7 @@ fun ResultSkeletonRow(
                     modifier = Modifier
                         .size(width = 30.dp, height = 12.dp)
                         .clip(RoundedCornerShape(4.dp))
-                        .background(shimmerBrush)
+                        .background(blockColor)
                 )
             }
         }
@@ -1169,6 +1134,7 @@ fun ResultSkeletonRow(
 
 /**
  * Glass snackbar toast for "Recent searches cleared" with Undo button.
+ * Includes imePadding to ride cleanly above the keyboard.
  */
 @Composable
 fun SearchGlassToast(
@@ -1179,17 +1145,23 @@ fun SearchGlassToast(
     hazeState: HazeState?,
     modifier: Modifier = Modifier
 ) {
+    val reduceMotion = LocalReduceMotion.current
+
     AnimatedVisibility(
         visible = isVisible,
-        enter = slideInVertically(
-            initialOffsetY = { it },
-            animationSpec = tween(220, easing = FastOutSlowInEasing)
-        ) + fadeIn(tween(200)),
-        exit = slideOutVertically(
-            targetOffsetY = { it },
-            animationSpec = tween(130, easing = FastOutSlowInEasing)
-        ) + fadeOut(tween(130)),
-        modifier = modifier
+        enter = if (reduceMotion) fadeIn(tween(0)) else (
+            slideInVertically(
+                initialOffsetY = { it },
+                animationSpec = spring(dampingRatio = 0.82f, stiffness = 400f)
+            ) + fadeIn(tween(180))
+        ),
+        exit = if (reduceMotion) fadeOut(tween(0)) else (
+            slideOutVertically(
+                targetOffsetY = { it },
+                animationSpec = tween(140, easing = FastOutSlowInEasing)
+            ) + fadeOut(tween(140))
+        ),
+        modifier = modifier.imePadding()
     ) {
         Box(
             modifier = Modifier
@@ -1225,6 +1197,7 @@ fun SearchGlassToast(
                             color = Color.White
                         ),
                         modifier = Modifier
+                            .tvFocusable(shape = RoundedCornerShape(6.dp))
                             .pressable(
                                 role = Role.Button,
                                 onClick = onActionClick

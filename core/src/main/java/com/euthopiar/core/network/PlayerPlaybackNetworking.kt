@@ -149,6 +149,17 @@ object PlayerPlaybackNetworking {
         }
     }
 
+    const val NATIVE_PLAYER_USER_AGENT = "libmpv"
+    private val nativeUaPreferredHosts = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    fun requiresNativePlayerUserAgent(host: String): Boolean {
+        val h = host.lowercase()
+        return h in nativeUaPreferredHosts ||
+            h.contains("hakunaymatata.com") ||
+            h.contains("aoneroom.com") ||
+            h.contains("inmoviebox.com")
+    }
+
     /**
      * Root foundational OkHttpClient owning the shared ConnectionPool, DNS router, and TLS settings.
      */
@@ -193,6 +204,27 @@ object PlayerPlaybackNetworking {
 
                 var resp = requestChain.proceed(taggedRequest)
 
+                if ((resp.code == 428 || resp.code == 403) && (taggedRequest.header("User-Agent") ?: "").startsWith("Mozilla/5.0")) {
+                    val targetHost = resp.request.url.host.lowercase()
+                    val wasPreKnown = requiresNativePlayerUserAgent(targetHost)
+                    nativeUaPreferredHosts.add(targetHost)
+                    val retryReq = taggedRequest.newBuilder()
+                        .header("User-Agent", NATIVE_PLAYER_USER_AGENT)
+                        .removeHeader("Referer")
+                        .removeHeader("Origin")
+                        .build()
+                    val retryResp = requestChain.proceed(retryReq)
+                    if (retryResp.isSuccessful || retryResp.code == 206) {
+                        resp.close()
+                        return@addInterceptor retryResp
+                    } else {
+                        retryResp.close()
+                        if (!wasPreKnown) {
+                            nativeUaPreferredHosts.remove(targetHost)
+                        }
+                    }
+                }
+
                 // If an S3/R2/GCS presigned URL returned 403, retry once with stripped Referer/Origin headers
                 if (resp.code == 403) {
                     val isPreSigned = isPreSignedStorageUrl(taggedRequest.url)
@@ -224,6 +256,14 @@ object PlayerPlaybackNetworking {
 
                 val builder = request.newBuilder()
                 var modified = false
+
+                if (requiresNativePlayerUserAgent(request.url.host)) {
+                    val currentUa = request.header("User-Agent")
+                    if (currentUa != null && currentUa.startsWith("Mozilla/5.0")) {
+                        builder.header("User-Agent", NATIVE_PLAYER_USER_AGENT)
+                        modified = true
+                    }
+                }
 
                 if (isPreSigned) {
                     if (request.header("Authorization") != null) {

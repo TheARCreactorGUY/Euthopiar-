@@ -10,7 +10,7 @@
 
 <br/>
 
-[![Latest Release](https://img.shields.io/badge/Release-v1.0.7--Stable-E50914?style=for-the-badge&logo=github&logoColor=white)](https://github.com/TheARCreactorGUY/Euthopiar-/releases/latest)
+[![Latest Release](https://img.shields.io/badge/Release-v1.0.8--Stable-E50914?style=for-the-badge&logo=github&logoColor=white)](https://github.com/TheARCreactorGUY/Euthopiar-/releases/latest)
 [![Platform](https://img.shields.io/badge/Android-Available-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/TheARCreactorGUY/Euthopiar-/releases/latest)
 [![Android TV](https://img.shields.io/badge/Android%20TV-Coming%20Soon-F5A623?style=for-the-badge&logo=android&logoColor=white)](#-roadmap)
 [![Kotlin](https://img.shields.io/badge/Kotlin-100%25-7F52FF?style=for-the-badge&logo=kotlin&logoColor=white)](https://kotlinlang.org/)
@@ -90,10 +90,13 @@ A giant featured banner, **Top 10 Today**, **Trending Today** and genre rows tha
 ### 🔍 Smart Search
 Search movies, series & anime, then slice results by **type, genre and year**. Find the exact vibe you want.
 
-### 🎞️ Rich Details Page
-**IMDb** and **Rotten Tomatoes** ratings, runtime, full cast & crew, and similar titles so the next watch is one tap away.
+### 🎞️ Rich Details & Trailer Cinema
+**IMDb** and **Rotten Tomatoes** ratings, full cast & crew, and instant zero-overlay native ExoPlayer trailer preview with letterbox zoom.
 
-### 📥 Downloads
+### ☁️ Trakt.tv & Simkl Cloud Sync
+Seamless two-way cloud sync, live watch scrobbling, and automatic watchlist restoration across all your devices.
+
+### 📥 Downloads & Offline Mode
 Save titles and watch **offline**. Planes, trains, dead zones, no problem.
 
 </td>
@@ -103,16 +106,16 @@ Save titles and watch **offline**. Planes, trains, dead zones, no problem.
 Bookmark favourites and organise them into your own playlists, your way.
 
 ### ▶️ Continue Watching
-Pick up **exactly** where you left off, on any title.
+Pick up **exactly** where you left off with smart progress badges and cached poster hydration.
 
 ### 🧭 Guided Setup Walkthrough
 Interactive spotlight tour guiding you through Profile, Plugins, and Repository setup in 3 quick steps for zero-friction streaming.
 
-### 🔌 Nuvio Plugins Compatible
-Built-in support for Nuvio plugins. Paste one link and unlock more sources.
+### 🔌 Nuvio & Stremio Compatible
+Built-in support for Nuvio scrapers and Stremio addons with DASH (.mpd) manifests and intelligent native UA fallback.
 
-### 🌑 Dark, Modern UI
-Deep blacks, red accents, smooth transitions and a **floating bottom bar** that stays out of your way.
+### 🎨 High-Craft Lucide UI
+Precision 2.0px stroke Lucide vector iconography, Emil Kowalski tactile physics, and dark elevation glassmorphism.
 
 </td>
 </tr>
@@ -166,7 +169,7 @@ flowchart LR
 
 <div align="center">
 
-[![Download Latest](https://img.shields.io/badge/⬇%20%20GET%20v1.0.7--Stable-E50914?style=for-the-badge)](https://github.com/TheARCreactorGUY/Euthopiar-/releases/latest)
+[![Download Latest](https://img.shields.io/badge/⬇%20%20GET%20v1.0.8--Stable-E50914?style=for-the-badge)](https://github.com/TheARCreactorGUY/Euthopiar-/releases/latest)
 
 </div>
 
@@ -215,6 +218,9 @@ cd Euthopiar-
 - [x] 🔌 Nuvio plugin compatibility
 - [x] 🧭 Interactive guided setup walkthrough & spotlight onboarding
 - [x] ⚡ In-app OTA update notifier & rich changelog viewer
+- [x] ☁️ Trakt.tv & Simkl two-way cloud sync & scrobbling
+- [x] 🎬 Native zero-overlay trailer cinema player
+- [x] 🎨 High-craft Lucide vector design system
 - [ ] 📺 **Android TV app**
 - [ ] 🎨 More themes & customization
 - [ ] 💡 Your idea here, [open an issue](https://github.com/TheARCreactorGUY/Euthopiar-/issues)!

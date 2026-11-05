@@ -85,13 +85,13 @@ fun HomeUpdateBanner(
                             }
                         )
                         .border(0.5.dp, GlassDefaults.BorderBrush, ShapeFull)
-                        .clickable(
-                            indication = null,
-                            interactionSource = remember { MutableInteractionSource() }
-                        ) {
-                            onOpenUpdatePopup(availableRelease, currentVersion)
-                        }
-                        .padding(start = 14.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
+                        .pressable(
+                            scaleDown = 0.98f,
+                            onClick = {
+                                onOpenUpdatePopup(availableRelease, currentVersion)
+                            }
+                        )
+                        .padding(start = 14.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
@@ -108,13 +108,13 @@ fun HomeUpdateBanner(
                     )
                     IconButton(
                         onClick = onDismiss,
-                        modifier = Modifier.size(24.dp)
+                        modifier = Modifier.size(40.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Outlined.Close,
                             contentDescription = "Dismiss",
                             tint = Color.White.copy(alpha = 0.60f),
-                            modifier = Modifier.size(14.dp)
+                            modifier = Modifier.size(16.dp)
                         )
                     }
                 }

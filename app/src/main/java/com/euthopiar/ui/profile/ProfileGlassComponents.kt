@@ -7,6 +7,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -80,6 +81,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.euthopiar.ui.components.tvFocusable
 import com.euthopiar.ui.theme.AppFontFamily
+import com.euthopiar.ui.theme.EuthopiarGlassTokens
+import com.euthopiar.ui.theme.EuthopiarMotionTokens
 import com.euthopiar.ui.theme.LocalAmoledMode
 import com.euthopiar.ui.theme.LocalReduceMotion
 import dev.chrisbanes.haze.HazeState
@@ -101,11 +104,12 @@ object ProfileGlassTokens {
 
     val HairlineBorder = Color.White.copy(alpha = 0.16f)
     val HairlineBorderActive = Color.White.copy(alpha = 0.30f)
-    val HairlineDivider = Color.White.copy(alpha = 0.14f)
+    val HairlineDivider = Color.White.copy(alpha = 0.10f)
 
-    val SheetGlassFill = Color(0xBA0B0B0F)
-    val SheetGlassFallback = Color(0xF0101118)
-    val SheetHairlineBorder = Color.White.copy(alpha = 0.18f)
+    val SheetGlassFill = Color(0xFF0F1219).copy(alpha = 0.85f)
+    val SheetGlassAmoledFill = Color.Black.copy(alpha = 0.92f)
+    val SheetGlassFallback = Color(0xFF0F1219).copy(alpha = 0.96f)
+    val SheetHairlineBorder = Color.White.copy(alpha = 0.16f)
 
     val TextPrimary = Color(0xFFFFFFFF)
     val TextMuted50 = Color.White.copy(alpha = 0.50f)
@@ -444,17 +448,17 @@ fun SettingsHairlineRow(
     icon: ImageVector,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    contentPadding: PaddingValues = PaddingValues(horizontal = 22.dp, vertical = 14.dp),
+    contentPadding: PaddingValues = PaddingValues(horizontal = 20.dp, vertical = 14.dp),
     enabled: Boolean = true
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val reduceMotion = LocalReduceMotion.current
 
-    val iconTileScale by animateFloatAsState(
-        targetValue = if (isPressed && enabled && !reduceMotion) 0.98f else 1f,
-        animationSpec = tween(durationMillis = 120, easing = FastOutSlowInEasing),
-        label = "iconTileScale"
+    val rowScale by animateFloatAsState(
+        targetValue = if (isPressed && enabled && !reduceMotion) EuthopiarMotionTokens.PressScaleLarge else 1f,
+        animationSpec = if (reduceMotion) snap() else EuthopiarMotionTokens.SpringPress,
+        label = "rowScale"
     )
 
     val rowBgColor = if (isPressed && enabled) Color.White.copy(alpha = 0.06f) else Color.Transparent
@@ -463,6 +467,10 @@ fun SettingsHairlineRow(
         modifier = modifier
             .fillMaxWidth()
             .defaultMinSize(minHeight = 64.dp)
+            .graphicsLayer {
+                scaleX = rowScale
+                scaleY = rowScale
+            }
             .background(rowBgColor)
             .clickable(
                 interactionSource = interactionSource,
@@ -479,10 +487,6 @@ fun SettingsHairlineRow(
         Box(
             modifier = Modifier
                 .size(38.dp)
-                .graphicsLayer {
-                    scaleX = iconTileScale
-                    scaleY = iconTileScale
-                }
                 .clip(RoundedCornerShape(12.dp))
                 .background(ProfileGlassTokens.GlassFill)
                 .border(ProfileGlassTokens.HairlineWidthDp, ProfileGlassTokens.HairlineBorder, RoundedCornerShape(12.dp)),
@@ -634,8 +638,8 @@ fun AvatarWithThinRing(
     val reduceMotion = LocalReduceMotion.current
 
     val scale by animateFloatAsState(
-        targetValue = if (isPressed && onClick != null && !reduceMotion) 0.98f else 1f,
-        animationSpec = tween(120),
+        targetValue = if (isPressed && onClick != null && !reduceMotion) 0.95f else 1f,
+        animationSpec = if (reduceMotion) snap() else EuthopiarMotionTokens.SpringPress,
         label = "avatarScale"
     )
 
@@ -711,8 +715,8 @@ fun AvatarWithThinRing(
         AnimatedVisibility(
             visible = showSelectedCheck && isSelected,
             modifier = Modifier.align(Alignment.BottomEnd),
-            enter = if (reduceMotion) fadeIn(tween(0)) else (scaleIn(tween(180, easing = FastOutSlowInEasing), initialScale = 0.6f) + fadeIn(tween(180))),
-            exit = if (reduceMotion) fadeOut(tween(0)) else (scaleOut(tween(140, easing = FastOutSlowInEasing), targetScale = 0.6f) + fadeOut(tween(140)))
+            enter = if (reduceMotion) fadeIn(tween(0)) else (scaleIn(tween(180, easing = FastOutSlowInEasing), initialScale = 0.90f) + fadeIn(tween(180))),
+            exit = if (reduceMotion) fadeOut(tween(0)) else (scaleOut(tween(140, easing = FastOutSlowInEasing), targetScale = 0.90f) + fadeOut(tween(140)))
         ) {
             Box(
                 modifier = Modifier
@@ -735,8 +739,8 @@ fun AvatarWithThinRing(
 }
 
 /**
- * Reusable glass confirmation dialog / bottom sheet.
- * Headline 20-22 sp medium, muted message, white pill primary action, white cancel action. No red!
+ * Reusable frosted glass confirmation dialog matching UpdateInfoDialog.
+ * Headline 20sp Bold, 96% white, muted message 13.5sp, 48dp solid white pill primary action.
  */
 @Composable
 fun GlassConfirmDialog(
@@ -747,10 +751,14 @@ fun GlassConfirmDialog(
     onDismiss: () -> Unit,
     cancelText: String = "Cancel",
     isDestructive: Boolean = false,
-    onCancelAction: (() -> Unit)? = null
+    onCancelAction: (() -> Unit)? = null,
+    hazeState: HazeState? = null
 ) {
     val isAmoled = LocalAmoledMode.current
-    val dialogBg = if (isAmoled) ProfileGlassTokens.AmoledBackground else ProfileGlassTokens.BaseDarkBackground
+    val cardShape = RoundedCornerShape(EuthopiarGlassTokens.RadiusDialog)
+    val cardFill = EuthopiarGlassTokens.cardFill(isAmoled)
+    val fallbackColor = EuthopiarGlassTokens.fallbackFill(isAmoled)
+
     val reduceMotion = LocalReduceMotion.current
     val coroutineScope = rememberCoroutineScope()
     val dialogAnim = remember { Animatable(0f) }
@@ -758,7 +766,10 @@ fun GlassConfirmDialog(
 
     LaunchedEffect(Unit) {
         if (!reduceMotion) {
-            dialogAnim.animateTo(1f, tween(200, easing = FastOutSlowInEasing))
+            dialogAnim.animateTo(
+                targetValue = 1f,
+                animationSpec = spring(dampingRatio = 0.78f, stiffness = 550f)
+            )
         } else {
             dialogAnim.snapTo(1f)
         }
@@ -769,11 +780,16 @@ fun GlassConfirmDialog(
         isClosing = true
         coroutineScope.launch {
             if (!reduceMotion) {
-                dialogAnim.animateTo(0f, tween(160, easing = FastOutSlowInEasing))
+                dialogAnim.animateTo(0f, tween(180))
             }
             action()
         }
     }
+
+    val animVal = dialogAnim.value
+    val scrimAlpha = if (reduceMotion) EuthopiarGlassTokens.ScrimAlpha else (EuthopiarGlassTokens.ScrimAlpha * animVal).coerceIn(0f, EuthopiarGlassTokens.ScrimAlpha)
+    val cardScale = if (reduceMotion) 1f else 0.94f + 0.06f * animVal
+    val cardTranslationY = if (reduceMotion) 0f else (1f - animVal) * 30f
 
     Dialog(
         onDismissRequest = { animateDismiss(onDismiss) },
@@ -782,7 +798,7 @@ fun GlassConfirmDialog(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.70f * dialogAnim.value))
+                .background(Color.Black.copy(alpha = scrimAlpha))
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -792,16 +808,30 @@ fun GlassConfirmDialog(
         ) {
             Box(
                 modifier = Modifier
-                    .fillMaxWidth(0.88f)
+                    .fillMaxWidth(0.90f)
                     .graphicsLayer {
-                        alpha = dialogAnim.value
-                        val scale = 0.94f + (0.06f * dialogAnim.value)
-                        scaleX = scale
-                        scaleY = scale
+                        alpha = animVal
+                        scaleX = cardScale
+                        scaleY = cardScale
+                        translationY = cardTranslationY
                     }
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(dialogBg)
-                    .border(ProfileGlassTokens.HairlineWidthDp, ProfileGlassTokens.HairlineBorder, RoundedCornerShape(20.dp))
+                    .clip(cardShape)
+                    .then(
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hazeState != null) {
+                            Modifier.hazeEffect(state = hazeState) {
+                                blurRadius = EuthopiarGlassTokens.BlurRadius
+                                tints = listOf(HazeTint(cardFill))
+                                fallbackTint = HazeTint(fallbackColor)
+                            }
+                        } else {
+                            Modifier.background(fallbackColor)
+                        }
+                    )
+                    .border(
+                        width = EuthopiarGlassTokens.HairlineWidth,
+                        color = EuthopiarGlassTokens.HairlineBorder,
+                        shape = cardShape
+                    )
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
@@ -815,33 +845,21 @@ fun GlassConfirmDialog(
                 ) {
                     Text(
                         text = title,
-                        style = TextStyle(
-                            fontFamily = AppFontFamily,
-                            fontWeight = FontWeight.Medium,
-                            fontSize = 22.sp,
-                            lineHeight = 26.sp,
-                            color = Color.White
-                        ),
+                        style = EuthopiarGlassTokens.HeaderTitle,
                         textAlign = TextAlign.Center
                     )
 
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
 
                     Text(
                         text = message,
-                        style = TextStyle(
-                            fontFamily = AppFontFamily,
-                            fontWeight = FontWeight.Normal,
-                            fontSize = 13.sp,
-                            lineHeight = 18.sp,
-                            color = ProfileGlassTokens.TextMuted50
-                        ),
+                        style = EuthopiarGlassTokens.BodyText,
                         textAlign = TextAlign.Center
                     )
 
                     Spacer(modifier = Modifier.height(24.dp))
 
-                    // Primary Action: White Pill Button
+                    // Primary Action: 48dp Solid White Pill Button
                     ProfileWhitePillButton(
                         text = confirmText,
                         onClick = { animateDismiss(onConfirm) }

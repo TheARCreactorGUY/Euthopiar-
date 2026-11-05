@@ -22,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
@@ -34,7 +35,6 @@ import com.euthopiar.core.repository.ProviderRepository
 import com.euthopiar.ui.components.EmptyState
 import com.euthopiar.ui.components.LocalSnackbarController
 import com.euthopiar.ui.components.PosterCard
-import com.euthopiar.ui.components.SearchGridSkeleton
 import com.euthopiar.ui.components.tvFocusable
 import com.euthopiar.ui.theme.*
 import com.euthopiar.ui.util.findActivity
@@ -250,7 +250,16 @@ fun InPluginSearchOverlay(
                     .weight(1f)
             ) {
                 if (isLoading) {
-                    SearchGridSkeleton()
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(32.dp),
+                            color = Color.White.copy(alpha = 0.75f),
+                            strokeWidth = 2.dp
+                        )
+                    }
                 } else if (query.isNotEmpty() && results.isEmpty()) {
                     EmptyState(
                         title = "No results found",

@@ -29,7 +29,7 @@ import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Info
-import androidx.compose.material.icons.outlined.PlayArrow
+import com.euthopiar.ui.icons.LucideIcons
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material3.HorizontalDivider
@@ -65,6 +65,9 @@ import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.runtime.mutableFloatStateOf
 import com.euthopiar.ui.theme.GlassDefaults
+import com.euthopiar.ui.theme.LocalAmoledMode
+import com.euthopiar.ui.theme.EuthopiarGlassTokens
+import com.euthopiar.ui.theme.euthopiarGlassCard
 import kotlinx.coroutines.launch
 
 /**
@@ -87,6 +90,7 @@ fun GlassMenuSheet(
     hazeState: HazeState? = LocalLongPressHazeState.current
 ) {
     val coroutineScope = rememberCoroutineScope()
+    val isAmoled = LocalAmoledMode.current
     val openAnim = remember { Animatable(0f) }
     var dragOffsetY by remember { mutableFloatStateOf(0f) }
     var isDismissing by remember { mutableStateOf(false) }
@@ -237,11 +241,10 @@ fun GlassMenuSheet(
                         ambientColor = Color.Black.copy(alpha = 0.35f),
                         spotColor = Color.Black.copy(alpha = 0.45f)
                     )
-                    .frostedGlassSurface(
+                    .euthopiarGlassCard(
                         shape = RoundedCornerShape(20.dp),
                         hazeState = hazeState,
-                        fallbackColor = GlassDefaults.NavbarFallbackColor,
-                        customTint = GlassDefaults.TintColor
+                        isAmoled = isAmoled
                     )
             ) {
                 val isResume = item.progressPercent > 0
@@ -250,14 +253,14 @@ fun GlassMenuSheet(
                 // Row 1: Play / Resume
                 GlassMenuRow(
                     label = playLabel,
-                    icon = Icons.Outlined.PlayArrow,
+                    icon = LucideIcons.Play,
                     onClick = {
                         dismissWithAnim()
                         if (isResume) actions.onResume() else actions.onPlay()
                     }
                 )
 
-                HorizontalDivider(color = Color.White.copy(alpha = 0.14f), thickness = 0.5.dp)
+                HorizontalDivider(color = EuthopiarGlassTokens.HairlineDivider, thickness = EuthopiarGlassTokens.HairlineWidth)
 
                 // Row 2: Add to watchlist / In watchlist (swaps icon and label; keeps menu open)
                 GlassMenuRow(
@@ -269,7 +272,7 @@ fun GlassMenuSheet(
                     }
                 )
 
-                HorizontalDivider(color = Color.White.copy(alpha = 0.14f), thickness = 0.5.dp)
+                HorizontalDivider(color = EuthopiarGlassTokens.HairlineDivider, thickness = EuthopiarGlassTokens.HairlineWidth)
 
                 if (actions.onAddToPlaylist != null) {
                     GlassMenuRow(
@@ -281,7 +284,7 @@ fun GlassMenuSheet(
                         }
                     )
 
-                    HorizontalDivider(color = Color.White.copy(alpha = 0.14f), thickness = 0.5.dp)
+                    HorizontalDivider(color = EuthopiarGlassTokens.HairlineDivider, thickness = EuthopiarGlassTokens.HairlineWidth)
                 }
 
                 // Row 3: Share
@@ -294,7 +297,7 @@ fun GlassMenuSheet(
                     }
                 )
 
-                HorizontalDivider(color = Color.White.copy(alpha = 0.14f), thickness = 0.5.dp)
+                HorizontalDivider(color = EuthopiarGlassTokens.HairlineDivider, thickness = EuthopiarGlassTokens.HairlineWidth)
 
                 // Row 4: View details
                 GlassMenuRow(
@@ -306,7 +309,7 @@ fun GlassMenuSheet(
                     }
                 )
 
-                HorizontalDivider(color = Color.White.copy(alpha = 0.14f), thickness = 0.5.dp)
+                HorizontalDivider(color = EuthopiarGlassTokens.HairlineDivider, thickness = EuthopiarGlassTokens.HairlineWidth)
 
                 // Row 5: Not interested (destructive red #FF7A7A)
                 GlassMenuRow(

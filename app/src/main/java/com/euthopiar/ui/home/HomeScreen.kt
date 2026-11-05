@@ -70,9 +70,6 @@ import com.euthopiar.ui.components.ContentRow
 import com.euthopiar.ui.components.ContinueWatchingRow
 import com.euthopiar.ui.components.ErrorState
 import com.euthopiar.ui.components.HeroCarousel
-import com.euthopiar.ui.components.HeroCarouselSkeleton
-import com.euthopiar.ui.components.HomeScreenSkeleton
-import com.euthopiar.ui.components.ProvideShimmerScope
 import com.euthopiar.ui.details.sheets.MediaDetailsActionSheet
 import com.euthopiar.ui.details.sheets.SheetScreen
 import com.euthopiar.ui.components.rememberHeroStretchState
@@ -316,14 +313,21 @@ fun HomeScreen(
         ) { state ->
             when (state) {
                 is HomeUiState.Loading -> {
-                    val isIgnitionActive by com.euthopiar.ui.splash.AppLaunchCoordinator.isIgnitionActive.collectAsState()
-                    val hasCompletedInitialLaunch = com.euthopiar.ui.splash.AppLaunchCoordinator.hasCompletedInitialLaunch
-                    if (isIgnitionActive || !hasCompletedInitialLaunch) {
-                        // During initial launch, keep canvas quiet obsidian; never flash wireframe skeleton
-                        Box(modifier = Modifier.fillMaxSize().background(screenBg))
-                    } else {
-                        ProvideShimmerScope {
-                            HomeScreenSkeleton(modifier = Modifier.fillMaxSize())
+                    // Keep canvas quiet obsidian; never flash wireframe skeleton
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(screenBg),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        val isIgnitionActive by com.euthopiar.ui.splash.AppLaunchCoordinator.isIgnitionActive.collectAsState()
+                        val hasCompletedInitialLaunch = com.euthopiar.ui.splash.AppLaunchCoordinator.hasCompletedInitialLaunch
+                        if (!isIgnitionActive && hasCompletedInitialLaunch) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(28.dp),
+                                color = Color.White.copy(alpha = 0.65f),
+                                strokeWidth = 2.dp
+                            )
                         }
                     }
                 }
@@ -575,7 +579,7 @@ fun HomeScreen(
                                                 }
                                             },
                                             modifier = Modifier.staggeredEntrance(
-                                                tabKey = selectedTab,
+                                                tabKey = "persistent_home_rows",
                                                 rowIndex = 0,
                                                 isEntering = true,
                                                 isFirstComposition = isFirstHomeComposition,
@@ -599,7 +603,7 @@ fun HomeScreen(
                                             onItemClick = { onMediaClick(it) },
                                             onItemLongClick = { quickActionItem = it },
                                             modifier = Modifier.staggeredEntrance(
-                                                tabKey = selectedTab,
+                                                tabKey = "persistent_home_rows",
                                                 rowIndex = 1,
                                                 isEntering = true,
                                                 isFirstComposition = isFirstHomeComposition,

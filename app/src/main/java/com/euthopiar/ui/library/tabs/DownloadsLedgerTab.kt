@@ -4,6 +4,8 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -31,7 +33,10 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import com.euthopiar.ui.icons.LucideIcons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.Icon
@@ -39,6 +44,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -69,10 +75,12 @@ import com.euthopiar.ui.library.components.LibraryProgressBar
 import com.euthopiar.ui.library.components.SelectionIndicator
 import com.euthopiar.ui.library.sanitizeTitle
 import com.euthopiar.ui.theme.AppFontFamily
+import com.euthopiar.ui.theme.EuthopiarGlassTokens
 import com.euthopiar.ui.theme.LocalReduceMotion
 import com.euthopiar.ui.theme.pressable
 import dev.chrisbanes.haze.HazeState
 import kotlinx.coroutines.delay
+import java.util.Locale
 
 @Composable
 fun DownloadsLedgerTab(
@@ -92,6 +100,7 @@ fun DownloadsLedgerTab(
     hazeState: HazeState? = null
 ) {
     val reduceMotion = LocalReduceMotion.current
+    val expandedTvSeries = remember { mutableStateMapOf<String, Boolean>() }
 
     val activeDownloads = remember(downloads) {
         downloads.filter {
@@ -135,7 +144,7 @@ fun DownloadsLedgerTab(
     val heroUnit = if (isUnderOneGb) "MB" else "GB"
 
     val freeGb = (freeBytes / (1024.0 * 1024.0 * 1024.0)).toInt()
-    val isStorageAlmostFull = freeBytes in 1..(2L * 1024 * 1024 * 1024)
+    val isStorageAlmostFull = hasReliableStorage && freeBytes in 0..(2L * 1024 * 1024 * 1024)
 
     // Storage numeral count-up entrance animation (700ms ease-out)
     var hasAnimatedHero by remember { mutableStateOf(false) }
@@ -224,7 +233,7 @@ fun DownloadsLedgerTab(
                     val displayedNum = if (isUnderOneGb) {
                         heroNumberAnim.value.toInt().toString()
                     } else {
-                        String.format("%.1f", heroNumberAnim.value)
+                        String.format(Locale.US, "%.1f", heroNumberAnim.value)
                     }
 
                     Row(verticalAlignment = Alignment.Bottom) {
@@ -307,7 +316,7 @@ fun DownloadsLedgerTab(
                     ) {
                         val readyCountText = "${readyDownloads.size} title${if (readyDownloads.size != 1) "s" else ""} ready"
                         val leftLabel = if (activeDownloads.isNotEmpty()) {
-                            "$readyCountText · ${activeDownloads.size} downloading"
+                            "$readyCountText \u00B7 ${activeDownloads.size} downloading"
                         } else {
                             readyCountText
                         }
@@ -332,7 +341,7 @@ fun DownloadsLedgerTab(
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(12.dp))
                                 .background(Color.White.copy(alpha = 0.07f))
-                                .border(LibraryDimens.hairline, LibraryColors.GlassBorder, RoundedCornerShape(12.dp))
+                                .border(EuthopiarGlassTokens.HairlineWidth, EuthopiarGlassTokens.HairlineBorder, RoundedCornerShape(12.dp))
                                 .padding(horizontal = 12.dp, vertical = 9.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -496,11 +505,13 @@ fun DownloadsLedgerTab(
 
                 if (readyTvGroups.isNotEmpty()) {
                     readyTvGroups.forEach { group ->
+                        val isExpanded = expandedTvSeries[group.mediaId] ?: true
                         item(key = "tv_series_group_${group.mediaId}") {
                             TvSeriesHeaderRow(
                                 group = group,
                                 isSelectionMode = isSelectionMode,
                                 allSelected = group.episodes.all { it.id in selectedIds },
+                                isExpanded = isExpanded,
                                 onToggleGroupSelect = {
                                     val allSel = group.episodes.all { it.id in selectedIds }
                                     group.episodes.forEach { ep ->
@@ -511,25 +522,30 @@ fun DownloadsLedgerTab(
                                         }
                                     }
                                 },
-                                onSeriesClick = {
-                                    onMediaClick?.invoke(group.mediaId, true, group.provider)
-                                }
+                                onToggleExpand = {
+                                    expandedTvSeries[group.mediaId] = !isExpanded
+                                },
+                                onSeriesDetailsClick = if (onMediaClick != null) {
+                                    { onMediaClick.invoke(group.mediaId, true, group.provider) }
+                                } else null
                             )
                         }
 
-                        itemsIndexed(
-                            items = group.episodes,
-                            key = { _, ep -> "tv_ep_${ep.id}" }
-                        ) { epIndex, ep ->
-                            NestedEpisodeRow(
-                                index = epIndex,
-                                item = ep,
-                                isSelectionMode = isSelectionMode,
-                                isSelected = ep.id in selectedIds,
-                                onToggleSelect = { onToggleSelect(ep.id) },
-                                onLongClick = { onStartSelect(ep.id) },
-                                onPlay = { onPlayDownload(ep) }
-                            )
+                        if (isExpanded) {
+                            itemsIndexed(
+                                items = group.episodes,
+                                key = { _, ep -> "tv_ep_${ep.id}" }
+                            ) { epIndex, ep ->
+                                NestedEpisodeRow(
+                                    index = epIndex,
+                                    item = ep,
+                                    isSelectionMode = isSelectionMode,
+                                    isSelected = ep.id in selectedIds,
+                                    onToggleSelect = { onToggleSelect(ep.id) },
+                                    onLongClick = { onStartSelect(ep.id) },
+                                    onPlay = { onPlayDownload(ep) }
+                                )
+                            }
                         }
                     }
                 }
@@ -562,11 +578,11 @@ private fun StaggeredDownloadingRow(
     val animProgress = remember { Animatable(if (reduceMotion) 1f else 0f) }
 
     LaunchedEffect(Unit) {
-        if (!reduceMotion && index < 8) {
-            delay((index * 35L).coerceAtMost(300L))
+        if (!reduceMotion && index < 6) {
+            delay(index * 16L)
             animProgress.animateTo(
                 targetValue = 1f,
-                animationSpec = tween(durationMillis = 320, easing = FastOutSlowInEasing)
+                animationSpec = tween(durationMillis = 260, easing = LinearOutSlowInEasing)
             )
         } else {
             animProgress.snapTo(1f)
@@ -583,7 +599,8 @@ private fun StaggeredDownloadingRow(
         DownloadState.DOWNLOADING -> {
             val pct = item.progressPercentage.toInt()
             val quality = item.qualityLabel.substringBefore(" ").ifBlank { "1080p" }
-            "Downloading · $pct% · $quality"
+            val speedPart = if (!item.speed.isNullOrBlank()) " · ${item.speed}" else ""
+            "Downloading · $pct% · $quality$speedPart"
         }
         DownloadState.QUEUED -> {
             val pct = item.progressPercentage.toInt()
@@ -616,7 +633,7 @@ private fun StaggeredDownloadingRow(
                 modifier = Modifier
                     .weight(1f)
                     .pressable(
-                        scaleDown = 0.98f,
+                        scaleDown = 0.96f,
                         onClick = onRowClick,
                         onLongClick = onLongClick
                     )
@@ -639,7 +656,7 @@ private fun StaggeredDownloadingRow(
                     modifier = Modifier
                         .size(width = 40.dp, height = 56.dp)
                         .clip(RoundedCornerShape(10.dp))
-                        .border(LibraryDimens.hairline, LibraryColors.GlassBorder, RoundedCornerShape(10.dp))
+                        .border(EuthopiarGlassTokens.HairlineWidth, EuthopiarGlassTokens.HairlineBorder, RoundedCornerShape(10.dp))
                         .background(LibraryColors.Surface)
                 ) {
                     val posterUrl = item.posterUrl ?: item.backdropUrl
@@ -729,22 +746,36 @@ private fun TvSeriesHeaderRow(
     group: TvGroup,
     isSelectionMode: Boolean,
     allSelected: Boolean,
+    isExpanded: Boolean,
     onToggleGroupSelect: () -> Unit,
-    onSeriesClick: () -> Unit
+    onToggleExpand: () -> Unit,
+    onSeriesDetailsClick: (() -> Unit)? = null
 ) {
     val totalGb = group.totalBytes / (1024.0 * 1024.0 * 1024.0)
     val totalSizeText = if (totalGb < 1.0) {
         val mb = (group.totalBytes / (1024 * 1024)).coerceAtLeast(1)
         "$mb MB"
     } else {
-        String.format("%.1f GB", totalGb)
+        String.format(Locale.US, "%.1f GB", totalGb)
     }
+
+    val chevronRotation by animateFloatAsState(
+        targetValue = if (isExpanded) 180f else 0f,
+        animationSpec = spring(dampingRatio = 0.8f, stiffness = 450f),
+        label = "chevronRotation"
+    )
 
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .pressable(scaleDown = 0.98f, onClick = onSeriesClick)
+                .pressable(
+                    scaleDown = 0.96f,
+                    role = Role.Button,
+                    onClick = {
+                        if (isSelectionMode) onToggleGroupSelect() else onToggleExpand()
+                    }
+                )
                 .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -758,7 +789,7 @@ private fun TvSeriesHeaderRow(
                 modifier = Modifier
                     .size(width = 40.dp, height = 56.dp)
                     .clip(RoundedCornerShape(10.dp))
-                    .border(LibraryDimens.hairline, LibraryColors.GlassBorder, RoundedCornerShape(10.dp))
+                    .border(EuthopiarGlassTokens.HairlineWidth, EuthopiarGlassTokens.HairlineBorder, RoundedCornerShape(10.dp))
                     .background(LibraryColors.Surface)
             ) {
                 if (!group.posterUrl.isNullOrBlank()) {
@@ -787,6 +818,38 @@ private fun TvSeriesHeaderRow(
                     style = LibraryTypography.metadata11
                 )
             }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            // Right side: Online details shortcut (if available) + Accordion chevron
+            if (!isSelectionMode && onSeriesDetailsClick != null) {
+                Box(
+                    modifier = Modifier
+                        .sizeIn(minWidth = 36.dp, minHeight = 36.dp)
+                        .clickable(
+                            role = Role.Button,
+                            onClick = onSeriesDetailsClick
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.OpenInNew,
+                        contentDescription = "View series details",
+                        tint = Color.White.copy(alpha = 0.55f),
+                        modifier = Modifier.size(17.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(4.dp))
+            }
+
+            Icon(
+                imageVector = Icons.Default.KeyboardArrowDown,
+                contentDescription = if (isExpanded) "Collapse episodes" else "Expand episodes",
+                tint = Color.White.copy(alpha = 0.65f),
+                modifier = Modifier
+                    .size(22.dp)
+                    .graphicsLayer { rotationZ = chevronRotation }
+            )
         }
 
         LibraryHairlineDivider(
@@ -823,7 +886,7 @@ private fun NestedEpisodeRow(
         val mb = (bytes / (1024 * 1024)).coerceAtLeast(1)
         "$mb MB"
     } else {
-        String.format("%.1f GB", gb)
+        String.format(Locale.US, "%.1f GB", gb)
     }
 
     Column(modifier = Modifier.fillMaxWidth()) {
@@ -831,7 +894,7 @@ private fun NestedEpisodeRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .pressable(
-                    scaleDown = 0.98f,
+                    scaleDown = 0.96f,
                     onClick = {
                         if (isSelectionMode) onToggleSelect() else onPlay()
                     },
@@ -851,20 +914,30 @@ private fun NestedEpisodeRow(
                 }
             }
 
-            // 32dp solid white play circle with dark play icon
+            // 32dp solid white play circle with guaranteed >=48dp touch target
             Box(
                 modifier = Modifier
-                    .size(32.dp)
-                    .clip(CircleShape)
-                    .background(Color.White),
+                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                    .clickable(
+                        role = Role.Button,
+                        onClick = onPlay
+                    ),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    imageVector = Icons.Default.PlayArrow,
-                    contentDescription = "Play",
-                    tint = Color(0xFF0B0B0F),
-                    modifier = Modifier.size(18.dp)
-                )
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(Color.White),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = LucideIcons.Play,
+                        contentDescription = "Play",
+                        tint = Color(0xFF0B0B0F),
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.width(12.dp))
@@ -912,7 +985,7 @@ private fun MovieHeaderRow(
         val mb = (group.totalBytes / (1024 * 1024)).coerceAtLeast(1)
         "$mb MB"
     } else {
-        String.format("%.1f GB", totalGb)
+        String.format(Locale.US, "%.1f GB", totalGb)
     }
 
     Column(modifier = Modifier.fillMaxWidth()) {
@@ -920,7 +993,7 @@ private fun MovieHeaderRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .pressable(
-                    scaleDown = 0.98f,
+                    scaleDown = 0.96f,
                     role = Role.Button,
                     onClick = {
                         if (isSelectionMode) onToggleGroupSelect() else onMovieClick()
@@ -939,7 +1012,7 @@ private fun MovieHeaderRow(
                 modifier = Modifier
                     .size(width = 40.dp, height = 56.dp)
                     .clip(RoundedCornerShape(10.dp))
-                    .border(LibraryDimens.hairline, LibraryColors.GlassBorder, RoundedCornerShape(10.dp))
+                    .border(EuthopiarGlassTokens.HairlineWidth, EuthopiarGlassTokens.HairlineBorder, RoundedCornerShape(10.dp))
                     .background(LibraryColors.Surface)
             ) {
                 if (!group.posterUrl.isNullOrBlank()) {
@@ -993,7 +1066,7 @@ private fun NestedMovieDownloadRow(
         val mb = (bytes / (1024 * 1024)).coerceAtLeast(1)
         "$mb MB"
     } else {
-        String.format("%.1f GB", gb)
+        String.format(Locale.US, "%.1f GB", gb)
     }
 
     val quality = item.qualityLabel.substringBefore(" ").ifBlank { "1080p" }
@@ -1009,7 +1082,7 @@ private fun NestedMovieDownloadRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .pressable(
-                    scaleDown = 0.98f,
+                    scaleDown = 0.96f,
                     onClick = {
                         if (isSelectionMode) onToggleSelect() else onPlay()
                     },
@@ -1029,20 +1102,30 @@ private fun NestedMovieDownloadRow(
                 }
             }
 
-            // 32dp solid white play circle with dark play icon
+            // 32dp solid white play circle with guaranteed >=48dp touch target
             Box(
                 modifier = Modifier
-                    .size(32.dp)
-                    .clip(CircleShape)
-                    .background(Color.White),
+                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                    .clickable(
+                        role = Role.Button,
+                        onClick = onPlay
+                    ),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    imageVector = Icons.Default.PlayArrow,
-                    contentDescription = "Play",
-                    tint = Color(0xFF0B0B0F),
-                    modifier = Modifier.size(18.dp)
-                )
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(Color.White),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = LucideIcons.Play,
+                        contentDescription = "Play",
+                        tint = Color(0xFF0B0B0F),
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.width(12.dp))

@@ -7,6 +7,7 @@ import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -149,6 +150,7 @@ fun LibraryScreen(
     val sortOrder by viewModel.sortOrder.collectAsState()
     val isSelectionMode by viewModel.isSelectionMode.collectAsState()
     val selectedItemIds by viewModel.selectedItemIds.collectAsState()
+    val selectedFilter by viewModel.selectedFilter.collectAsState()
     val persistedLastTab by viewModel.libraryLastTab.collectAsState(initial = 1)
 
     // Hide floating navbar in selection mode to swap cleanly with action pill
@@ -395,7 +397,10 @@ fun LibraryScreen(
                                 ) { currentCount ->
                                     Text(
                                         text = "$currentCount selected",
-                                        style = LibraryTypography.pageHeadline.copy(fontSize = 22.sp),
+                                        style = LibraryTypography.pageHeadline.copy(
+                                            fontSize = 22.sp,
+                                            fontFeatureSettings = "tnum"
+                                        ),
                                         color = Color.White
                                     )
                                 }
@@ -639,6 +644,8 @@ fun LibraryScreen(
                             onToggleOfflineOnly = { viewModel.toggleOfflineOnly() },
                             sortOrder = sortOrder,
                             onSelectSortOrder = { viewModel.setSortOrder(it) },
+                            selectedFilter = selectedFilter,
+                            onSelectFilter = { viewModel.selectFilter(it) },
                             isSelectionMode = isSelectionMode,
                             selectedIds = selectedItemIds,
                             onToggleSelect = { id ->
@@ -695,9 +702,9 @@ fun LibraryScreen(
         AnimatedVisibility(
             visible = isSelectionMode,
             enter = slideInVertically(
-                animationSpec = tween(220, easing = LinearOutSlowInEasing),
+                animationSpec = spring(dampingRatio = 0.78f, stiffness = 550f),
                 initialOffsetY = { it }
-            ) + fadeIn(tween(220)),
+            ) + fadeIn(tween(200)),
             exit = slideOutVertically(
                 animationSpec = tween(140, easing = FastOutLinearInEasing),
                 targetOffsetY = { it }
@@ -722,9 +729,8 @@ fun LibraryScreen(
                         hazeState = hazeState,
                         isActive = true
                     )
-                    .background(Color(0xFF14151F).copy(alpha = 0.94f))
                     .pressable(
-                        scaleDown = 0.98f,
+                        scaleDown = 0.96f,
                         role = Role.Button,
                         enabled = count > 0,
                         onClick = {

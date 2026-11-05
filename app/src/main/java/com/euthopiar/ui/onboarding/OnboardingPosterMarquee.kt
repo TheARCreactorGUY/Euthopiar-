@@ -347,6 +347,15 @@ fun OnboardingPosterMarquee(
         )
     }
 
+    // Top soft vignette scrim (softens poster crop beneath status/progress bar)
+    val topVignetteBrush = remember(pageBgColor) {
+        Brush.verticalGradient(
+            0.00f to pageBgColor.copy(alpha = 0.85f),
+            0.40f to pageBgColor.copy(alpha = 0.35f),
+            1.00f to Color.Transparent,
+        )
+    }
+
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -373,12 +382,14 @@ fun OnboardingPosterMarquee(
                 horizontalArrangement = Arrangement.spacedBy(tileGap),
             ) {
                 val renderItems = if (!shouldAnimate) row1Items else topItems
-                renderItems.forEach { item ->
-                    OnboardingPosterTile(
-                        item = item,
-                        width = cardWidth,
-                        height = cardHeight,
-                    )
+                renderItems.forEachIndexed { index, item ->
+                    androidx.compose.runtime.key(index) {
+                        OnboardingPosterTile(
+                            item = item,
+                            width = cardWidth,
+                            height = cardHeight,
+                        )
+                    }
                 }
             }
 
@@ -397,15 +408,28 @@ fun OnboardingPosterMarquee(
                 horizontalArrangement = Arrangement.spacedBy(tileGap),
             ) {
                 val renderItems = if (!shouldAnimate) row2Items else bottomItems
-                renderItems.forEach { item ->
-                    OnboardingPosterTile(
-                        item = item,
-                        width = cardWidth,
-                        height = cardHeight,
-                    )
+                renderItems.forEachIndexed { index, item ->
+                    androidx.compose.runtime.key(index) {
+                        OnboardingPosterTile(
+                            item = item,
+                            width = cardWidth,
+                            height = cardHeight,
+                        )
+                    }
                 }
             }
         }
+
+        // TOP VIGNETTE SCRIM (36 dp tall, softens poster entry beneath top bar)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(36.dp)
+                .align(Alignment.TopCenter)
+                .drawBehind {
+                    drawRect(brush = topVignetteBrush)
+                },
+        )
 
         // BOTTOM MELT SCRIM (130 dp tall, with 2 dp overdraw past bottom edge)
         Box(
@@ -434,6 +458,7 @@ private fun OnboardingPosterTile(
 ) {
     val context = LocalContext.current
     val shape = RoundedCornerShape(12.dp)
+    var isLoaded by remember(item.posterUrl) { mutableStateOf(false) }
 
     Box(
         modifier = modifier
@@ -448,28 +473,31 @@ private fun OnboardingPosterTile(
         contentAlignment = Alignment.Center,
     ) {
         // Fallback local illustration if offline or loading
-        Image(
-            painter = painterResource(id = item.fallbackDrawableRes),
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize(),
-        )
+        if (!isLoaded || item.posterUrl.isNullOrBlank()) {
+            Image(
+                painter = painterResource(id = item.fallbackDrawableRes),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
 
-        // Dark subtle glass scrim over the fallback
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.20f)),
-        )
+            // Dark subtle glass scrim over the fallback
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.18f)),
+            )
+        }
 
-        // Real Poster Image (scaled ~2x display size, 200 ms crossfade)
+        // Real Poster Image (scaled ~2x display size, 300 ms crossfade)
         AsyncImage(
             model = ImageRequest.Builder(context)
                 .data(item.posterUrl)
-                .crossfade(200)
+                .crossfade(300)
                 .error(item.fallbackDrawableRes)
                 .fallback(item.fallbackDrawableRes)
                 .build(),
+            onSuccess = { isLoaded = true },
             contentDescription = null,
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),

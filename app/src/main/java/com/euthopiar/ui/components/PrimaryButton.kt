@@ -23,6 +23,7 @@ import com.euthopiar.ui.theme.Accent
 import com.euthopiar.ui.theme.AppTypography
 import com.euthopiar.ui.theme.Background
 import com.euthopiar.ui.theme.Dimens
+import com.euthopiar.ui.theme.EuthopiarMotionTokens
 import com.euthopiar.ui.theme.ShapeFull
 import com.euthopiar.ui.theme.TextPrimary
 import com.euthopiar.ui.theme.playButtonSpringPress
@@ -62,11 +63,12 @@ fun PrimaryButton(
         Modifier.border(0.5.dp, androidx.compose.ui.graphics.Color.White.copy(alpha = 0.18f), ShapeFull)
     } else Modifier
 
-    val interactionModifier = if (icon != null) {
-        Modifier.playButtonSpringPress(enabled = enabled, onClickLabel = text, onClick = onClick)
-    } else {
-        Modifier.pressable(enabled = enabled, onClickLabel = text, onClick = onClick)
-    }
+    val interactionModifier = Modifier.pressable(
+        enabled = enabled,
+        scaleDown = EuthopiarMotionTokens.PressScaleLarge,
+        onClickLabel = text,
+        onClick = onClick
+    )
 
     Row(
         modifier = modifier

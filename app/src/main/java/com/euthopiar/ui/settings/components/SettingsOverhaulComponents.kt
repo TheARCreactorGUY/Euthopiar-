@@ -71,6 +71,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.euthopiar.ui.components.tvFocusable
 import com.euthopiar.ui.theme.AppFontFamily
+import com.euthopiar.ui.theme.EuthopiarMotionTokens
 import com.euthopiar.ui.theme.LocalAmoledMode
 import com.euthopiar.ui.theme.LocalReduceMotion
 import dev.chrisbanes.haze.HazeState
@@ -182,28 +183,30 @@ fun Modifier.settingsGlass(
 }
 
 /**
- * Tactile 98% (0.98x) press scale modifier for interactive rows, buttons, toggles.
+ * Tactile physics press scale modifier for interactive rows, buttons, and settings surfaces.
+ * Standardized on Emil Kowalski / Apple Fluid Interface physics with subtle natural bounce.
  */
 fun Modifier.settingsPressable(
     enabled: Boolean = true,
-    scaleDown: Float = 0.98f,
-    pressedAlpha: Float = 0.88f,
+    scaleDown: Float = EuthopiarMotionTokens.PressScaleLarge,
+    pressedAlpha: Float = 0.90f,
     role: Role? = Role.Button,
     onClickLabel: String? = null,
     onClick: () -> Unit
 ): Modifier = composed {
     val reduceMotion = LocalReduceMotion.current
+    val haptic = LocalHapticFeedback.current
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
 
     val scale by animateFloatAsState(
         targetValue = if (isPressed && enabled && !reduceMotion) scaleDown else 1f,
-        animationSpec = tween(durationMillis = 110, easing = FastOutSlowInEasing),
+        animationSpec = if (reduceMotion) androidx.compose.animation.core.snap() else EuthopiarMotionTokens.SpringPress,
         label = "settingsPressScale"
     )
     val alpha by animateFloatAsState(
         targetValue = if (isPressed && enabled && !reduceMotion) pressedAlpha else 1f,
-        animationSpec = tween(durationMillis = 110, easing = FastOutSlowInEasing),
+        animationSpec = if (reduceMotion) androidx.compose.animation.core.snap() else EuthopiarMotionTokens.SpringPress,
         label = "settingsPressAlpha"
     )
 
@@ -219,7 +222,12 @@ fun Modifier.settingsPressable(
             enabled = enabled,
             role = role,
             onClickLabel = onClickLabel,
-            onClick = onClick
+            onClick = {
+                try {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                } catch (_: Exception) {}
+                onClick()
+            }
         )
 }
 
@@ -741,7 +749,7 @@ fun CustomGlassToggle(
 
     val thumbOffset by animateDpAsState(
         targetValue = if (checked) 20.dp else 0.dp,
-        animationSpec = if (reduceMotion) tween(0) else spring(dampingRatio = 0.80f, stiffness = 550f),
+        animationSpec = if (reduceMotion) tween(0) else EuthopiarMotionTokens.SpringToggleKnob,
         label = "glassToggleThumb"
     )
 
@@ -772,9 +780,9 @@ fun CustomGlassToggle(
             .size(width = 54.dp, height = 48.dp) // Touch target >= 48dp
             .settingsPressable(
                 enabled = enabled,
+                scaleDown = 1f, // Keep container steady; only knob slides
                 role = Role.Switch,
                 onClick = {
-                    try { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) } catch (_: Exception) {}
                     onCheckedChange(!checked)
                 }
             ),
@@ -960,7 +968,7 @@ fun <T> FrostedGlassDropdown(
 
     val chevronRotation by animateFloatAsState(
         targetValue = if (expanded) 180f else 0f,
-        animationSpec = tween(if (reduceMotion) 0 else 180, easing = FastOutSlowInEasing),
+        animationSpec = if (reduceMotion) tween(0) else spring(dampingRatio = 0.80f, stiffness = 420f),
         label = "chevronRot"
     )
 
@@ -1039,6 +1047,19 @@ fun <T> FrostedGlassDropdown(
 
     // Floating Popover Menu Dialog
     if (expanded) {
+        var dialogVisible by remember { mutableStateOf(false) }
+        LaunchedEffect(Unit) { dialogVisible = true }
+        val scrimAlpha by animateFloatAsState(
+            targetValue = if (dialogVisible) 0.28f else 0f,
+            animationSpec = tween(150),
+            label = "dropdownScrimAlpha"
+        )
+        val cardScale by animateFloatAsState(
+            targetValue = if (dialogVisible) 1f else EuthopiarMotionTokens.DialogInitialScale,
+            animationSpec = if (reduceMotion) androidx.compose.animation.core.snap() else EuthopiarMotionTokens.SpringDialogScale,
+            label = "dropdownCardScale"
+        )
+
         Dialog(
             onDismissRequest = { expanded = false },
             properties = DialogProperties(
@@ -1051,7 +1072,7 @@ fun <T> FrostedGlassDropdown(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.28f))
+                    .background(Color.Black.copy(alpha = scrimAlpha))
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
@@ -1065,6 +1086,11 @@ fun <T> FrostedGlassDropdown(
                         .widthIn(min = 200.dp, max = popoverWidth.coerceAtLeast(240.dp))
                         .heightIn(max = 390.dp)
                         .padding(horizontal = 20.dp)
+                        .graphicsLayer {
+                            scaleX = cardScale
+                            scaleY = cardScale
+                            alpha = if (dialogVisible) 1f else 0f
+                        }
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
@@ -1082,6 +1108,7 @@ fun <T> FrostedGlassDropdown(
                         modifier = Modifier
                             .fillMaxWidth()
                             .verticalScroll(rememberScrollState())
+                            .padding(vertical = 6.dp)
                     ) {
                         options.forEachIndexed { index, option ->
                             val isSelected = option.value == selected
@@ -1219,7 +1246,7 @@ fun CustomGlassStepper(
     ) {
         Box(
             modifier = Modifier
-                .height(36.dp)
+                .height(38.dp)
                 .settingsGlass(
                     shape = RoundedCornerShape(SettingsTokens.RadiusControl),
                     hazeState = hazeState,
@@ -1230,20 +1257,19 @@ fun CustomGlassStepper(
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 // Minus Button
                 Box(
                     modifier = Modifier
-                        .size(28.dp)
+                        .size(32.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .settingsPressable(
                             enabled = canDecrease,
-                            scaleDown = 0.95f,
+                            scaleDown = EuthopiarMotionTokens.PressScaleCompact,
                             onClickLabel = "Decrease",
                             onClick = {
                                 if (canDecrease) {
-                                    try { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) } catch (_: Exception) {}
                                     onValueChange(maxOf(min, value - step))
                                 }
                             }
@@ -1254,13 +1280,13 @@ fun CustomGlassStepper(
                         imageVector = Icons.Outlined.Remove,
                         contentDescription = "Decrease",
                         tint = if (canDecrease) Color.White.copy(alpha = 0.85f) else SettingsTokens.TextWhite30,
-                        modifier = Modifier.size(14.dp)
+                        modifier = Modifier.size(15.dp)
                     )
                 }
 
                 // Center Readout
                 Box(
-                    modifier = Modifier.widthIn(min = 44.dp),
+                    modifier = Modifier.widthIn(min = 46.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
@@ -1280,15 +1306,14 @@ fun CustomGlassStepper(
                 // Plus Button
                 Box(
                     modifier = Modifier
-                        .size(28.dp)
+                        .size(32.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .settingsPressable(
                             enabled = canIncrease,
-                            scaleDown = 0.95f,
+                            scaleDown = EuthopiarMotionTokens.PressScaleCompact,
                             onClickLabel = "Increase",
                             onClick = {
                                 if (canIncrease) {
-                                    try { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) } catch (_: Exception) {}
                                     onValueChange(minOf(max, value + step))
                                 }
                             }
@@ -1299,7 +1324,7 @@ fun CustomGlassStepper(
                         imageVector = Icons.Outlined.Add,
                         contentDescription = "Increase",
                         tint = if (canIncrease) Color.White.copy(alpha = 0.85f) else SettingsTokens.TextWhite30,
-                        modifier = Modifier.size(14.dp)
+                        modifier = Modifier.size(15.dp)
                     )
                 }
             }
@@ -1321,12 +1346,14 @@ fun SettingsPillButton(
     isSolidWhite: Boolean = false,
     isLoading: Boolean = false,
     enabled: Boolean = true,
-    hazeState: HazeState? = null
+    hazeState: HazeState? = null,
+    fillMaxWidth: Boolean = false
 ) {
     val haptic = LocalHapticFeedback.current
 
     Box(
         modifier = modifier
+            .then(if (fillMaxWidth) Modifier.fillMaxWidth() else Modifier)
             .defaultMinSize(minHeight = 48.dp)
             .settingsPressable(
                 enabled = enabled && !isLoading,
@@ -1339,6 +1366,7 @@ fun SettingsPillButton(
     ) {
         Box(
             modifier = Modifier
+                .then(if (fillMaxWidth) Modifier.fillMaxWidth() else Modifier)
                 .height(36.dp)
                 .clip(CircleShape)
                 .then(

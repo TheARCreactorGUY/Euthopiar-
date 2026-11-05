@@ -39,6 +39,7 @@ import kotlinx.coroutines.delay
  *   Left: "3 titles ready · 1 downloading" (11sp muted)
  *   Right: "64 GB free" (11sp muted)
  */
+@Deprecated("Deprecated in favor of unified Library shared components")
 @Composable
 fun StorageMeter(
     downloadedFraction: Float,

@@ -46,6 +46,20 @@
                     android:scheme="euthopiar"
                     android:host="auth"
                     android:pathPrefix="/simkl" />
+                <data
+                    android:scheme="Euthopiar"
+                    android:host="auth"
+                    android:pathPrefix="/trakt" />
+                <data
+                    android:scheme="euthopiar"
+                    android:host="auth"
+                    android:pathPrefix="/trakt" />
+                <data
+                    android:scheme="http"
+                    android:host="localhost" />
+                <data
+                    android:scheme="http"
+                    android:host="127.0.0.1" />
             </intent-filter>
         </activity>
 

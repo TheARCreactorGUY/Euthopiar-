@@ -20,18 +20,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
-import com.euthopiar.ui.settings.components.SettingsTokens
 import com.euthopiar.ui.settings.components.settingsPressable
-import com.euthopiar.ui.theme.AppFontFamily
+import com.euthopiar.ui.theme.EuthopiarGlassTokens
 import com.euthopiar.ui.theme.LocalAmoledMode
 import com.euthopiar.ui.theme.LocalReduceMotion
 import dev.chrisbanes.haze.HazeState
@@ -91,14 +86,14 @@ fun NoStreamingEngineDialog(
     BackHandler { dismissWithAnim() }
 
     val animValue = dialogProgress.value
-    val scrimAlpha = if (reduceMotion) 0.65f else (0.65f * animValue).coerceIn(0f, 0.65f)
+    val scrimAlpha = if (reduceMotion) EuthopiarGlassTokens.ScrimAlpha else (EuthopiarGlassTokens.ScrimAlpha * animValue).coerceIn(0f, EuthopiarGlassTokens.ScrimAlpha)
     val cardScale = if (reduceMotion) 1f else 0.94f + 0.06f * animValue
     val cardTranslationY = if (reduceMotion) 0f else (1f - animValue) * 30f
     val cardAlpha = if (reduceMotion) 1f else animValue.coerceIn(0f, 1f)
 
-    val cardShape = RoundedCornerShape(28.dp)
-    val cardFill = if (isAmoled) Color.Black.copy(alpha = 0.92f) else Color(0xFF0F1219).copy(alpha = 0.85f)
-    val fallbackColor = if (isAmoled) Color.Black.copy(alpha = 0.96f) else Color(0xFF0F1219).copy(alpha = 0.96f)
+    val cardShape = RoundedCornerShape(EuthopiarGlassTokens.RadiusDialog)
+    val cardFill = EuthopiarGlassTokens.cardFill(isAmoled)
+    val fallbackColor = EuthopiarGlassTokens.fallbackFill(isAmoled)
 
     Box(
         modifier = modifier
@@ -139,7 +134,7 @@ fun NoStreamingEngineDialog(
                 .then(
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hazeState != null) {
                         Modifier.hazeEffect(state = hazeState) {
-                            blurRadius = 24.dp
+                            blurRadius = EuthopiarGlassTokens.BlurRadius
                             tints = listOf(HazeTint(cardFill))
                             fallbackTint = HazeTint(fallbackColor)
                         }
@@ -148,8 +143,8 @@ fun NoStreamingEngineDialog(
                     }
                 )
                 .border(
-                    width = 0.5.dp,
-                    color = Color.White.copy(alpha = 0.16f),
+                    width = EuthopiarGlassTokens.HairlineWidth,
+                    color = EuthopiarGlassTokens.HairlineBorder,
                     shape = cardShape
                 )
         ) {
@@ -164,10 +159,10 @@ fun NoStreamingEngineDialog(
                     modifier = Modifier
                         .size(56.dp)
                         .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.10f))
+                        .background(Color.White.copy(alpha = 0.08f))
                         .border(
-                            width = 0.5.dp,
-                            color = Color.White.copy(alpha = 0.20f),
+                            width = EuthopiarGlassTokens.HairlineWidth,
+                            color = EuthopiarGlassTokens.HairlineBorder,
                             shape = CircleShape
                         ),
                     contentAlignment = Alignment.Center
@@ -184,14 +179,8 @@ fun NoStreamingEngineDialog(
 
                 // Title
                 Text(
-                    text = "Streaming Engine Needed 🔌",
-                    style = TextStyle(
-                        fontFamily = AppFontFamily,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 20.sp,
-                        lineHeight = 25.sp,
-                        color = Color.White
-                    ),
+                    text = "Streaming Engine Needed",
+                    style = EuthopiarGlassTokens.HeaderTitle,
                     textAlign = TextAlign.Center
                 )
 
@@ -200,13 +189,7 @@ fun NoStreamingEngineDialog(
                 // Subtitle / Description
                 Text(
                     text = "Movies and series require a streaming provider plugin from the repository section to play. Let's add your first repository so you can stream seamlessly!",
-                    style = TextStyle(
-                        fontFamily = AppFontFamily,
-                        fontWeight = FontWeight.Normal,
-                        fontSize = 13.5.sp,
-                        lineHeight = 19.sp,
-                        color = SettingsTokens.TextWhite72
-                    ),
+                    style = EuthopiarGlassTokens.BodyText,
                     textAlign = TextAlign.Center
                 )
 
@@ -235,12 +218,7 @@ fun NoStreamingEngineDialog(
                     ) {
                         Text(
                             text = "Set Up Plugins & Scrapers",
-                            style = TextStyle(
-                                fontFamily = AppFontFamily,
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 14.5.sp,
-                                color = SettingsTokens.TextDark
-                            )
+                            style = EuthopiarGlassTokens.PrimaryButtonText
                         )
                     }
 
@@ -254,12 +232,7 @@ fun NoStreamingEngineDialog(
                     ) {
                         Text(
                             text = "Maybe Later",
-                            style = TextStyle(
-                                fontFamily = AppFontFamily,
-                                fontWeight = FontWeight.Medium,
-                                fontSize = 13.5.sp,
-                                color = SettingsTokens.TextWhite72
-                            )
+                            style = EuthopiarGlassTokens.SecondaryButtonText
                         )
                     }
                 }

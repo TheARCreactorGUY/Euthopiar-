@@ -31,6 +31,13 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -76,6 +83,7 @@ import androidx.compose.foundation.shape.CircleShape
 import android.net.ConnectivityManager
 import android.os.PowerManager
 import androidx.compose.material.icons.Icons
+import com.euthopiar.ui.icons.LucideIcons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.VolumeMute
@@ -179,6 +187,7 @@ import com.euthopiar.ui.components.PrimaryButton
 import com.euthopiar.ui.components.ProgressBarThin
 import com.euthopiar.ui.components.QualityBadge
 import com.euthopiar.ui.components.tvFocusable
+import com.euthopiar.ui.components.TrailerPlayerSurface
 import com.euthopiar.ui.theme.Accent
 import com.euthopiar.ui.theme.AppFontFamily
 import com.euthopiar.ui.theme.AppTypography
@@ -421,6 +430,20 @@ fun MediaDetailsScreen(
                         }
                     }
 
+                    val episodeDownloadMap = remember(downloads, detail.id, detail.title) {
+                        val byId = HashMap<String, DownloadItem>()
+                        val bySeasonEp = HashMap<Pair<Int, Int>, DownloadItem>()
+                        for (d in downloads) {
+                            if (d.episodeId != null) byId[d.episodeId] = d
+                            if (d.seasonNumber != null && d.episodeNumber != null &&
+                                (d.mediaId == detail.id || d.title.contains(detail.title, ignoreCase = true))
+                            ) {
+                                bySeasonEp[d.seasonNumber to d.episodeNumber] = d
+                            }
+                        }
+                        byId to bySeasonEp
+                    }
+
                     if (windowDims.isTablet) {
                         // Tablet / TV: Adaptive Two-Column Layout
                         val canPlayAmbientTrailer = !hasTrailerFailed &&
@@ -515,7 +538,8 @@ fun MediaDetailsScreen(
                                             context.startActivity(Intent.createChooser(shareIntent, "Share ${detail.title}"))
                                         },
                                         onTrailer = if (!detail.trailerUrl.isNullOrBlank()) { { showTrailerDialog = true } } else null,
-                                        onPlaylist = { showAddToPlaylistSheet = true }
+                                        onPlaylist = { showAddToPlaylistSheet = true },
+                                        onShowMessage = { snackbarController.show(it) }
                                     )
 
                                     Spacer(modifier = Modifier.height(Dimens.spacing16))
@@ -636,6 +660,9 @@ fun MediaDetailsScreen(
                                 }
                             }
                         }
+                        val isHeroMostlyVisible by remember {
+                            derivedStateOf { heroScrollAlpha > 0.5f }
+                        }
 
                         val totalScrollPx by remember {
                             derivedStateOf {
@@ -662,7 +689,7 @@ fun MediaDetailsScreen(
                         }
 
                         val reduceMotion = LocalReduceMotion.current
-                        val compactBarAlpha = if (reduceMotion) (if (isCompactTopBarVisible) 1f else 0f) else topBarProgress
+                        val compactBarAlpha by remember(reduceMotion) { derivedStateOf { if (reduceMotion) (if (isCompactTopBarVisible) 1f else 0f) else topBarProgress } }
                         val isScrolled by remember {
                             derivedStateOf { topBarProgress > 0.5f }
                         }
@@ -682,7 +709,7 @@ fun MediaDetailsScreen(
                             label = "backButtonIconSize"
                         )
                         val backButtonOffsetY by animateDpAsState(
-                            targetValue = if (isScrolled) 16.dp else 8.dp,
+                            targetValue = if (isScrolled) 10.dp else 8.dp,
                             animationSpec = if (reduceMotion) tween(120) else spring(dampingRatio = 0.85f, stiffness = Spring.StiffnessMedium),
                             label = "backButtonOffsetY"
                         )
@@ -771,7 +798,7 @@ fun MediaDetailsScreen(
                                                 )
                                         ) {
                                             AnimatedVisibility(
-                                                visible = !hasTrailerFailed && isBackdropTrailerEnabled && isTrailerPlaybackActive && isAtTop && heroScrollAlpha > 0.5f,
+                                                visible = !hasTrailerFailed && isBackdropTrailerEnabled && isTrailerPlaybackActive && isAtTop && isHeroMostlyVisible,
                                                 enter = fadeIn(tween(300)),
                                                 exit = fadeOut(tween(300)),
                                                 modifier = Modifier
@@ -800,7 +827,7 @@ fun MediaDetailsScreen(
                                         DetailsTitleHeader(
                                             title = detail.title,
                                             logoUrl = detail.logoUrl,
-                                            alpha = bigLogoAlpha
+                                            alphaProvider = { bigLogoAlpha }
                                         )
 
                                         Spacer(modifier = Modifier.height(Dimens.spacing8))
@@ -848,7 +875,8 @@ fun MediaDetailsScreen(
                                             },
                                             onTrailer = if (!detail.trailerUrl.isNullOrBlank()) { { showTrailerDialog = true } } else null,
                                             onPlaylist = { showAddToPlaylistSheet = true },
-                                            hazeState = detailsHazeState
+                                            hazeState = detailsHazeState,
+                                            onShowMessage = { snackbarController.show(it) }
                                         )
 
                                         Spacer(modifier = Modifier.height(Dimens.spacing16))
@@ -936,11 +964,7 @@ fun MediaDetailsScreen(
                                             } else 0f
                                             val isWatched = playback?.isCompleted == true || (playback != null && playback.durationMs > 0 && playback.currentPositionMs >= (playback.durationMs * 0.9f).toLong())
                                             val isExpanded = expandedEpisodeId == episode.id
-                                            val epDownload = downloads.firstOrNull {
-                                                (it.episodeId != null && it.episodeId == episode.id) ||
-                                                (it.seasonNumber == episode.seasonNumber && it.episodeNumber == episode.episodeNumber &&
-                                                    (it.mediaId == detail.id || it.title.contains(detail.title, ignoreCase = true)))
-                                            }
+                                            val epDownload = episodeDownloadMap.first[episode.id] ?: episodeDownloadMap.second[episode.seasonNumber to episode.episodeNumber]
                                             Column(
                                                 modifier = Modifier
                                                     .fillMaxWidth()
@@ -963,7 +987,8 @@ fun MediaDetailsScreen(
                                                         showDownloadSheet = true
                                                     },
                                                     onToggleWatched = { viewModel.toggleEpisodeWatched(detail, episode) },
-                                                    onAddToPlaylist = { selectedEpisodeForPlaylist = episode }
+                                                    onAddToPlaylist = { selectedEpisodeForPlaylist = episode },
+                                                    onShowMessage = { snackbarController.show(it) }
                                                 )
                                                 Box(
                                                     modifier = Modifier
@@ -1032,7 +1057,8 @@ fun MediaDetailsScreen(
                             }
 
                             // Compact Top Bar (Fix 1)
-                            if (compactBarAlpha > 0.01f) {
+                            val showCompactTopBar = compactBarAlpha > 0.01f || isTabPinned
+                            if (showCompactTopBar) {
                                 Box(
                                     modifier = Modifier
                                         .align(Alignment.TopCenter)
@@ -1100,13 +1126,11 @@ fun MediaDetailsScreen(
 
                                         Spacer(modifier = Modifier.width(12.dp))
 
-                                        val smallLogoAlpha = (1f - bigLogoAlpha).coerceIn(0f, 1f)
-
-                                        // Title logo art scaled down to 28-30dp tall (fallback title 15sp medium wide letter spacing)
+                                        // Title logo art scaled down to 28-30dp tall (fallback title 15sp medium letter spacing)
                                         Box(
                                             modifier = Modifier
                                                 .weight(1f, fill = false)
-                                                .graphicsLayer { alpha = smallLogoAlpha }
+                                                .graphicsLayer { alpha = (1f - bigLogoAlpha).coerceIn(0f, 1f) }
                                         ) {
                                             if (!detail.logoUrl.isNullOrBlank()) {
                                                 AsyncImage(
@@ -1129,7 +1153,7 @@ fun MediaDetailsScreen(
                                                         fontFamily = AppFontFamily,
                                                         fontSize = 15.sp,
                                                         fontWeight = FontWeight.Medium,
-                                                        letterSpacing = 1.2.sp,
+                                                        letterSpacing = (-0.2).sp,
                                                         color = Color.White
                                                     ),
                                                     maxLines = 1,
@@ -1358,95 +1382,234 @@ fun MediaDetailsScreen(
         }
 
         // Full Trailer Interactive In-Window Overlay
-        if (showTrailerDialog && successDetail != null) {
+        AnimatedVisibility(
+            visible = showTrailerDialog && successDetail != null,
+            enter = fadeIn(tween(220)) + scaleIn(tween(220), initialScale = 0.96f),
+            exit = fadeOut(tween(160)) + scaleOut(tween(160), targetScale = 0.96f),
+            modifier = Modifier.zIndex(100f)
+        ) {
             val trailerDetail = successDetail
-            val tUrl = trailerDetail.trailerUrl
-            if (!tUrl.isNullOrBlank()) {
+            val tUrl = trailerDetail?.trailerUrl
+            if (trailerDetail != null && !tUrl.isNullOrBlank()) {
                 val context = LocalContext.current
                 val configuration = LocalConfiguration.current
                 val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-                BackHandler { showTrailerDialog = false }
+                val activity = remember(context) {
+                    var c: Context? = context
+                    while (c is ContextWrapper) {
+                        if (c is Activity) break
+                        c = c.baseContext
+                    }
+                    c as? Activity
+                }
+
+                var isForcedLandscape by remember { mutableStateOf(false) }
+                var isChromeVisible by remember { mutableStateOf(true) }
+                var dragOffsetY by remember { mutableFloatStateOf(0f) }
+                val overlayScope = rememberCoroutineScope()
+
+                fun closeTrailerOverlay() {
+                    if (isForcedLandscape) {
+                        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                        isForcedLandscape = false
+                    }
+                    showTrailerDialog = false
+                }
+
+                DisposableEffect(Unit) {
+                    onDispose {
+                        if (isForcedLandscape) {
+                            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                        }
+                    }
+                }
+
+                BackHandler { closeTrailerOverlay() }
+
+                val dragProgress = (dragOffsetY / 600f).coerceIn(0f, 1f)
+                val cardScale = 1f - (dragProgress * 0.06f)
+
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(Background)
-                        .zIndex(100f)
+                        .then(
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                Modifier.hazeEffect(state = detailsHazeState) {
+                                    blurRadius = 28.dp
+                                    tints = listOf(HazeTint(Color(0xFF07080D).copy(alpha = 0.84f * (1f - dragProgress * 0.4f))))
+                                    fallbackTint = HazeTint(Color(0xFF07080D).copy(alpha = 0.94f))
+                                }
+                            } else {
+                                Modifier.background(Color(0xFF07080D).copy(alpha = 0.94f * (1f - dragProgress * 0.4f)))
+                            }
+                        )
+                        .draggable(
+                            orientation = Orientation.Vertical,
+                            state = rememberDraggableState { delta ->
+                                val next = dragOffsetY + if (dragOffsetY + delta < 0f) delta * 0.18f else delta
+                                dragOffsetY = next.coerceAtLeast(-24f)
+                            },
+                            onDragStopped = { velocity ->
+                                val projected = dragOffsetY + velocity * 0.15f
+                                if (dragOffsetY > 140f || (dragOffsetY > 28f && velocity > 900f) || projected > 240f) {
+                                    closeTrailerOverlay()
+                                } else {
+                                    overlayScope.launch {
+                                        Animatable(dragOffsetY).animateTo(
+                                            targetValue = 0f,
+                                            initialVelocity = velocity,
+                                            animationSpec = spring(
+                                                dampingRatio = Spring.DampingRatioLowBouncy,
+                                                stiffness = Spring.StiffnessMedium
+                                            )
+                                        ) {
+                                            dragOffsetY = value
+                                        }
+                                    }
+                                }
+                            }
+                        )
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = { closeTrailerOverlay() }
+                        )
                 ) {
-                    // Centered 16:9 widescreen video player with letterboxing
+                    // Floating 16:9 Cinema Frame
                     Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(if (isLandscape) PaddingValues(0.dp) else PaddingValues(horizontal = Dimens.spacing8)),
+                        modifier = Modifier.fillMaxSize(),
                         contentAlignment = Alignment.Center
                     ) {
-                        val playerModifier = if (isLandscape) {
-                            Modifier
-                                .fillMaxHeight()
-                                .aspectRatio(16f / 9f)
-                        } else {
-                            Modifier
-                                .fillMaxWidth()
-                                .aspectRatio(16f / 9f)
-                                .clip(ShapeM)
+                        Box(
+                            modifier = if (isLandscape) {
+                                Modifier
+                                    .fillMaxSize()
+                                    .graphicsLayer {
+                                        translationY = dragOffsetY
+                                        scaleX = cardScale
+                                        scaleY = cardScale
+                                    }
+                            } else {
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp)
+                                    .aspectRatio(16f / 9f)
+                                    .graphicsLayer {
+                                        translationY = dragOffsetY
+                                        scaleX = cardScale
+                                        scaleY = cardScale
+                                    }
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .border(0.5.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(16.dp))
+                            }
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = { /* prevent backdrop dismissal when clicking video frame */ }
+                            )
+                        ) {
+                            TrailerPlayerSurface(
+                                trailerUrl = tUrl,
+                                startMuted = false,
+                                autoPlay = true,
+                                posterUrl = trailerDetail.backdropUrl ?: trailerDetail.posterUrl,
+                                showBuiltInTopChrome = false,
+                                isFullscreen = isLandscape || isForcedLandscape,
+                                onToggleFullscreen = {
+                                    val target = if (isLandscape || isForcedLandscape) {
+                                        isForcedLandscape = false
+                                        ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                                    } else {
+                                        isForcedLandscape = true
+                                        ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                                    }
+                                    activity?.requestedOrientation = target
+                                },
+                                onControlsVisibilityChanged = { visible -> isChromeVisible = visible },
+                                onPlaybackFailure = {
+                                    snackbarController.show("Unable to play trailer right now")
+                                },
+                                modifier = Modifier.fillMaxSize()
+                            )
                         }
-                        TrailerBackdropPlayer(
-                            trailerUrl = tUrl,
-                            isInteractive = true,
-                            modifier = playerModifier
-                        )
                     }
 
-                    // Top Bar with Media Title, Watch on YouTube, and Close
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .statusBarsPadding()
-                            .padding(Dimens.spacing16)
-                            .align(Alignment.TopCenter),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                    // Auto-Hiding Frosted Glass Top Bar
+                    AnimatedVisibility(
+                        visible = isChromeVisible,
+                        enter = fadeIn(tween(180)),
+                        exit = fadeOut(tween(220)),
+                        modifier = Modifier.align(Alignment.TopCenter)
                     ) {
-                        Text(
-                            text = trailerDetail.title,
-                            style = AppTypography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = TextPrimary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(end = Dimens.spacing16)
-                        )
                         Row(
-                            horizontalArrangement = Arrangement.spacedBy(Dimens.spacing8),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .statusBarsPadding()
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            IconButton(
-                                onClick = {
-                                    try {
-                                        val intent = Intent(
-                                            Intent.ACTION_VIEW,
-                                            android.net.Uri.parse(tUrl)
-                                        )
-                                        context.startActivity(intent)
-                                    } catch (_: Exception) {}
-                                },
-                                modifier = Modifier.background(SurfaceMid.copy(alpha = 0.85f), CircleShape)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.Share,
-                                    contentDescription = "Watch on YouTube",
-                                    tint = TextPrimary
+                            // Left Side (Logo or Clean Title)
+                            if (!trailerDetail.logoUrl.isNullOrBlank()) {
+                                AsyncImage(
+                                    model = ImageRequest.Builder(context)
+                                        .data(trailerDetail.logoUrl)
+                                        .crossfade(200)
+                                        .transformations(TrimTransparentTransformation())
+                                        .build(),
+                                    contentDescription = trailerDetail.title,
+                                    modifier = Modifier
+                                        .heightIn(max = 32.dp)
+                                        .widthIn(max = 180.dp),
+                                    contentScale = ContentScale.Fit,
+                                    alignment = Alignment.CenterStart
+                                )
+                            } else {
+                                Text(
+                                    text = sanitizeTitle(trailerDetail.title),
+                                    style = TextStyle(
+                                        fontFamily = AppFontFamily,
+                                        fontSize = 16.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        letterSpacing = (-0.2).sp,
+                                        color = Color.White
+                                    ),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false)
                                 )
                             }
-                            IconButton(
-                                onClick = { showTrailerDialog = false },
-                                modifier = Modifier.background(SurfaceMid.copy(alpha = 0.85f), CircleShape)
+
+                            Spacer(modifier = Modifier.width(16.dp))
+
+                            // Right Side (Glass Action Buttons, Arrangement.spacedBy(10.dp))
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Close,
+                                MediaDetailsGlassIconButton(
+                                    icon = Icons.Outlined.OpenInNew,
+                                    contentDescription = "Open trailer externally",
+                                    onClick = {
+                                        try {
+                                            context.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(tUrl)))
+                                        } catch (_: Exception) {}
+                                    },
+                                    size = 40.dp,
+                                    radius = 12.dp,
+                                    iconSize = 18.dp,
+                                    hazeState = detailsHazeState,
+                                    isOverArtwork = true
+                                )
+                                MediaDetailsGlassIconButton(
+                                    icon = Icons.Filled.Close,
                                     contentDescription = "Close trailer",
-                                    tint = TextPrimary
+                                    onClick = { closeTrailerOverlay() },
+                                    size = 40.dp,
+                                    radius = 12.dp,
+                                    iconSize = 18.dp,
+                                    hazeState = detailsHazeState,
+                                    isOverArtwork = true
                                 )
                             }
                         }
@@ -1458,185 +1621,6 @@ fun MediaDetailsScreen(
     }
 }
 
-@Composable
-fun TrailerBackdropPlayer(
-    trailerUrl: String,
-    modifier: Modifier = Modifier,
-    isInteractive: Boolean = false
-) {
-    val youtubeKey = remember(trailerUrl) {
-        val clean = trailerUrl.trim()
-        when {
-            clean.contains("v=") -> clean.substringAfter("v=").substringBefore("&")
-            clean.contains("youtu.be/") -> clean.substringAfter("youtu.be/").substringBefore("?").substringBefore("&")
-            clean.contains("embed/") -> clean.substringAfter("embed/").substringBefore("?").substringBefore("&")
-            clean.matches(Regex("^[a-zA-Z0-9_-]{11}$")) -> clean
-            else -> null
-        }
-    }
-
-    if (youtubeKey != null) {
-        androidx.compose.ui.viewinterop.AndroidView(
-            factory = { ctx ->
-                android.webkit.WebView(ctx).apply {
-                    layoutParams = android.view.ViewGroup.LayoutParams(
-                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                        android.view.ViewGroup.LayoutParams.MATCH_PARENT
-                    )
-                    settings.apply {
-                        javaScriptEnabled = true
-                        mediaPlaybackRequiresUserGesture = false
-                        domStorageEnabled = true
-                        databaseEnabled = true
-                        loadWithOverviewMode = true
-                        useWideViewPort = true
-                        setSupportZoom(false)
-                        mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                        cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
-                        userAgentString = if (isInteractive) {
-                            "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
-                        } else {
-                            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
-                        }
-                    }
-                    webChromeClient = android.webkit.WebChromeClient()
-                    webViewClient = object : android.webkit.WebViewClient() {
-                        override fun shouldOverrideUrlLoading(view: android.webkit.WebView?, request: android.webkit.WebResourceRequest?): Boolean {
-                            return false
-                        }
-                    }
-                    setBackgroundColor(android.graphics.Color.TRANSPARENT)
-
-                    val muteParam = if (isInteractive) "0" else "1"
-                    val controlsParam = if (isInteractive) "1" else "0"
-                    val loopParam = if (isInteractive) "0" else "1"
-                    val pointerEvents = if (isInteractive) "auto" else "none"
-
-                    val playerCss = if (isInteractive) {
-                        """
-                        #player {
-                            position: absolute;
-                            top: 0;
-                            left: 0;
-                            width: 100%;
-                            height: 100%;
-                            border: 0;
-                            pointer-events: auto;
-                            opacity: 1;
-                            background: transparent;
-                        }
-                        """.trimIndent()
-                    } else {
-                        """
-                        #player {
-                            position: absolute;
-                            top: 50%;
-                            left: 50%;
-                            width: 177.78vh;
-                            height: 100vh;
-                            min-width: 100vw;
-                            min-height: 56.25vw;
-                            transform: translate(-50%, -50%) scale(1.25);
-                            border: 0;
-                            pointer-events: none;
-                            opacity: 0;
-                            background: transparent;
-                            transition: opacity 0.3s cubic-bezier(0.4, 0.0, 0.2, 1);
-                        }
-                        #player.active {
-                            opacity: 1;
-                        }
-                        """.trimIndent()
-                    }
-
-                    val html = """
-                        <!DOCTYPE html>
-                        <html>
-                        <head>
-                        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-                        <meta name="referrer" content="strict-origin-when-cross-origin">
-                        <style>
-                            * { margin: 0; padding: 0; box-sizing: border-box; }
-                            html, body {
-                                width: 100%;
-                                height: 100%;
-                                overflow: hidden;
-                                background: transparent;
-                            }
-                            .video-container {
-                                position: absolute;
-                                top: 0;
-                                left: 0;
-                                width: 100%;
-                                height: 100%;
-                                overflow: hidden;
-                                background: transparent;
-                                pointer-events: $pointerEvents;
-                            }
-                            $playerCss
-                        </style>
-                        </head>
-                        <body>
-                        <div class="video-container">
-                            <iframe id="player"
-                                    src="https://www.youtube-nocookie.com/embed/$youtubeKey?autoplay=1&mute=$muteParam&controls=$controlsParam&loop=$loopParam&playlist=$youtubeKey&playsinline=1&rel=0&modestbranding=1&iv_load_policy=3&disablekb=1&fs=0&enablejsapi=1&cc_load_policy=0&origin=https://www.themoviedb.org&widget_referrer=https://www.themoviedb.org"
-                                    allow="autoplay; encrypted-media; picture-in-picture; accelerometer; clipboard-write; gyroscope; fullscreen"
-                                    referrerpolicy="strict-origin-when-cross-origin"
-                                    frameborder="0"
-                                    onload="onIframeLoad()">
-                            </iframe>
-                        </div>
-                        <script>
-                            function revealPlayer() {
-                                var p = document.getElementById('player');
-                                if (p) p.classList.add('active');
-                            }
-                            function disableCaptions() {
-                                var p = document.getElementById('player');
-                                if (p && p.contentWindow) {
-                                    p.contentWindow.postMessage(JSON.stringify({event: 'command', func: 'unloadModule', args: ['captions']}), '*');
-                                    p.contentWindow.postMessage(JSON.stringify({event: 'command', func: 'unloadModule', args: ['cc']}), '*');
-                                    p.contentWindow.postMessage(JSON.stringify({event: 'command', func: 'setOption', args: ['captions', 'track', {}]}), '*');
-                                }
-                            }
-                            function onIframeLoad() {
-                                var p = document.getElementById('player');
-                                if (p && p.contentWindow) {
-                                    p.contentWindow.postMessage(JSON.stringify({event: 'listening'}), '*');
-                                    p.contentWindow.postMessage(JSON.stringify({event: 'command', func: 'playVideo', args: []}), '*');
-                                    disableCaptions();
-                                }
-                            }
-                            window.addEventListener('message', function(event) {
-                                try {
-                                    var data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
-                                    var state = (data && data.info && data.info.playerState !== undefined) ? data.info.playerState : (data && data.event === 'onStateChange' ? data.info : null);
-                                    if (state === 1) {
-                                        revealPlayer();
-                                        disableCaptions();
-                                    }
-                                } catch(e) {}
-                            });
-                        </script>
-                        </body>
-                        </html>
-                    """.trimIndent()
-                    loadDataWithBaseURL("https://www.themoviedb.org", html, "text/html", "UTF-8", null)
-                }
-            },
-            onRelease = { webView ->
-                try {
-                    webView.onPause()
-                    webView.stopLoading()
-                    webView.clearHistory()
-                    webView.removeAllViews()
-                    webView.destroy()
-                } catch (_: Exception) {}
-            },
-            modifier = modifier
-        )
-    }
-}
 
 /**
  * Small frosted glass mute/unmute button for the ambient backdrop trailer.
@@ -1668,7 +1652,7 @@ fun FrostedMuteButton(
             contentAlignment = Alignment.Center
         ) {
             Icon(
-                imageVector = if (isMuted) Icons.AutoMirrored.Filled.VolumeMute else Icons.AutoMirrored.Filled.VolumeUp,
+                imageVector = if (isMuted) LucideIcons.VolumeMute else LucideIcons.VolumeUp,
                 contentDescription = if (isMuted) "Unmute trailer" else "Mute trailer",
                 tint = TextPrimary,
                 modifier = Modifier.size(18.dp)
@@ -2040,12 +2024,12 @@ private fun DetailsTitleHeader(
     title: String,
     logoUrl: String?,
     modifier: Modifier = Modifier,
-    alpha: Float = 1f
+    alphaProvider: () -> Float = { 1f }
 ) {
     val context = LocalContext.current
     val cleanTitle = remember(title) { sanitizeTitle(title) }
     Box(
-        modifier = modifier.graphicsLayer { this.alpha = alpha }
+        modifier = modifier.graphicsLayer { this.alpha = alphaProvider() }
     ) {
         if (!logoUrl.isNullOrBlank()) {
             AsyncImage(
@@ -2215,7 +2199,8 @@ private fun DetailsActionBlock(
     onShare: () -> Unit,
     onTrailer: (() -> Unit)? = null,
     onPlaylist: (() -> Unit)? = null,
-    hazeState: HazeState? = null
+    hazeState: HazeState? = null,
+    onShowMessage: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
     val isLiveTv = detail.type == MediaType.LIVE_TV ||
@@ -2320,8 +2305,8 @@ private fun DetailsActionBlock(
     }
     val downloadIcon = when {
         isDownloaded -> Icons.Outlined.Check
-        isDownloading -> Icons.Filled.Pause
-        isPaused -> Icons.Filled.PlayArrow
+        isDownloading -> LucideIcons.Pause
+        isPaused -> LucideIcons.Play
         isDownloadFailed -> Icons.Outlined.Refresh
         else -> Icons.Outlined.Download
     }
@@ -2330,7 +2315,7 @@ private fun DetailsActionBlock(
         val downloadRepo = DownloadRepository.getInstance(context)
         when {
             isLiveTv -> {
-                android.widget.Toast.makeText(context, "Live channels cannot be downloaded offline", android.widget.Toast.LENGTH_SHORT).show()
+                onShowMessage("Live channels cannot be downloaded offline")
             }
             isDownloading -> {
                 val activeItem = if (isTv) activeDownloadingEp else mediaDownload
@@ -2345,7 +2330,7 @@ private fun DetailsActionBlock(
                 if (failedItem != null) downloadRepo.resumeDownload(failedItem.id) else onDownload()
             }
             isDownloaded -> {
-                android.widget.Toast.makeText(context, "Media is already downloaded for offline playback", android.widget.Toast.LENGTH_SHORT).show()
+                onShowMessage("Media is already downloaded for offline playback")
             }
             else -> onDownload()
         }
@@ -2356,7 +2341,7 @@ private fun DetailsActionBlock(
         val primaryLabel = if (isLiveTv) "Watch Live" else actionState.label
         PrimaryButton(
             text = primaryLabel,
-            icon = Icons.Filled.PlayArrow,
+            icon = LucideIcons.Play,
             onClick = onPlay,
             isFaded = !hasStreamEngine,
             modifier = Modifier
@@ -2397,7 +2382,7 @@ private fun DetailsActionBlock(
             watchlistStatus == "TO_BE_WATCHED" -> "To Watch"
             else -> "Saved"
         }
-        val watchlistIcon = if (isInWatchlist) Icons.Outlined.Check else Icons.Outlined.BookmarkBorder
+        val watchlistIcon = if (isInWatchlist) Icons.Outlined.Check else LucideIcons.Bookmark
 
         // Action Buttons Row: 5 equal columns, glass rounded squares (46x46dp, 15dp radius)
         Row(
@@ -2484,8 +2469,8 @@ private fun ActionButtonItem(
     val scaleAnim by animateFloatAsState(
         targetValue = if (isPressed && !reduceMotion) 0.96f else 1f,
         animationSpec = if (reduceMotion) snap() else spring(
-            dampingRatio = Spring.DampingRatioNoBouncy,
-            stiffness = Spring.StiffnessMedium
+            dampingRatio = 0.76f,
+            stiffness = 500f
         ),
         label = "actionBtnScale"
     )
@@ -2520,15 +2505,20 @@ private fun ActionButtonItem(
     ) {
         Box(
             modifier = Modifier
-                .size(46.dp)
-                .mediaDetailsGlassSurface(
-                    shape = tileShape,
-                    hazeState = hazeState,
-                    alphaFill = if (isActive) 0.14f else 0.07f
-                )
-                .tvFocusable(shape = tileShape),
+                .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp),
             contentAlignment = Alignment.Center
         ) {
+            Box(
+                modifier = Modifier
+                    .size(46.dp)
+                    .mediaDetailsGlassSurface(
+                        shape = tileShape,
+                        hazeState = hazeState,
+                        alphaFill = if (isActive) 0.14f else 0.07f
+                    )
+                    .tvFocusable(shape = tileShape),
+                contentAlignment = Alignment.Center
+            ) {
             if (isPressed) {
                 Box(
                     modifier = Modifier
@@ -2549,7 +2539,7 @@ private fun ActionButtonItem(
                         strokeCap = StrokeCap.Round
                     )
                     Icon(
-                        imageVector = Icons.Filled.Pause,
+                        imageVector = LucideIcons.Pause,
                         contentDescription = "Pause",
                         tint = Color.White,
                         modifier = Modifier.size(11.dp)
@@ -2566,7 +2556,7 @@ private fun ActionButtonItem(
                         strokeCap = StrokeCap.Round
                     )
                     Icon(
-                        imageVector = Icons.Filled.PlayArrow,
+                        imageVector = LucideIcons.Play,
                         contentDescription = "Resume",
                         tint = Color.White,
                         modifier = Modifier.size(12.dp)
@@ -2604,6 +2594,7 @@ private fun ActionButtonItem(
                         .background(Color.White)
                 )
             }
+        }
         }
 
         Spacer(modifier = Modifier.height(6.dp))
@@ -2643,7 +2634,7 @@ private fun ExpandableOverview(overview: String?) {
                     canExpand = textLayoutResult.hasVisualOverflow || textLayoutResult.lineCount > 3
                 }
             },
-            modifier = Modifier.animateContentSize(tween(240, easing = FastOutSlowInEasing))
+            modifier = Modifier.animateContentSize(spring(dampingRatio = 0.82f, stiffness = 380f))
         )
         if (canExpand) {
             Spacer(modifier = Modifier.height(Dimens.spacing4))
@@ -2697,6 +2688,20 @@ private fun DetailsTabsContent(
         else listOf("Details & Cast", "More like this")
     }
 
+    val episodeDownloadMap = remember(downloads, detail.id, detail.title) {
+        val byId = HashMap<String, DownloadItem>()
+        val bySeasonEp = HashMap<Pair<Int, Int>, DownloadItem>()
+        for (d in downloads) {
+            if (d.episodeId != null) byId[d.episodeId] = d
+            if (d.seasonNumber != null && d.episodeNumber != null &&
+                (d.mediaId == detail.id || d.title.contains(detail.title, ignoreCase = true))
+            ) {
+                bySeasonEp[d.seasonNumber to d.episodeNumber] = d
+            }
+        }
+        byId to bySeasonEp
+    }
+
     Column(modifier = Modifier.fillMaxWidth()) {
         if (isTabRowVisible) {
             AppTabRow(
@@ -2711,114 +2716,131 @@ private fun DetailsTabsContent(
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        val reduceMotion = LocalReduceMotion.current
+        val density = LocalDensity.current
+        val slideOffsetPx = with(density) { 6.dp.roundToPx() }
         val currentTitle = tabTitles.getOrNull(selectedTabIndex) ?: ""
-        when (currentTitle) {
-            "Episodes" -> {
-                // Rendered here for tablet two-column layout. On phone, LazyColumn virtualizes below tabs_content.
-                if (renderEpisodes || displayedEpisodes.isNotEmpty() || totalEpisodesCount > 0) {
-                    var expandedEpId by remember(selectedSeason, selectedChunkIndex) { mutableStateOf<String?>(null) }
-                    EpisodesTabContent(
-                        selectedSeason = selectedSeason,
-                        episodeCount = totalEpisodesCount,
-                        onSelectSeason = onSelectSeason,
-                        hazeState = hazeState,
-                        chunkCount = chunkCount,
-                        selectedChunkIndex = selectedChunkIndex,
-                        chunkSize = chunkSize,
-                        onSelectChunk = onSelectChunk
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    if (displayedEpisodes.isEmpty()) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 32.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = "No episodes available for this season",
-                                style = TextStyle(
-                                    fontFamily = AppFontFamily,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Normal,
-                                    color = Color.White.copy(alpha = 0.50f)
-                                )
-                            )
-                        }
-                    } else {
-                        displayedEpisodes.forEachIndexed { index, episode ->
-                            val playback = episodePlaybackMap[episode.seasonNumber to episode.episodeNumber]
-                            val progress = if (playback != null && playback.durationMs > 0) {
-                                (playback.currentPositionMs.toFloat() / playback.durationMs.toFloat()).coerceIn(0f, 1f)
-                            } else 0f
-                            val isWatched = playback?.isCompleted == true || (playback != null && playback.durationMs > 0 && playback.currentPositionMs >= (playback.durationMs * 0.9f).toLong())
-                            val isExpanded = expandedEpId == episode.id
-                            val epDownload = downloads.firstOrNull {
-                                (it.episodeId != null && it.episodeId == episode.id) ||
-                                (it.seasonNumber == episode.seasonNumber && it.episodeNumber == episode.episodeNumber &&
-                                    (it.mediaId == detail.id || it.title.contains(detail.title, ignoreCase = true)))
-                            }
-                            Column(
+        val tabSnackbarController = LocalSnackbarController.current
+        AnimatedContent(
+            targetState = currentTitle,
+            transitionSpec = {
+                if (reduceMotion) {
+                    fadeIn(tween(0)) togetherWith fadeOut(tween(0))
+                } else {
+                    val targetIdx = tabTitles.indexOf(targetState)
+                    val initialIdx = tabTitles.indexOf(initialState)
+                    val slideDirection = if (targetIdx >= initialIdx) 1 else -1
+                    (fadeIn(tween(180)) + slideInHorizontally(tween(180)) { slideOffsetPx * slideDirection })
+                        .togetherWith(fadeOut(tween(140)) + slideOutHorizontally(tween(140)) { -slideOffsetPx * slideDirection })
+                }
+            },
+            label = "tabContentAnim"
+        ) { title ->
+            when (title) {
+                "Episodes" -> {
+                    // Rendered here for tablet two-column layout. On phone, LazyColumn virtualizes below tabs_content.
+                    if (renderEpisodes || displayedEpisodes.isNotEmpty() || totalEpisodesCount > 0) {
+                        var expandedEpId by remember(selectedSeason, selectedChunkIndex) { mutableStateOf<String?>(null) }
+                        EpisodesTabContent(
+                            selectedSeason = selectedSeason,
+                            episodeCount = totalEpisodesCount,
+                            onSelectSeason = onSelectSeason,
+                            hazeState = hazeState,
+                            chunkCount = chunkCount,
+                            selectedChunkIndex = selectedChunkIndex,
+                            chunkSize = chunkSize,
+                            onSelectChunk = onSelectChunk
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        if (displayedEpisodes.isEmpty()) {
+                            Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 16.dp)
+                                    .padding(vertical = 32.dp),
+                                contentAlignment = Alignment.Center
                             ) {
-                                EpisodeRowItem(
-                                    episode = episode,
-                                    detail = detail,
-                                    progress = progress,
-                                    isWatched = isWatched,
-                                    isExpanded = isExpanded,
-                                    downloadItem = epDownload,
-                                    staggerIndex = index,
-                                    hazeState = hazeState,
-                                    onRowClick = {
-                                        expandedEpId = if (isExpanded) null else episode.id
-                                    },
-                                    onPlayClick = { onPlayEpisode(episode) },
-                                    onDownloadClick = { onDownloadEpisode(episode) },
-                                    onToggleWatched = { onToggleWatched(episode) },
-                                    onAddToPlaylist = { onAddToPlaylistEpisode(episode) }
-                                )
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(0.5.dp)
-                                        .background(Color.White.copy(alpha = 0.14f))
+                                Text(
+                                    text = "No episodes available for this season",
+                                    style = TextStyle(
+                                        fontFamily = AppFontFamily,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Normal,
+                                        color = Color.White.copy(alpha = 0.50f)
+                                    )
                                 )
                             }
-                        }
+                        } else {
+                            displayedEpisodes.forEachIndexed { index, episode ->
+                                val playback = episodePlaybackMap[episode.seasonNumber to episode.episodeNumber]
+                                val progress = if (playback != null && playback.durationMs > 0) {
+                                    (playback.currentPositionMs.toFloat() / playback.durationMs.toFloat()).coerceIn(0f, 1f)
+                                } else 0f
+                                val isWatched = playback?.isCompleted == true || (playback != null && playback.durationMs > 0 && playback.currentPositionMs >= (playback.durationMs * 0.9f).toLong())
+                                val isExpanded = expandedEpId == episode.id
+                                val epDownload = episodeDownloadMap.first[episode.id] ?: episodeDownloadMap.second[episode.seasonNumber to episode.episodeNumber]
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp)
+                                ) {
+                                    EpisodeRowItem(
+                                        episode = episode,
+                                        detail = detail,
+                                        progress = progress,
+                                        isWatched = isWatched,
+                                        isExpanded = isExpanded,
+                                        downloadItem = epDownload,
+                                        staggerIndex = index,
+                                        hazeState = hazeState,
+                                        onRowClick = {
+                                            expandedEpId = if (isExpanded) null else episode.id
+                                        },
+                                        onPlayClick = { onPlayEpisode(episode) },
+                                        onDownloadClick = { onDownloadEpisode(episode) },
+                                        onToggleWatched = { onToggleWatched(episode) },
+                                        onAddToPlaylist = { onAddToPlaylistEpisode(episode) },
+                                        onShowMessage = { tabSnackbarController.show(it) }
+                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(0.5.dp)
+                                            .background(Color.White.copy(alpha = 0.14f))
+                                    )
+                                }
+                            }
 
-                        if (chunkCount > 1) {
-                            Box(modifier = Modifier.padding(horizontal = 16.dp)) {
-                                EpisodesPaginationButtons(
-                                    safeChunkIndex = selectedChunkIndex,
-                                    chunkCount = chunkCount,
-                                    chunkSize = chunkSize,
-                                    totalEpisodes = totalEpisodesCount,
-                                    hazeState = hazeState,
-                                    onSelectChunk = onSelectChunk,
-                                    onScrolled = {
-                                        onScrollToEpisodesHeader?.invoke()
-                                    }
-                                )
+                            if (chunkCount > 1) {
+                                Box(modifier = Modifier.padding(horizontal = 16.dp)) {
+                                    EpisodesPaginationButtons(
+                                        safeChunkIndex = selectedChunkIndex,
+                                        chunkCount = chunkCount,
+                                        chunkSize = chunkSize,
+                                        totalEpisodes = totalEpisodesCount,
+                                        hazeState = hazeState,
+                                        onSelectChunk = onSelectChunk,
+                                        onScrolled = {
+                                            onScrollToEpisodesHeader?.invoke()
+                                        }
+                                    )
+                                }
                             }
                         }
                     }
                 }
-            }
-            "Details & Cast", "Details" -> {
-                DetailsMetaTabContent(
-                    detail = detail,
-                    castMembers = castMembers
-                )
-            }
-            "More like this" -> {
-                RecommendationsTabContent(
-                    recommendations = detail.recommendations,
-                    onNavigateToMedia = onNavigateToMedia,
-                    onAddToPlaylistMedia = onAddToPlaylistMedia
-                )
+                "Details & Cast", "Details" -> {
+                    DetailsMetaTabContent(
+                        detail = detail,
+                        castMembers = castMembers
+                    )
+                }
+                "More like this" -> {
+                    RecommendationsTabContent(
+                        recommendations = detail.recommendations,
+                        onNavigateToMedia = onNavigateToMedia,
+                        onAddToPlaylistMedia = onAddToPlaylistMedia
+                    )
+                }
             }
         }
     }
@@ -2971,6 +2993,7 @@ private fun EpisodesTabContent(
 
                     Box(
                         modifier = Modifier
+                            .heightIn(min = 48.dp)
                             .mediaDetailsGlassSurface(
                                 shape = RoundedCornerShape(12.dp),
                                 hazeState = hazeState,
@@ -2990,7 +3013,7 @@ private fun EpisodesTabContent(
                                     )
                                 } else Modifier
                             )
-                            .clickable {
+                            .pressable {
                                 onSelectChunk(chunkIdx)
                             }
                             .padding(horizontal = 12.dp, vertical = 7.dp),
@@ -3048,13 +3071,13 @@ internal fun EpisodesPaginationButtons(
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .height(44.dp)
+                    .height(48.dp)
                     .mediaDetailsGlassSurface(
                         shape = RoundedCornerShape(12.dp),
                         hazeState = hazeState,
                         alphaFill = 0.08f
                     )
-                    .clickable {
+                    .pressable {
                         onSelectChunk(safeChunkIndex - 1)
                         onScrolled()
                     }
@@ -3092,7 +3115,7 @@ internal fun EpisodesPaginationButtons(
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .height(44.dp)
+                    .height(48.dp)
                     .mediaDetailsGlassSurface(
                         shape = RoundedCornerShape(12.dp),
                         hazeState = hazeState,
@@ -3108,7 +3131,7 @@ internal fun EpisodesPaginationButtons(
                         ),
                         shape = RoundedCornerShape(12.dp)
                     )
-                    .clickable {
+                    .pressable {
                         onSelectChunk(safeChunkIndex + 1)
                         onScrolled()
                     }
@@ -3156,7 +3179,8 @@ private fun EpisodeRowItem(
     onPlayClick: () -> Unit,
     onDownloadClick: () -> Unit,
     onToggleWatched: () -> Unit,
-    onAddToPlaylist: () -> Unit
+    onAddToPlaylist: () -> Unit,
+    onShowMessage: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
     val reduceMotion = LocalReduceMotion.current
@@ -3164,8 +3188,8 @@ private fun EpisodeRowItem(
     val isRowPressed by rowInteractionSource.collectIsPressedAsState()
 
     val rowScale by animateFloatAsState(
-        targetValue = if (isRowPressed && !reduceMotion) 0.98f else 1f,
-        animationSpec = tween(120),
+        targetValue = if (isRowPressed && !reduceMotion) 0.96f else 1f,
+        animationSpec = if (reduceMotion) snap() else spring(dampingRatio = 0.76f, stiffness = 450f),
         label = "epRowScale"
     )
 
@@ -3357,10 +3381,7 @@ private fun EpisodeRowItem(
                             maxLines = if (isExpanded) Int.MAX_VALUE else 2,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.animateContentSize(
-                                animationSpec = tween(
-                                    durationMillis = if (isExpanded) 240 else 180,
-                                    easing = FastOutSlowInEasing
-                                )
+                                animationSpec = spring(dampingRatio = 0.85f, stiffness = 400f)
                             )
                         )
                     }
@@ -3376,7 +3397,7 @@ private fun EpisodeRowItem(
                         isEpPaused && downloadItem != null -> downloadRepo.resumeDownload(downloadItem.id)
                         isEpDownloadFailed && downloadItem != null -> downloadRepo.resumeDownload(downloadItem.id)
                         isEpDownloaded -> {
-                            android.widget.Toast.makeText(context, "Episode is downloaded", android.widget.Toast.LENGTH_SHORT).show()
+                            onShowMessage("Episode is downloaded")
                         }
                         else -> onDownloadClick()
                     }
@@ -3384,7 +3405,7 @@ private fun EpisodeRowItem(
 
                 Box(
                     modifier = Modifier
-                        .size(40.dp)
+                        .size(48.dp)
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
@@ -3421,7 +3442,7 @@ private fun EpisodeRowItem(
                                     strokeCap = StrokeCap.Round
                                 )
                                 Icon(
-                                    imageVector = Icons.Filled.Pause,
+                                    imageVector = LucideIcons.Pause,
                                     contentDescription = "Pause",
                                     tint = Color.White,
                                     modifier = Modifier.size(9.dp)
@@ -3438,7 +3459,7 @@ private fun EpisodeRowItem(
                                     strokeCap = StrokeCap.Round
                                 )
                                 Icon(
-                                    imageVector = Icons.Filled.PlayArrow,
+                                    imageVector = LucideIcons.Play,
                                     contentDescription = "Resume",
                                     tint = Color.White,
                                     modifier = Modifier.size(10.dp)
@@ -3451,8 +3472,8 @@ private fun EpisodeRowItem(
                                     if (reduceMotion) {
                                         fadeIn(tween(0)) togetherWith fadeOut(tween(0))
                                     } else {
-                                        (scaleIn(tween(160), initialScale = 0.7f) + fadeIn(tween(160)))
-                                            .togetherWith(scaleOut(tween(140), targetScale = 0.7f) + fadeOut(tween(140)))
+                                        (scaleIn(tween(160), initialScale = 0.94f) + fadeIn(tween(160)))
+                                            .togetherWith(scaleOut(tween(140), targetScale = 0.94f) + fadeOut(tween(140)))
                                     }
                                 },
                                 label = "epDownloadIconAnim"
@@ -3468,10 +3489,10 @@ private fun EpisodeRowItem(
                     }
                 }
 
-                // Overflow menu icon as a small outline three-dot button with 40 dp tap area
+                // Overflow menu icon as a small outline three-dot button with 48 dp accessible tap area
                 Box(
                     modifier = Modifier
-                        .size(40.dp)
+                        .size(48.dp)
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
@@ -3490,7 +3511,10 @@ private fun EpisodeRowItem(
 
                     DropdownMenu(
                         expanded = showOptions,
-                        onDismissRequest = { showOptions = false }
+                        onDismissRequest = { showOptions = false },
+                        shape = RoundedCornerShape(14.dp),
+                        containerColor = Color(0xFF12131A).copy(alpha = 0.96f),
+                        border = BorderStroke(0.5.dp, Color.White.copy(alpha = 0.16f))
                     ) {
                         DropdownMenuItem(
                             text = {
@@ -3515,7 +3539,7 @@ private fun EpisodeRowItem(
                         DropdownMenuItem(
                             text = {
                                 Text(
-                                    text = "Add to playlist…",
+                                    text = "Add to playlist\u2026",
                                     style = AppTypography.bodyMedium,
                                     color = Color.White
                                 )
@@ -3547,18 +3571,13 @@ private fun EpisodeRowItem(
                 ) {
                     Box(
                         modifier = Modifier
-                            .height(32.dp)
+                            .heightIn(min = 48.dp)
                             .mediaDetailsGlassSurface(
                                 shape = RoundedCornerShape(10.dp),
                                 hazeState = hazeState,
                                 alphaFill = 0.14f
                             )
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null,
-                                role = Role.Button,
-                                onClick = onPlayClick
-                            )
+                            .pressable(onClick = onPlayClick)
                             .padding(horizontal = 14.dp),
                         contentAlignment = Alignment.Center
                     ) {
@@ -3567,13 +3586,13 @@ private fun EpisodeRowItem(
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             Icon(
-                                imageVector = Icons.Filled.PlayArrow,
+                                imageVector = LucideIcons.Play,
                                 contentDescription = null,
                                 tint = Color.White,
                                 modifier = Modifier.size(16.dp)
                             )
                             Text(
-                                text = "Play Episode",
+                                text = if (progress > 0f && !isWatched) "Resume Episode (${(progress * 100).toInt()}%)" else "Play Episode",
                                 style = TextStyle(
                                     fontFamily = AppFontFamily,
                                     fontSize = 12.sp,
@@ -3655,7 +3674,7 @@ private fun DetailsMetaTabContent(
                 itemsIndexed(castMembers, key = { index, it -> "${it.name}_${it.character}_$index" }) { _, cast ->
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.width(72.dp)
+                        modifier = Modifier.width(80.dp)
                     ) {
                         AppAsyncImage(
                             model = cast.profileUrl,
@@ -3675,6 +3694,16 @@ private fun DetailsMetaTabContent(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
+                        val character = cast.character
+                        if (!character.isNullOrBlank()) {
+                            Text(
+                                text = character,
+                                style = AppTypography.labelSmall.copy(fontSize = 10.sp),
+                                color = TextTertiary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
                 }
             }

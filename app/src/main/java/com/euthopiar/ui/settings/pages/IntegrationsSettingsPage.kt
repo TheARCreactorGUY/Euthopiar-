@@ -1,6 +1,9 @@
 package com.euthopiar.ui.settings.pages
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -8,14 +11,18 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.material.icons.outlined.Key
+import androidx.compose.material.icons.outlined.LinkOff
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.CircularProgressIndicator
@@ -28,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -38,6 +46,8 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.material.icons.outlined.Tv
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import com.euthopiar.ui.theme.EuthopiarMotionTokens
+import kotlinx.coroutines.delay
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -54,6 +64,7 @@ import com.euthopiar.ui.theme.LocalReduceMotion
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.firstOrNull
 
 /**
  * Redesigned "Integrations" Settings Screen (formerly "External Integrations").
@@ -83,8 +94,19 @@ fun IntegrationsSettingsPage(
 
     val traktUsername by viewModel.traktUsername.collectAsState()
     val traktScrobble by viewModel.traktScrobbleEnabled.collectAsState()
+    val traktSyncWatchlist by viewModel.traktSyncWatchlist.collectAsState()
+    val traktSyncPlayback by viewModel.traktSyncPlayback.collectAsState()
+    val traktSyncHistory by viewModel.traktSyncHistory.collectAsState()
+    val traktSyncLists by viewModel.traktSyncLists.collectAsState()
+
     val simklToken by viewModel.simklAccessToken.collectAsState()
     val simklScrobble by viewModel.simklScrobbleEnabled.collectAsState()
+    val simklSyncWatchlist by viewModel.simklSyncWatchlist.collectAsState()
+    val simklSyncHistory by viewModel.simklSyncHistory.collectAsState()
+
+    val lastSyncTimestamp by viewModel.lastSyncTimestamp.collectAsState()
+    val isSyncing by viewModel.isSyncing.collectAsState()
+    val syncStatusMessage by viewModel.syncStatusMessage.collectAsState()
     val debridEnabled by viewModel.debridEnabled.collectAsState()
     val activeDebridProvider by viewModel.activeDebridProvider.collectAsState()
     val rdKey by viewModel.realDebridApiKey.collectAsState()
@@ -102,82 +124,29 @@ fun IntegrationsSettingsPage(
     val uriHandler = LocalUriHandler.current
     val context = LocalContext.current
 
-    // Trakt Device Flow states
-    var showTraktAuthDialog by remember { mutableStateOf(false) }
-    var isStartingTraktAuth by remember { mutableStateOf(false) }
-    var traktDeviceCodeResponse by remember { mutableStateOf<TraktDeviceCodeResponse?>(null) }
-    var isPollingTrakt by remember { mutableStateOf(false) }
+    // Trakt PKCE Connect states
+    var showTraktConnectDialog by remember { mutableStateOf(false) }
+    var isTraktValidating by remember { mutableStateOf(false) }
     var traktAuthError by remember { mutableStateOf<String?>(null) }
-    var traktPollingJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
-    val startTraktDeviceAuth: () -> Unit = {
-        if (!isStartingTraktAuth) {
-            isStartingTraktAuth = true
-            traktAuthError = null
-            traktDeviceCodeResponse = null
-            showTraktAuthDialog = true
-            coroutineScope.launch {
-                val result = com.euthopiar.core.sync.trakt.TraktClient.getInstance().generateDeviceCode()
-                isStartingTraktAuth = false
-                result.fold(
-                    onSuccess = { response ->
-                        traktDeviceCodeResponse = response
-                        isPollingTrakt = true
-                        traktPollingJob?.cancel()
-                        traktPollingJob = coroutineScope.launch {
-                            val intervalMs = (response.interval.coerceAtLeast(2) * 1000L)
-                            val startTime = System.currentTimeMillis()
-                            val timeoutMs = response.expiresIn * 1000L
-                            while (isActive && (System.currentTimeMillis() - startTime) < timeoutMs) {
-                                delay(intervalMs)
-                                val pollRes = com.euthopiar.core.sync.trakt.TraktClient.getInstance().pollAccessToken(response.deviceCode)
-                                if (pollRes.isSuccess) {
-                                    val token = pollRes.getOrThrow()
-                                    val profileRes = com.euthopiar.core.sync.trakt.TraktClient.getInstance().getUserProfile(token.accessToken)
-                                    val username = profileRes.getOrNull()?.username?.ifBlank { "Trakt User" } ?: "Trakt User"
-                                    viewModel.setTraktAuth(token.accessToken, token.refreshToken, username)
-                                    isPollingTrakt = false
-                                    showTraktAuthDialog = false
-                                    break
-                                } else {
-                                    val exception = pollRes.exceptionOrNull()
-                                    if (exception !is com.euthopiar.core.sync.trakt.TraktClient.PendingAuthException) {
-                                        traktAuthError = exception?.message ?: "Authorization failed"
-                                        isPollingTrakt = false
-                                        break
-                                    }
-                                }
-                            }
-                            if (isPollingTrakt) {
-                                isPollingTrakt = false
-                                traktAuthError = "Authorization timed out. Please try again."
-                            }
-                        }
-                    },
-                    onFailure = { err ->
-                        traktAuthError = err.message ?: "Failed to generate Trakt device code"
-                    }
-                )
-            }
-        }
+    val openTraktConnect: () -> Unit = {
+        traktAuthError = null
+        isTraktValidating = false
+        showTraktConnectDialog = true
     }
 
-    val dismissTraktAuth: () -> Unit = {
-        traktPollingJob?.cancel()
-        traktPollingJob = null
-        isPollingTrakt = false
-        isStartingTraktAuth = false
-        showTraktAuthDialog = false
+    LaunchedEffect(traktUsername) {
+        if (traktUsername.isNotBlank()) {
+            showTraktConnectDialog = false
+        }
     }
 
     // Simkl Connect states
     var showSimklConnectDialog by remember { mutableStateOf(false) }
-    var simklTokenInput by remember { mutableStateOf("") }
     var isSimklValidating by remember { mutableStateOf(false) }
     var simklAuthError by remember { mutableStateOf<String?>(null) }
 
     val openSimklConnect: () -> Unit = {
-        simklTokenInput = ""
         simklAuthError = null
         isSimklValidating = false
         showSimklConnectDialog = true
@@ -214,11 +183,11 @@ fun IntegrationsSettingsPage(
             hazeState = hazeState
         )
 
-        // Conditional Child Rows when Debrid is enabled (220ms smooth expand/collapse)
+        // Conditional Child Rows when Debrid is enabled (smooth spring expand/collapse)
         AnimatedVisibility(
             visible = debridEnabled,
-            enter = if (reduceMotion) fadeIn(tween(120)) else expandVertically(tween(220)) + fadeIn(tween(180)),
-            exit = if (reduceMotion) fadeOut(tween(120)) else shrinkVertically(tween(220)) + fadeOut(tween(180))
+            enter = if (reduceMotion) fadeIn(snap()) else expandVertically(spring(dampingRatio = 0.82f, stiffness = 380f)) + fadeIn(tween(180)),
+            exit = if (reduceMotion) fadeOut(snap()) else shrinkVertically(spring(dampingRatio = 0.82f, stiffness = 380f)) + fadeOut(tween(180))
         ) {
             Column(modifier = Modifier.fillMaxWidth()) {
                 // Active Debrid Provider Selector
@@ -239,7 +208,7 @@ fun IntegrationsSettingsPage(
                 // Real-Debrid API Key Row
                 OpenSettingsRow(
                     title = "Real-Debrid API key",
-                    subtitle = if (rdKey.isNotBlank()) "••••••••${rdKey.takeLast(4)}" else "Not configured",
+                    subtitle = if (rdKey.isNotBlank()) "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022${rdKey.takeLast(4)}" else "Not configured",
                     trailingContent = {
                         SettingsPillButton(
                             text = if (activeKeyEditor == "Real-Debrid") "Close" else if (rdKey.isNotBlank()) "Edit" else "Set key",
@@ -260,7 +229,7 @@ fun IntegrationsSettingsPage(
                 // AllDebrid API Key Row
                 OpenSettingsRow(
                     title = "AllDebrid API key",
-                    subtitle = if (adKey.isNotBlank()) "••••••••${adKey.takeLast(4)}" else "Not configured",
+                    subtitle = if (adKey.isNotBlank()) "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022${adKey.takeLast(4)}" else "Not configured",
                     trailingContent = {
                         SettingsPillButton(
                             text = if (activeKeyEditor == "AllDebrid") "Close" else if (adKey.isNotBlank()) "Edit" else "Set key",
@@ -281,7 +250,7 @@ fun IntegrationsSettingsPage(
                 // TorBox API Key Row
                 OpenSettingsRow(
                     title = "TorBox API key",
-                    subtitle = if (tbKey.isNotBlank()) "••••••••${tbKey.takeLast(4)}" else "Not configured",
+                    subtitle = if (tbKey.isNotBlank()) "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022${tbKey.takeLast(4)}" else "Not configured",
                     trailingContent = {
                         SettingsPillButton(
                             text = if (activeKeyEditor == "TorBox") "Close" else if (tbKey.isNotBlank()) "Edit" else "Set key",
@@ -322,7 +291,8 @@ fun IntegrationsSettingsPage(
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.weight(1f, fill = false)
                         ) {
                             Icon(
                                 imageVector = Icons.Outlined.Key,
@@ -338,7 +308,9 @@ fun IntegrationsSettingsPage(
                                     fontSize = 15.sp,
                                     lineHeight = 20.sp,
                                     color = SettingsTokens.TextWhite96
-                                )
+                                ),
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                             )
                         }
 
@@ -479,8 +451,8 @@ fun IntegrationsSettingsPage(
                     SettingsPillButton(
                         text = "Sign in",
                         isSolidWhite = true,
-                        isLoading = isStartingTraktAuth,
-                        onClick = startTraktDeviceAuth
+                        isLoading = isTraktValidating,
+                        onClick = openTraktConnect
                     )
                 }
             }
@@ -492,6 +464,38 @@ fun IntegrationsSettingsPage(
                 subtitle = "Send playback progress & mark watched automatically",
                 checked = traktScrobble,
                 onCheckedChange = { viewModel.setTraktScrobble(it) },
+                hazeState = hazeState
+            )
+
+            OpenSettingsToggleRow(
+                title = "Watchlist two-way sync",
+                subtitle = "Keep bookmarks synchronized between Euthopiar and Trakt",
+                checked = traktSyncWatchlist,
+                onCheckedChange = { viewModel.setTraktSyncWatchlist(it) },
+                hazeState = hazeState
+            )
+
+            OpenSettingsToggleRow(
+                title = "Resume points sync",
+                subtitle = "Synchronize Continue Watching progress with Trakt playback",
+                checked = traktSyncPlayback,
+                onCheckedChange = { viewModel.setTraktSyncPlayback(it) },
+                hazeState = hazeState
+            )
+
+            OpenSettingsToggleRow(
+                title = "Watch history sync",
+                subtitle = "Sync completed watch history and badges with your profile",
+                checked = traktSyncHistory,
+                onCheckedChange = { viewModel.setTraktSyncHistory(it) },
+                hazeState = hazeState
+            )
+
+            OpenSettingsToggleRow(
+                title = "Custom lists & playlists",
+                subtitle = "Sync personal Trakt lists as in-app playlists",
+                checked = traktSyncLists,
+                onCheckedChange = { viewModel.setTraktSyncLists(it) },
                 hazeState = hazeState
             )
         }
@@ -529,465 +533,146 @@ fun IntegrationsSettingsPage(
                 onCheckedChange = { viewModel.setSimklScrobble(it) },
                 hazeState = hazeState
             )
+
+            OpenSettingsToggleRow(
+                title = "Simkl Plan to Watch sync",
+                subtitle = "Keep Plan to Watch list in sync with your local watchlist",
+                checked = simklSyncWatchlist,
+                onCheckedChange = { viewModel.setSimklSyncWatchlist(it) },
+                hazeState = hazeState
+            )
+
+            OpenSettingsToggleRow(
+                title = "Simkl history sync",
+                subtitle = "Sync completed watching records with Simkl profile",
+                checked = simklSyncHistory,
+                onCheckedChange = { viewModel.setSimklSyncHistory(it) },
+                hazeState = hazeState
+            )
         }
 
-        // Trakt Device Code Authorization Glass Dialog
-        if (showTraktAuthDialog) {
-            Dialog(
-                onDismissRequest = dismissTraktAuth,
-                properties = DialogProperties(usePlatformDefaultWidth = false)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 24.dp)
-                        .imePadding()
-                        .clip(RoundedCornerShape(SettingsTokens.RadiusDialog))
-                        .settingsGlass(
-                            shape = RoundedCornerShape(SettingsTokens.RadiusDialog),
-                            hazeState = hazeState,
-                            blurRadius = 22.dp
-                        )
-                        .border(SettingsTokens.HairlineWidth, SettingsTokens.HairlineBorder, RoundedCornerShape(SettingsTokens.RadiusDialog))
-                        .padding(24.dp)
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        // Header with icon and title
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                .size(38.dp)
-                                .clip(RoundedCornerShape(SettingsTokens.RadiusControl))
-                                .background(Color.White.copy(alpha = 0.08f))
-                                .border(SettingsTokens.HairlineWidth, SettingsTokens.HairlineBorder, RoundedCornerShape(SettingsTokens.RadiusControl)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.Tv,
-                                    contentDescription = null,
-                                    tint = Color.White,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "Authorize Trakt.tv",
-                                    style = TextStyle(
-                                        fontFamily = AppFontFamily,
-                                        fontWeight = FontWeight.Medium,
-                                        fontSize = 17.sp,
-                                        color = SettingsTokens.TextWhite96
-                                    )
-                                )
-                                Spacer(modifier = Modifier.height(2.dp))
-                                Text(
-                                    text = "OAuth Device Code Flow",
-                                    style = TextStyle(
-                                        fontFamily = AppFontFamily,
-                                        fontWeight = FontWeight.Normal,
-                                        fontSize = 12.sp,
-                                        color = SettingsTokens.TextWhite54
-                                    )
-                                )
-                            }
-                        }
+        // Section 4: Cloud Media Synchronization
+        if (isTraktConnected || isSimklConnected) {
+            OpenSettingsSectionHeader(title = "Cloud Media Synchronization")
 
-                        if (isStartingTraktAuth) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 24.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(28.dp),
-                                    color = Color.White,
-                                    strokeWidth = 2.dp
-                                )
-                                Text(
-                                    text = "Generating authorization code...",
-                                    style = TextStyle(
-                                        fontFamily = AppFontFamily,
-                                        fontWeight = FontWeight.Normal,
-                                        fontSize = 13.sp,
-                                        color = SettingsTokens.TextWhite72
-                                    )
-                                )
-                            }
-                        } else if (traktDeviceCodeResponse != null) {
-                            val response = traktDeviceCodeResponse!!
-                            Text(
-                                text = "Visit the activation page on your browser and enter this code to connect:",
-                                style = TextStyle(
-                                    fontFamily = AppFontFamily,
-                                    fontWeight = FontWeight.Normal,
-                                    fontSize = 13.sp,
-                                    lineHeight = 18.sp,
-                                    color = SettingsTokens.TextWhite72
-                                ),
-                                textAlign = TextAlign.Start,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-
-                            // 24sp Medium glass chip with userCode and Copy button
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(SettingsTokens.RadiusControl))
-                                    .background(Color.White.copy(alpha = 0.08f))
-                                    .border(SettingsTokens.HairlineWidth, SettingsTokens.HairlineBorder, RoundedCornerShape(SettingsTokens.RadiusControl))
-                                    .padding(horizontal = 16.dp, vertical = 12.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = response.userCode,
-                                        style = TextStyle(
-                                            fontFamily = AppFontFamily,
-                                            fontWeight = FontWeight.Medium,
-                                            fontSize = 24.sp,
-                                            letterSpacing = 0.1.em,
-                                            color = Color.White
-                                        )
-                                    )
-                                    IconButton(
-                                        onClick = {
-                                            clipboardManager.setText(AnnotatedString(response.userCode))
-                                            try { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) } catch (_: Exception) {}
-                                        },
-                                        modifier = Modifier.size(40.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Outlined.ContentPaste,
-                                            contentDescription = "Copy code",
-                                            tint = Color.White,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
-                                }
-                            }
-
-                            // Polling status indicator
-                            if (isPollingTrakt) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(14.dp),
-                                        color = Color.White,
-                                        strokeWidth = 1.5.dp
-                                    )
-                                    Text(
-                                        text = "Waiting for authorization on trakt.tv/activate...",
-                                        style = TextStyle(
-                                            fontFamily = AppFontFamily,
-                                            fontWeight = FontWeight.Normal,
-                                            fontSize = 12.sp,
-                                            color = SettingsTokens.TextWhite54
-                                        )
-                                    )
-                                }
-                            }
-
-                            // Action button to open URL
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.Start
-                            ) {
-                                SettingsPillButton(
-                                    text = "Open trakt.tv/activate",
-                                    isSolidWhite = false,
-                                    onClick = {
-                                        try {
-                                            uriHandler.openUri(response.verificationUrl)
-                                        } catch (_: Exception) {}
-                                    },
-                                    hazeState = hazeState
-                                )
-                            }
-                        }
-
-                        if (traktAuthError != null) {
-                            Text(
-                                text = traktAuthError!!,
-                                style = TextStyle(
-                                    fontFamily = AppFontFamily,
-                                    fontWeight = FontWeight.Normal,
-                                    fontSize = 12.sp,
-                                    lineHeight = 16.sp,
-                                    color = Color.White.copy(alpha = 0.85f)
-                                ),
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        }
-
-                        // Dialog actions
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.End,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            SettingsPillButton(
-                                text = "Cancel",
-                                onClick = dismissTraktAuth,
-                                hazeState = hazeState
-                            )
+            val syncSubtitle = when {
+                isSyncing -> syncStatusMessage ?: "Synchronizing media library with cloud accounts..."
+                lastSyncTimestamp > 0L -> {
+                    val diff = System.currentTimeMillis() - lastSyncTimestamp
+                    val mins = (diff / 60000L).coerceAtLeast(0L)
+                    when {
+                        mins < 1L -> "Last synchronized just now"
+                        mins < 60L -> "Last synchronized $mins min${if (mins == 1L) "" else "s"} ago"
+                        else -> {
+                            val hours = mins / 60L
+                            "Last synchronized $hours hr${if (hours == 1L) "" else "s"} ago"
                         }
                     }
                 }
+                else -> "Never synchronized"
             }
+
+            OpenSettingsRow(
+                title = "Synchronize now",
+                subtitle = syncSubtitle,
+                trailingContent = {
+                    SettingsPillButton(
+                        text = if (isSyncing) "Syncing..." else "Sync now",
+                        isSolidWhite = true,
+                        isLoading = isSyncing,
+                        onClick = {
+                            viewModel.triggerSyncNow()
+                            try { haptic.performHapticFeedback(HapticFeedbackType.LongPress) } catch (_: Exception) {}
+                        },
+                        hazeState = hazeState
+                    )
+                }
+            )
+        }
+
+        // Trakt PKCE Connect Glass Dialog
+        if (showTraktConnectDialog) {
+            TraktConnectDialog(
+                hazeState = hazeState,
+                isTraktValidating = isTraktValidating,
+                traktAuthError = traktAuthError,
+                onDismiss = { showTraktConnectDialog = false },
+                onClearError = { traktAuthError = null },
+                onConnect = { code ->
+                    if (!isTraktValidating) {
+                        isTraktValidating = true
+                        traktAuthError = null
+                        coroutineScope.launch {
+                            val syncVerifier = context.getSharedPreferences("trakt_auth_prefs", android.content.Context.MODE_PRIVATE)
+                                .getString("pending_code_verifier", null)
+                            val prefs = com.euthopiar.data.preferences.PreferencesRepository.getInstance(context)
+                            val storedVerifier = prefs.traktCodeVerifier.firstOrNull()?.ifBlank { null }
+                            val verifier = syncVerifier ?: storedVerifier ?: com.euthopiar.core.sync.trakt.TraktClient.getInstance().pendingCodeVerifier
+                            val res = com.euthopiar.core.sync.trakt.TraktClient.getInstance().exchangeCodeForToken(code, codeVerifier = verifier)
+                            isTraktValidating = false
+                            if (res.isSuccess) {
+                                val tokenResp = res.getOrThrow()
+                                val profile = com.euthopiar.core.sync.trakt.TraktClient.getInstance().getUserProfile(tokenResp.accessToken).getOrNull()
+                                val username = profile?.username?.ifBlank { "Trakt User" } ?: "Trakt User"
+                                viewModel.setTraktAuth(tokenResp.accessToken, tokenResp.refreshToken, username)
+                                prefs.clearTraktCodeVerifier()
+                                context.getSharedPreferences("trakt_auth_prefs", android.content.Context.MODE_PRIVATE).edit().clear().commit()
+                                try { haptic.performHapticFeedback(HapticFeedbackType.LongPress) } catch (_: Exception) {}
+                                showTraktConnectDialog = false
+                            } else {
+                                traktAuthError = res.exceptionOrNull()?.message ?: "Invalid authorization code or connection failure."
+                            }
+                        }
+                    }
+                }
+            )
         }
 
         // Simkl Connect Glass Dialog
         if (showSimklConnectDialog) {
-            Dialog(
-                onDismissRequest = { if (!isSimklValidating) showSimklConnectDialog = false },
-                properties = DialogProperties(usePlatformDefaultWidth = false)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 24.dp)
-                        .imePadding()
-                        .clip(RoundedCornerShape(SettingsTokens.RadiusDialog))
-                        .settingsGlass(
-                            shape = RoundedCornerShape(SettingsTokens.RadiusDialog),
-                            hazeState = hazeState,
-                            blurRadius = 22.dp
-                        )
-                        .border(SettingsTokens.HairlineWidth, SettingsTokens.HairlineBorder, RoundedCornerShape(SettingsTokens.RadiusDialog))
-                        .padding(24.dp)
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        // Header with icon and title
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(38.dp)
-                                    .clip(RoundedCornerShape(SettingsTokens.RadiusControl))
-                                    .background(Color.White.copy(alpha = 0.08f))
-                                    .border(SettingsTokens.HairlineWidth, SettingsTokens.HairlineBorder, RoundedCornerShape(SettingsTokens.RadiusControl)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.Key,
-                                    contentDescription = null,
-                                    tint = Color.White,
-                                    modifier = Modifier.size(20.dp)
-                                )
+            SimklConnectDialog(
+                hazeState = hazeState,
+                isSimklValidating = isSimklValidating,
+                simklAuthError = simklAuthError,
+                onDismiss = { showSimklConnectDialog = false },
+                onClearError = { simklAuthError = null },
+                onConnect = { codeOrToken ->
+                    if (!isSimklValidating) {
+                        isSimklValidating = true
+                        simklAuthError = null
+                        coroutineScope.launch {
+                            val simklClient = com.euthopiar.core.sync.simkl.SimklClient.getInstance()
+                            val prefs = com.euthopiar.data.preferences.PreferencesRepository.getInstance(context)
+                            val syncVerifier = context.getSharedPreferences("simkl_auth_prefs", android.content.Context.MODE_PRIVATE)
+                                .getString("pending_code_verifier", null)
+                            val storedVerifier = prefs.simklCodeVerifier.firstOrNull()?.ifBlank { null }
+                            val verifier = syncVerifier ?: storedVerifier ?: simklClient.pendingCodeVerifier
+
+                            val extractedCode = Regex("""code=([^&]+)""").find(codeOrToken)?.groupValues?.get(1) ?: codeOrToken
+                            val exchangeRes = simklClient.exchangeCodeForToken(extractedCode, codeVerifier = verifier)
+                            val resolvedToken = if (exchangeRes.isSuccess && exchangeRes.getOrThrow().accessToken.isNotBlank()) {
+                                exchangeRes.getOrThrow().accessToken
+                            } else {
+                                extractedCode
                             }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "Connect Simkl",
-                                    style = TextStyle(
-                                        fontFamily = AppFontFamily,
-                                        fontWeight = FontWeight.Medium,
-                                        fontSize = 17.sp,
-                                        color = SettingsTokens.TextWhite96
-                                    )
-                                )
-                                Spacer(modifier = Modifier.height(2.dp))
-                                Text(
-                                    text = "Personal API Access Token",
-                                    style = TextStyle(
-                                        fontFamily = AppFontFamily,
-                                        fontWeight = FontWeight.Normal,
-                                        fontSize = 12.sp,
-                                        color = SettingsTokens.TextWhite54
-                                    )
-                                )
+
+                            val profileRes = simklClient.getUserProfile(resolvedToken)
+                            isSimklValidating = false
+                            if (profileRes.isSuccess) {
+                                viewModel.setSimklAuth(resolvedToken)
+                                prefs.clearSimklCodeVerifier()
+                                context.getSharedPreferences("simkl_auth_prefs", android.content.Context.MODE_PRIVATE).edit().clear().commit()
+                                try { haptic.performHapticFeedback(HapticFeedbackType.LongPress) } catch (_: Exception) {}
+                                showSimklConnectDialog = false
+                            } else {
+                                simklAuthError = exchangeRes.exceptionOrNull()?.message
+                                    ?: profileRes.exceptionOrNull()?.message
+                                    ?: "Invalid Simkl authorization code or token."
                             }
-                        }
-
-                        Text(
-                            text = "Paste your Simkl client access token from your developer dashboard to link your profile and sync history.",
-                            style = TextStyle(
-                                fontFamily = AppFontFamily,
-                                fontWeight = FontWeight.Normal,
-                                fontSize = 13.sp,
-                                lineHeight = 18.sp,
-                                color = SettingsTokens.TextWhite72
-                            )
-                        )
-
-                        // Text Input Field with Paste button
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(SettingsTokens.RadiusControl))
-                                .background(Color.White.copy(alpha = 0.06f))
-                                .border(SettingsTokens.HairlineWidth, SettingsTokens.HairlineBorder, RoundedCornerShape(SettingsTokens.RadiusControl))
-                                .padding(horizontal = 14.dp, vertical = 10.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(modifier = Modifier.weight(1f)) {
-                                    if (simklTokenInput.isEmpty()) {
-                                        Text(
-                                            text = "Paste Simkl token...",
-                                            style = TextStyle(
-                                                fontFamily = AppFontFamily,
-                                                fontWeight = FontWeight.Normal,
-                                                fontSize = 13.sp,
-                                                color = SettingsTokens.TextWhite40
-                                            )
-                                        )
-                                    }
-                                    BasicTextField(
-                                        value = simklTokenInput,
-                                        onValueChange = {
-                                            simklTokenInput = it
-                                            simklAuthError = null
-                                        },
-                                        singleLine = true,
-                                        textStyle = TextStyle(
-                                            fontFamily = AppFontFamily,
-                                            fontWeight = FontWeight.Normal,
-                                            fontSize = 13.sp,
-                                            color = Color.White
-                                        ),
-                                        cursorBrush = SolidColor(Color.White),
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
-                                }
-
-                                IconButton(
-                                    onClick = {
-                                        val text = clipboardManager.getText()?.text
-                                        if (!text.isNullOrBlank()) {
-                                            simklTokenInput = text.trim()
-                                            simklAuthError = null
-                                            try { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) } catch (_: Exception) {}
-                                        }
-                                    },
-                                    modifier = Modifier.size(48.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Outlined.ContentPaste,
-                                        contentDescription = "Paste from clipboard",
-                                        tint = SettingsTokens.TextWhite82,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                            }
-                        }
-
-                        // OAuth authorization button and manual token dashboard link
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            SettingsPillButton(
-                                text = "Authorize with Simkl",
-                                isSolidWhite = true,
-                                onClick = {
-                                    try {
-                                        val authUrl = com.euthopiar.core.sync.simkl.SimklClient.getInstance().getAuthorizationUrl()
-                                        val verifier = com.euthopiar.core.sync.simkl.SimklClient.getInstance().pendingCodeVerifier
-                                        if (!verifier.isNullOrBlank()) {
-                                            coroutineScope.launch {
-                                                com.euthopiar.data.preferences.PreferencesRepository.getInstance(context).setSimklCodeVerifier(verifier)
-                                            }
-                                        }
-                                        uriHandler.openUri(authUrl)
-                                    } catch (_: Exception) {}
-                                }
-                            )
-
-                            SettingsPillButton(
-                                text = "Manual token (simkl.com)",
-                                isSolidWhite = false,
-                                onClick = {
-                                    try {
-                                        uriHandler.openUri("https://simkl.com/settings/developer/")
-                                    } catch (_: Exception) {}
-                                },
-                                hazeState = hazeState
-                            )
-                        }
-
-                        if (simklAuthError != null) {
-                            Text(
-                                text = simklAuthError!!,
-                                style = TextStyle(
-                                    fontFamily = AppFontFamily,
-                                    fontWeight = FontWeight.Normal,
-                                    fontSize = 12.sp,
-                                    lineHeight = 16.sp,
-                                    color = Color.White.copy(alpha = 0.85f)
-                                )
-                            )
-                        }
-
-                        // Dialog actions
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.End,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            SettingsPillButton(
-                                text = "Cancel",
-                                enabled = !isSimklValidating,
-                                onClick = { showSimklConnectDialog = false },
-                                hazeState = hazeState
-                            )
-
-                            Spacer(modifier = Modifier.width(10.dp))
-
-                            SettingsPillButton(
-                                text = "Connect",
-                                isSolidWhite = true,
-                                isLoading = isSimklValidating,
-                                enabled = simklTokenInput.isNotBlank(),
-                                onClick = {
-                                    val token = simklTokenInput.trim()
-                                    if (token.isNotBlank() && !isSimklValidating) {
-                                        isSimklValidating = true
-                                        simklAuthError = null
-                                        coroutineScope.launch {
-                                            val res = com.euthopiar.core.sync.simkl.SimklClient.getInstance().getUserProfile(token)
-                                            isSimklValidating = false
-                                            if (res.isSuccess) {
-                                                viewModel.setSimklAuth(token)
-                                                try { haptic.performHapticFeedback(HapticFeedbackType.LongPress) } catch (_: Exception) {}
-                                                showSimklConnectDialog = false
-                                            } else {
-                                                simklAuthError = res.exceptionOrNull()?.message ?: "Invalid Simkl token or connection failure."
-                                            }
-                                        }
-                                    }
-                                }
-                            )
                         }
                     }
                 }
-            }
+            )
         }
 
         // Confirmation Dialog for Trakt Disconnect
@@ -997,6 +682,9 @@ fun IntegrationsSettingsPage(
                 message = "Your scrobbling and playback history syncing with @$traktUsername will be paused until you sign in again.",
                 confirmText = "Disconnect",
                 dismissText = "Cancel",
+                icon = Icons.Outlined.LinkOff,
+                isDestructive = true,
+                hazeState = hazeState,
                 onConfirm = {
                     try { haptic.performHapticFeedback(HapticFeedbackType.LongPress) } catch (_: Exception) {}
                     viewModel.disconnectTrakt()
@@ -1013,6 +701,9 @@ fun IntegrationsSettingsPage(
                 message = "Your automated watchlist and episode progress sync with Simkl will be unlinked.",
                 confirmText = "Disconnect",
                 dismissText = "Cancel",
+                icon = Icons.Outlined.LinkOff,
+                isDestructive = true,
+                hazeState = hazeState,
                 onConfirm = {
                     try { haptic.performHapticFeedback(HapticFeedbackType.LongPress) } catch (_: Exception) {}
                     viewModel.disconnectSimkl()

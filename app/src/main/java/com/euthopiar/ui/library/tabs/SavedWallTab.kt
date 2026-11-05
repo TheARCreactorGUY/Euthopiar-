@@ -3,6 +3,7 @@ package com.euthopiar.ui.library.tabs
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -32,6 +33,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.BookmarkBorder
+import com.euthopiar.ui.icons.LucideIcons
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -59,6 +61,7 @@ import com.euthopiar.data.local.PlaybackHistoryEntity
 import com.euthopiar.download.DownloadItem
 import com.euthopiar.ui.library.LibraryColors
 import com.euthopiar.ui.library.LibraryDimens
+import com.euthopiar.ui.library.LibraryFilter
 import com.euthopiar.ui.library.LibraryItem
 import com.euthopiar.ui.library.LibrarySortOrder
 import com.euthopiar.ui.library.LibraryTypography
@@ -71,10 +74,12 @@ import com.euthopiar.ui.library.components.LibraryProgressBar
 import com.euthopiar.ui.library.components.OfflinePosterBadge
 import com.euthopiar.ui.library.components.SelectionIndicator
 import com.euthopiar.ui.theme.AppFontFamily
+import com.euthopiar.ui.theme.EuthopiarGlassTokens
 import com.euthopiar.ui.theme.LocalReduceMotion
 import com.euthopiar.ui.theme.pressable
 import dev.chrisbanes.haze.HazeState
 import kotlinx.coroutines.delay
+import java.util.Locale
 
 @Composable
 fun SavedWallTab(
@@ -85,6 +90,8 @@ fun SavedWallTab(
     onToggleOfflineOnly: () -> Unit,
     sortOrder: LibrarySortOrder,
     onSelectSortOrder: (LibrarySortOrder) -> Unit,
+    selectedFilter: LibraryFilter = LibraryFilter.ALL,
+    onSelectFilter: (LibraryFilter) -> Unit = {},
     isSelectionMode: Boolean,
     selectedIds: Set<String>,
     onToggleSelect: (String) -> Unit,
@@ -174,6 +181,63 @@ fun SavedWallTab(
                     }
                 }
             }
+
+            // 1b. Category Filters Row (All, Watchlist, Favorites, Completed)
+            item(
+                key = "category_filters_row",
+                span = { GridItemSpan(maxLineSpan) }
+            ) {
+                val filterCategories = listOf(
+                    LibraryFilter.ALL to "All",
+                    LibraryFilter.WATCHLIST to "Watchlist",
+                    LibraryFilter.FAVORITES to "Favorites",
+                    LibraryFilter.COMPLETED to "Completed"
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    filterCategories.forEach { (filter, label) ->
+                        val isSelected = selectedFilter == filter
+                        Box(
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .then(
+                                    if (isSelected) {
+                                        Modifier.background(Color.White)
+                                    } else {
+                                        Modifier
+                                            .background(Color.White.copy(alpha = 0.06f))
+                                            .border(
+                                                EuthopiarGlassTokens.HairlineWidth,
+                                                EuthopiarGlassTokens.HairlineBorder,
+                                                CircleShape
+                                            )
+                                    }
+                                )
+                                .pressable(
+                                    scaleDown = 0.94f,
+                                    role = Role.Tab,
+                                    onClick = { onSelectFilter(filter) }
+                                )
+                                .padding(horizontal = 14.dp, vertical = 7.dp)
+                        ) {
+                            Text(
+                                text = label,
+                                style = TextStyle(
+                                    fontFamily = AppFontFamily,
+                                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                    fontSize = 12.5.sp,
+                                    color = if (isSelected) Color.Black else LibraryColors.TextWhite.copy(alpha = 0.70f)
+                                )
+                            )
+                        }
+                    }
+                }
+            }
         }
 
             // 2. Continue Watching Card
@@ -252,7 +316,7 @@ fun SavedWallTab(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         LibraryGlassIconTile(
-                            icon = Icons.Outlined.BookmarkBorder,
+                            icon = LucideIcons.Bookmark,
                             contentDescription = null,
                             size = 48.dp,
                             radius = 16.dp,
@@ -335,11 +399,11 @@ private fun StaggeredPosterItem(
     val animProgress = remember { Animatable(if (reduceMotion) 1f else 0f) }
 
     LaunchedEffect(Unit) {
-        if (!reduceMotion && index < 8) {
-            delay((index * 35L).coerceAtMost(300L))
+        if (!reduceMotion && index < 6) {
+            delay(index * 16L)
             animProgress.animateTo(
                 targetValue = 1f,
-                animationSpec = tween(durationMillis = 320, easing = FastOutSlowInEasing)
+                animationSpec = tween(durationMillis = 260, easing = LinearOutSlowInEasing)
             )
         } else {
             animProgress.snapTo(1f)
@@ -357,7 +421,7 @@ private fun StaggeredPosterItem(
                 translationY = itemTranslationY
             }
             .pressable(
-                scaleDown = 0.98f,
+                scaleDown = 0.96f,
                 onClick = {
                     if (isSelectionMode) onToggleSelect() else onItemClick()
                 },
@@ -372,18 +436,17 @@ private fun StaggeredPosterItem(
                 .fillMaxWidth()
                 .aspectRatio(2f / 3f)
                 .clip(RoundedCornerShape(LibraryDimens.posterCornerRadius))
-                .border(LibraryDimens.hairline, LibraryColors.GlassBorder, RoundedCornerShape(LibraryDimens.posterCornerRadius))
+                .border(EuthopiarGlassTokens.HairlineWidth, EuthopiarGlassTokens.HairlineBorder, RoundedCornerShape(LibraryDimens.posterCornerRadius))
                 .background(LibraryColors.Surface)
         ) {
             val posterUrl = item.posterUrl ?: item.backdropUrl
-            if (!posterUrl.isNullOrBlank()) {
-                AsyncImage(
-                    model = posterUrl,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
+            com.euthopiar.ui.components.AppAsyncImage(
+                model = posterUrl,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                titleForFallback = com.euthopiar.ui.library.sanitizeTitle(item.title),
+                modifier = Modifier.fillMaxSize()
+            )
 
             // Top-right: Offline status badge (8dp inset)
             Box(
@@ -438,7 +501,7 @@ private fun StaggeredPosterItem(
             if (downloadItem != null && downloadItem.state == com.euthopiar.download.DownloadState.COMPLETED) {
                 val gb = downloadItem.bytesDownloaded / (1024.0 * 1024.0 * 1024.0)
                 if (gb >= 1.0) {
-                    append(" · ${String.format("%.1f GB", gb)}")
+                    append(" · ${String.format(Locale.US, "%.1f GB", gb)}")
                 } else if (downloadItem.bytesDownloaded > 0) {
                     append(" · ${downloadItem.bytesDownloaded / (1024 * 1024)} MB")
                 }

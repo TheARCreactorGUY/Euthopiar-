@@ -26,6 +26,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -79,7 +80,12 @@ import com.euthopiar.ui.settings.components.settingsPressable
 import com.euthopiar.ui.theme.AppFontFamily
 import com.euthopiar.ui.theme.LocalAmoledMode
 import com.euthopiar.ui.theme.LocalReduceMotion
+import android.os.Build
+import androidx.compose.animation.core.animateFloatAsState
 import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.HazeStyle
+import dev.chrisbanes.haze.HazeTint
+import dev.chrisbanes.haze.hazeEffect
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -110,13 +116,23 @@ fun SpotlightWalkthroughOverlay(
     val isAmoled = LocalAmoledMode.current
     val reduceMotion = LocalReduceMotion.current
 
+    var targetTimeoutReached by remember(step) { mutableStateOf(false) }
+    LaunchedEffect(step, rawTargetHighlight) {
+        if (step != WalkthroughStep.NONE && rawTargetHighlight == null) {
+            delay(1500L)
+            targetTimeoutReached = true
+        } else {
+            targetTimeoutReached = false
+        }
+    }
+
     // Safely handle physical back buttons and gestures during walkthrough
     BackHandler(enabled = step != WalkthroughStep.NONE) {
         when (step) {
             WalkthroughStep.STEP_3_INSTALL_REPO -> coordinator.stepBack()
             WalkthroughStep.STEP_2_PLUGINS_TILE -> coordinator.stepBack()
             WalkthroughStep.STEP_1_PROFILE -> {
-                if (isSkippable) {
+                if (isSkippable || targetTimeoutReached) {
                     coordinator.skip(context)
                 }
             }
@@ -124,7 +140,18 @@ fun SpotlightWalkthroughOverlay(
         }
     }
 
-    if (step == WalkthroughStep.NONE) return
+    var displayedStep by remember { mutableStateOf(step) }
+    if (step != WalkthroughStep.NONE) {
+        displayedStep = step
+    }
+
+    val overlayAlpha by animateFloatAsState(
+        targetValue = if (step != WalkthroughStep.NONE) 1f else 0f,
+        animationSpec = tween(220, easing = FastOutSlowInEasing),
+        label = "spotlightOverlayAlpha"
+    )
+
+    if (step == WalkthroughStep.NONE && overlayAlpha <= 0.01f) return
 
     // Track the overlay's root position to offset targets with sub-pixel precision
     var overlayPositionInRoot by remember { mutableStateOf(Offset.Zero) }
@@ -194,6 +221,9 @@ fun SpotlightWalkthroughOverlay(
         modifier = modifier
             .fillMaxSize()
             .zIndex(9999f)
+            .graphicsLayer {
+                alpha = overlayAlpha
+            }
             .onGloballyPositioned { coords ->
                 overlayPositionInRoot = coords.positionInRoot()
             }
@@ -302,25 +332,26 @@ fun SpotlightWalkthroughOverlay(
         }
 
         // 4. Floating Cheerful Guidance Card with Fluid Content Morphing
-        val cardData = when (step) {
+        val effectiveStep = if (step != WalkthroughStep.NONE) step else displayedStep
+        val cardData = when (effectiveStep) {
             WalkthroughStep.STEP_1_PROFILE -> WalkthroughCardData(
                 stepLabel = "STEP 1 OF 3",
                 categoryTag = "STREAMING ENGINE",
-                title = "Unlock Unlimited Streaming 🍿",
+                title = "Unlock Unlimited Streaming",
                 description = "Welcome to Euthopiar! To watch movies and TV series, let's link your community streaming providers. Tap your Profile to get started.",
                 isFinalStep = false
             )
             WalkthroughStep.STEP_2_PLUGINS_TILE -> WalkthroughCardData(
                 stepLabel = "STEP 2 OF 3",
                 categoryTag = "CONFIGURATION",
-                title = "The Provider Hub ⚡",
+                title = "The Provider Hub",
                 description = "This is your media engine. Tap Plugins & Scrapers to configure community repositories and active scrapers.",
                 isFinalStep = false
             )
             WalkthroughStep.STEP_3_INSTALL_REPO -> WalkthroughCardData(
                 stepLabel = "STEP 3 OF 3",
                 categoryTag = "INSTANT SETUP",
-                title = "Sync Your First Engine 🚀",
+                title = "Sync Your First Engine",
                 description = "Paste a custom repository link or tap 'Sync official repositories' below to instantly load verified providers and start streaming!",
                 isFinalStep = true
             )
@@ -355,6 +386,18 @@ fun SpotlightWalkthroughOverlay(
                         .widthIn(max = 390.dp)
                         .fillMaxWidth()
                         .clip(cardShape)
+                        .then(
+                            if (hazeState != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                Modifier.hazeEffect(
+                                    state = hazeState,
+                                    style = HazeStyle(
+                                        backgroundColor = cardBg,
+                                        tint = HazeTint(cardBg.copy(alpha = 0.78f)),
+                                        blurRadius = 24.dp
+                                    )
+                                )
+                            } else Modifier
+                        )
                         .background(cardBg)
                         .border(
                             width = 0.5.dp,
@@ -435,15 +478,17 @@ fun SpotlightWalkthroughOverlay(
                                     )
                                 }
 
-                                // Skippable button for app updates (hidden on fresh install)
-                                if (isSkippable) {
+                                // Skippable button for app updates or when target bounds timed out
+                                if (isSkippable || targetTimeoutReached) {
                                     Box(
                                         modifier = Modifier
+                                            .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
                                             .clip(RoundedCornerShape(8.dp))
                                             .settingsPressable(
                                                 onClick = { coordinator.skip(context) }
                                             )
-                                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                                        contentAlignment = Alignment.Center
                                     ) {
                                         Text(
                                             text = "Skip Tour",
@@ -465,7 +510,7 @@ fun SpotlightWalkthroughOverlay(
                                 text = data.title,
                                 style = TextStyle(
                                     fontFamily = AppFontFamily,
-                                    fontWeight = FontWeight.Bold,
+                                    fontWeight = FontWeight.SemiBold,
                                     fontSize = 19.sp,
                                     lineHeight = 24.sp,
                                     letterSpacing = (-0.2).sp,
@@ -502,7 +547,7 @@ fun SpotlightWalkthroughOverlay(
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Text(
-                                        text = "Got It — Let's Stream! 🎬",
+                                        text = "Got It — Let's Stream!",
                                         style = TextStyle(
                                             fontFamily = AppFontFamily,
                                             fontWeight = FontWeight.Bold,

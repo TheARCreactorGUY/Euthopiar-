@@ -1,61 +1,55 @@
 package com.euthopiar.ui.details
 
-import android.annotation.SuppressLint
-import android.graphics.Color as AndroidColor
-import android.view.View
+import android.content.Context
+import android.graphics.Matrix
+import android.view.TextureView
 import android.view.ViewGroup
-import android.webkit.JavascriptInterface
-import android.webkit.WebChromeClient
-import android.webkit.WebResourceError
-import android.webkit.WebResourceResponse
-import android.webkit.WebResourceRequest
-import android.webkit.WebSettings
-import android.webkit.WebView
-import android.webkit.WebViewClient
+import android.view.ViewGroup.LayoutParams.MATCH_PARENT
+import android.widget.FrameLayout
+import androidx.annotation.OptIn
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import com.euthopiar.ui.components.extractYouTubeVideoId
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.common.VideoSize
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.MergingMediaSource
+import com.euthopiar.core.trailer.TrailerExtractionPlatform
+import com.euthopiar.core.trailer.TrailerPlaybackResolver
+import com.euthopiar.core.trailer.TrailerPlaybackSource
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-
-private class AmbientPlayerBridge(
-    private val onPlaybackActive: (Boolean) -> Unit,
-    private val onPlaybackError: () -> Unit
-) {
-    @JavascriptInterface
-    fun onPlaybackActive(active: Boolean) {
-        onPlaybackActive(active)
-    }
-
-    @JavascriptInterface
-    fun onPlaybackError() {
-        onPlaybackError()
-    }
-}
-
+import kotlinx.coroutines.withContext
 
 /**
- * Hardware-accelerated, zero-overhead ambient backdrop trailer player.
+ * Native Media3 ExoPlayer TextureView ambient backdrop trailer player.
  *
- * Emulates TMDB origin to avoid YouTube embedding blocks, smoothly fades in
- * over 600ms once playback begins, scales by 1.28x to cleanly crop YouTube branding
- * and UI chrome, and respects playback/mute lifecycle state.
+ * Plays raw YouTube video/audio streams natively extracted via InnerTube with
+ * zero YouTube overlays, automatic letterbox black-bar zoom compensation,
+ * chunked range anti-throttling, and seamless crossfade only after onRenderedFirstFrame().
  */
-@SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun AmbientBackdropPlayer(
     trailerUrl: String,
@@ -65,324 +59,287 @@ fun AmbientBackdropPlayer(
     onPlaybackError: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    val videoId = remember(trailerUrl) { extractYouTubeVideoId(trailerUrl) }
-    if (videoId == null) return
+    if (trailerUrl.isBlank()) return
 
-    val lifecycleOwner = LocalLifecycleOwner.current
-    val currentCanPlay by rememberUpdatedState(canPlay)
-    val currentOnPlaybackActive by rememberUpdatedState(onPlaybackActive)
     val currentOnPlaybackError by rememberUpdatedState(onPlaybackError)
-    var webViewRef by remember { mutableStateOf<WebView?>(null) }
-    var hasPlaybackStarted by remember(videoId) { mutableStateOf(false) }
+    var playbackSource by remember(trailerUrl) { mutableStateOf<TrailerPlaybackSource?>(null) }
 
-    LaunchedEffect(videoId) {
-        hasPlaybackStarted = false
-    }
-
-    LaunchedEffect(canPlay, hasPlaybackStarted) {
-        if (canPlay && !hasPlaybackStarted) {
-            delay(6500L)
-            if (!hasPlaybackStarted) {
-                webViewRef?.let { wv ->
-                    wv.visibility = View.GONE
-                    wv.evaluateJavascript("if (typeof hidePlayer === 'function') hidePlayer(); if (typeof pauseVideo === 'function') pauseVideo();", null)
-                }
-                currentOnPlaybackError()
-            }
+    LaunchedEffect(trailerUrl) {
+        val resolved = withContext(Dispatchers.IO) {
+            TrailerPlaybackResolver.resolveFromYouTubeUrl(trailerUrl)
+        }
+        if (resolved == null) {
+            currentOnPlaybackError()
+        } else {
+            playbackSource = resolved
         }
     }
 
-    DisposableEffect(lifecycleOwner) {
+    val source = playbackSource
+    if (source != null) {
+        AmbientBackdropPlayerSurface(
+            source = source,
+            trailerUrl = trailerUrl,
+            canPlay = canPlay,
+            isMuted = isMuted,
+            onPlaybackActive = onPlaybackActive,
+            onPlaybackError = onPlaybackError,
+            modifier = modifier
+        )
+    } else {
+        Box(modifier = modifier)
+    }
+}
+
+@OptIn(UnstableApi::class)
+@Composable
+private fun AmbientBackdropPlayerSurface(
+    source: TrailerPlaybackSource,
+    trailerUrl: String,
+    canPlay: Boolean,
+    isMuted: Boolean,
+    onPlaybackActive: (Boolean) -> Unit,
+    onPlaybackError: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val latestCanPlay = rememberUpdatedState(canPlay)
+    val latestOnPlaybackActive = rememberUpdatedState(onPlaybackActive)
+    val latestOnPlaybackError = rememberUpdatedState(onPlaybackError)
+
+    var playerContainer by remember { mutableStateOf<HeroTrailerTextureContainer?>(null) }
+    var hasRenderedFirstFrame by remember(source) { mutableStateOf(false) }
+
+    val exoPlayer = remember(source) {
+        val dataSourceFactory = YoutubeChunkedDataSourceFactory(TrailerExtractionPlatform.defaultHeaders)
+        val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory)
+        ExoPlayer.Builder(context)
+            .setMediaSourceFactory(mediaSourceFactory)
+            .build()
+            .apply {
+                val audioUrl = source.audioUrl
+                if (!audioUrl.isNullOrBlank()) {
+                    val videoSource = mediaSourceFactory.createMediaSource(MediaItem.fromUri(source.videoUrl))
+                    val audioSource = mediaSourceFactory.createMediaSource(MediaItem.fromUri(audioUrl))
+                    setMediaSource(MergingMediaSource(videoSource, audioSource))
+                } else {
+                    setMediaItem(MediaItem.fromUri(source.videoUrl))
+                }
+                repeatMode = Player.REPEAT_MODE_OFF
+                volume = if (isMuted) 0f else 1f
+                playWhenReady = canPlay
+                prepare()
+            }
+    }
+
+    var letterboxZoom by remember(exoPlayer) { mutableFloatStateOf(1f) }
+    val letterboxZoomState = animateFloatAsState(
+        targetValue = letterboxZoom,
+        animationSpec = tween(durationMillis = 400),
+        label = "ambientLetterboxZoom",
+    )
+
+    // Smooth Fade-In without Layout Shift: 0f until first frame renders AND canPlay == true
+    val playerAlpha by animateFloatAsState(
+        targetValue = if (hasRenderedFirstFrame && canPlay) 1f else 0f,
+        animationSpec = tween(durationMillis = 600),
+        label = "ambientPlayerAlpha",
+    )
+
+    DisposableEffect(exoPlayer, lifecycleOwner) {
+        fun detachVideoSurface() {
+            playerContainer?.detachPlayer(exoPlayer)
+        }
+
+        val listener = object : Player.Listener {
+            override fun onVideoSizeChanged(videoSize: VideoSize) {
+                playerContainer?.setVideoSize(videoSize)
+            }
+
+            override fun onRenderedFirstFrame() {
+                hasRenderedFirstFrame = true
+                if (exoPlayer.isPlaying && latestCanPlay.value) {
+                    latestOnPlaybackActive.value(true)
+                }
+            }
+
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                latestOnPlaybackActive.value(isPlaying && hasRenderedFirstFrame && latestCanPlay.value)
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_ENDED) {
+                    exoPlayer.seekTo(0)
+                    if (latestCanPlay.value) {
+                        exoPlayer.play()
+                    }
+                }
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                detachVideoSurface()
+                TrailerPlaybackResolver.invalidateCache(trailerUrl)
+                latestOnPlaybackActive.value(false)
+                latestOnPlaybackError.value()
+            }
+        }
+
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> {
-                    webViewRef?.let { wv ->
-                        try {
-                            wv.visibility = View.INVISIBLE
-                            wv.onPause()
-                            wv.evaluateJavascript("if (typeof pauseVideo === 'function') pauseVideo();", null)
-                        } catch (_: Exception) {}
-                    }
-                }
                 Lifecycle.Event.ON_RESUME -> {
-                    if (currentCanPlay) {
-                        webViewRef?.let { wv ->
-                            try {
-                                wv.onResume()
-                                wv.visibility = View.VISIBLE
-                                wv.evaluateJavascript("if (typeof playVideo === 'function') playVideo();", null)
-                            } catch (_: Exception) {}
-                        }
+                    if (latestCanPlay.value) {
+                        playerContainer?.attachPlayer(exoPlayer)
+                        exoPlayer.play()
                     }
                 }
-                else -> {}
+                Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> {
+                    exoPlayer.pause()
+                    detachVideoSurface()
+                    latestOnPlaybackActive.value(false)
+                }
+                else -> Unit
             }
         }
+
+        exoPlayer.addListener(listener)
         lifecycleOwner.lifecycle.addObserver(observer)
+
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
-            webViewRef?.let { wv ->
-                try {
-                    wv.visibility = View.INVISIBLE
-                    wv.onPause()
-                    wv.evaluateJavascript("if (typeof pauseVideo === 'function') pauseVideo();", null)
-                    wv.stopLoading()
-                } catch (_: Exception) {}
-            }
-            webViewRef = null
+            exoPlayer.removeListener(listener)
+            detachVideoSurface()
+            latestOnPlaybackActive.value(false)
+            exoPlayer.stop()
+            exoPlayer.release()
+            playerContainer = null
         }
     }
 
-    LaunchedEffect(isMuted) {
-        webViewRef?.evaluateJavascript("if (typeof setMuted === 'function') setMuted($isMuted);", null)
+    LaunchedEffect(exoPlayer, canPlay) {
+        exoPlayer.playWhenReady = canPlay
+        if (canPlay) {
+            playerContainer?.attachPlayer(exoPlayer)
+            exoPlayer.play()
+            if (hasRenderedFirstFrame && exoPlayer.isPlaying) {
+                latestOnPlaybackActive.value(true)
+            }
+        } else {
+            exoPlayer.pause()
+            latestOnPlaybackActive.value(false)
+        }
     }
 
-    LaunchedEffect(canPlay) {
-        webViewRef?.let { wv ->
-            if (canPlay) {
-                wv.visibility = View.VISIBLE
-                wv.evaluateJavascript("if (typeof playVideo === 'function') playVideo();", null)
-            } else {
-                wv.evaluateJavascript("if (typeof hidePlayer === 'function') hidePlayer(); if (typeof pauseVideo === 'function') pauseVideo();", null)
+    LaunchedEffect(exoPlayer, isMuted) {
+        exoPlayer.volume = if (isMuted) 0f else 1f
+    }
+
+    LaunchedEffect(exoPlayer, hasRenderedFirstFrame) {
+        letterboxZoom = 1f
+        if (!hasRenderedFirstFrame) return@LaunchedEffect
+        val tracker = LetterboxTracker()
+        val sampler = LetterboxSampler()
+        try {
+            while (true) {
+                delay(LetterboxDetector.SAMPLE_INTERVAL_MS)
+                if (LetterboxDetector.isSampleWindowOver(exoPlayer.currentPosition, exoPlayer.duration)) break
+                if (!exoPlayer.isPlaying) continue
+                val textureView = playerContainer?.textureView ?: continue
+                val bar = sampler.sample(textureView) ?: continue
+                letterboxZoom = tracker.onSample(bar) ?: continue
+                break
             }
+        } finally {
+            sampler.release()
         }
     }
 
     Box(modifier = modifier) {
-        key(videoId) {
-            AndroidView(
-                factory = { ctx ->
-                    WebView(ctx).apply {
-                        layoutParams = ViewGroup.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                            ViewGroup.LayoutParams.MATCH_PARENT
-                        )
-                        settings.apply {
-                            javaScriptEnabled = true
-                            mediaPlaybackRequiresUserGesture = false
-                            domStorageEnabled = true
-                            databaseEnabled = true
-                            loadWithOverviewMode = true
-                            useWideViewPort = true
-                            setSupportZoom(false)
-                            mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                            cacheMode = WebSettings.LOAD_DEFAULT
-                            userAgentString = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
-                        }
-                        webChromeClient = WebChromeClient()
-                        webViewClient = object : WebViewClient() {
-                            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean = false
-
-                            override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
-                                super.onReceivedError(view, request, error)
-                                val isEmbedFrame = request?.url?.path?.contains("/embed/") == true || request?.url?.host?.contains("youtube") == true
-                                if (request?.isForMainFrame == true || isEmbedFrame) {
-                                    view?.visibility = View.GONE
-                                    view?.post { currentOnPlaybackError() }
-                                }
-                            }
-
-                            override fun onReceivedHttpError(view: WebView?, request: WebResourceRequest?, errorResponse: WebResourceResponse?) {
-                                super.onReceivedHttpError(view, request, errorResponse)
-                                val isEmbedFrame = request?.url?.path?.contains("/embed/") == true || request?.url?.host?.contains("youtube") == true
-                                if (request?.isForMainFrame == true || isEmbedFrame) {
-                                    view?.visibility = View.GONE
-                                    view?.post { currentOnPlaybackError() }
-                                }
-                            }
-                        }
-                        setBackgroundColor(AndroidColor.TRANSPARENT)
-
-                        val bridge = AmbientPlayerBridge(
-                            onPlaybackActive = { active ->
-                                post {
-                                    if (active) {
-                                        hasPlaybackStarted = true
-                                    }
-                                    currentOnPlaybackActive(active)
-                                }
-                            },
-                            onPlaybackError = {
-                                post {
-                                    currentOnPlaybackError()
-                                }
-                            }
-                        )
-                        addJavascriptInterface(bridge, "AndroidBridge")
-
-                        val muteParam = if (isMuted) "1" else "0"
-                        val autoPlayParam = if (canPlay) "1" else "0"
-
-                        val html = """
-                            <!DOCTYPE html>
-                            <html>
-                            <head>
-                            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-                            <meta name="referrer" content="strict-origin-when-cross-origin">
-                            <style>
-                                * { margin: 0; padding: 0; box-sizing: border-box; }
-                                html, body {
-                                    width: 100%;
-                                    height: 100%;
-                                    overflow: hidden;
-                                    background: transparent;
-                                }
-                                .video-container {
-                                    position: absolute;
-                                    top: 0;
-                                    left: 0;
-                                    width: 100%;
-                                    height: 100%;
-                                    overflow: hidden;
-                                    background: transparent;
-                                    pointer-events: none;
-                                }
-                                #player {
-                                    position: absolute;
-                                    top: 50%;
-                                    left: 50%;
-                                    width: 177.78vh;
-                                    height: 100vh;
-                                    min-width: 100vw;
-                                    min-height: 56.25vw;
-                                    transform: translate(-50%, -50%) scale(1.28);
-                                    border: 0;
-                                    pointer-events: none;
-                                    opacity: 0;
-                                    background: transparent;
-                                    transition: opacity 0.6s cubic-bezier(0.4, 0.0, 0.2, 1);
-                                }
-                                #player.active {
-                                    opacity: 1;
-                                }
-                            </style>
-                            </head>
-                            <body>
-                            <div class="video-container">
-                                <iframe id="player"
-                                        src="https://www.youtube-nocookie.com/embed/$videoId?autoplay=$autoPlayParam&mute=$muteParam&controls=0&loop=1&playlist=$videoId&playsinline=1&rel=0&modestbranding=1&iv_load_policy=3&disablekb=1&fs=0&enablejsapi=1&cc_load_policy=0&origin=https://www.themoviedb.org&widget_referrer=https://www.themoviedb.org"
-                                        allow="autoplay; encrypted-media; picture-in-picture; accelerometer; clipboard-write; gyroscope; fullscreen"
-                                        referrerpolicy="strict-origin-when-cross-origin"
-                                        frameborder="0"
-                                        onload="onIframeLoad()">
-                                </iframe>
-                            </div>
-                            <script>
-                                function revealPlayer() {
-                                    var p = document.getElementById('player');
-                                    if (p) p.classList.add('active');
-                                }
-                                function hidePlayer() {
-                                    var p = document.getElementById('player');
-                                    if (p) p.classList.remove('active');
-                                }
-                                function disableCaptions() {
-                                    var p = document.getElementById('player');
-                                    if (p && p.contentWindow) {
-                                        p.contentWindow.postMessage(JSON.stringify({event: 'command', func: 'unloadModule', args: ['captions']}), '*');
-                                        p.contentWindow.postMessage(JSON.stringify({event: 'command', func: 'unloadModule', args: ['cc']}), '*');
-                                        p.contentWindow.postMessage(JSON.stringify({event: 'command', func: 'setOption', args: ['captions', 'track', {}]}), '*');
-                                    }
-                                }
-                                function playVideo() {
-                                    var p = document.getElementById('player');
-                                    if (p && p.contentWindow) {
-                                        p.contentWindow.postMessage(JSON.stringify({event: 'command', func: 'playVideo', args: []}), '*');
-                                    }
-                                }
-                                function pauseVideo() {
-                                    var p = document.getElementById('player');
-                                    if (p && p.contentWindow) {
-                                        p.contentWindow.postMessage(JSON.stringify({event: 'command', func: 'pauseVideo', args: []}), '*');
-                                    }
-                                }
-                                function setMuted(mute) {
-                                    var p = document.getElementById('player');
-                                    if (p && p.contentWindow) {
-                                        var cmd = mute ? 'mute' : 'unMute';
-                                        p.contentWindow.postMessage(JSON.stringify({event: 'command', func: cmd, args: []}), '*');
-                                        if (!mute) {
-                                            p.contentWindow.postMessage(JSON.stringify({event: 'command', func: 'setVolume', args: [100]}), '*');
-                                        }
-                                    }
-                                }
-                                function onIframeLoad() {
-                                    var p = document.getElementById('player');
-                                    if (p && p.contentWindow) {
-                                        p.contentWindow.postMessage(JSON.stringify({event: 'listening'}), '*');
-                                        if ($autoPlayParam === '1') {
-                                            p.contentWindow.postMessage(JSON.stringify({event: 'command', func: 'playVideo', args: []}), '*');
-                                        }
-                                        disableCaptions();
-                                    }
-                                }
-                                window.addEventListener('message', function(event) {
-                                    try {
-                                        var data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
-                                        if (data && (data.event === 'onError' || (data.info && data.info.error !== undefined))) {
-                                            hidePlayer();
-                                            if (window.AndroidBridge && window.AndroidBridge.onPlaybackError) {
-                                                window.AndroidBridge.onPlaybackError();
-                                            }
-                                            return;
-                                        }
-                                        var state = (data && data.info && data.info.playerState !== undefined) ? data.info.playerState : (data && data.event === 'onStateChange' ? data.info : null);
-                                        if (state === 1) {
-                                            revealPlayer();
-                                            disableCaptions();
-                                            if (window.AndroidBridge) {
-                                                window.AndroidBridge.onPlaybackActive(true);
-                                            }
-                                        } else if (state === 2) {
-                                            if (window.AndroidBridge) {
-                                                window.AndroidBridge.onPlaybackActive(false);
-                                            }
-                                        } else if (state === 0) {
-                                            playVideo();
-                                        }
-                                    } catch(e) {}
-                                });
-                            </script>
-                            </body>
-                            </html>
-                        """.trimIndent()
-
-                        loadDataWithBaseURL("https://www.themoviedb.org", html, "text/html", "UTF-8", null)
-                        webViewRef = this
-                    }
+        AndroidView(
+            modifier = Modifier
+                .fillMaxSize()
+                .clipToBounds()
+                .graphicsLayer {
+                    scaleX = letterboxZoomState.value
+                    scaleY = letterboxZoomState.value
+                    alpha = playerAlpha
                 },
-                update = { webView ->
-                    webViewRef = webView
-                    if (canPlay) {
-                        if (webView.visibility != View.VISIBLE) {
-                            webView.visibility = View.VISIBLE
-                        }
-                        webView.evaluateJavascript("if (typeof playVideo === 'function') playVideo();", null)
-                    } else {
-                        webView.evaluateJavascript("if (typeof hidePlayer === 'function') hidePlayer(); if (typeof pauseVideo === 'function') pauseVideo();", null)
-                    }
-                    webView.evaluateJavascript("if (typeof setMuted === 'function') setMuted($isMuted);", null)
-                },
-                onRelease = { webView ->
-                    try {
-                        webView.onPause()
-                        webView.stopLoading()
-                        webView.clearHistory()
-                        webView.removeAllViews()
-                        webView.post {
-                            try {
-                                webView.destroy()
-                            } catch (_: Exception) {}
-                        }
-                    } catch (_: Exception) {}
-                },
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {
-                        // HWUI stability layer shield
-                        alpha = 0.99f
-                    }
-            )
+            factory = { viewContext ->
+                HeroTrailerTextureContainer(viewContext).apply {
+                    layoutParams = ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT)
+                    attachPlayer(exoPlayer)
+                    playerContainer = this
+                }
+            },
+            update = { container ->
+                playerContainer = container
+                if (canPlay) {
+                    container.attachPlayer(exoPlayer)
+                }
+            }
+        )
+    }
+}
+
+private class HeroTrailerTextureContainer(
+    context: Context,
+) : FrameLayout(context) {
+    val textureView = TextureView(context)
+    private val textureTransform = Matrix()
+    private var videoAspectRatio = 16f / 9f
+    private var attachedPlayer: ExoPlayer? = null
+
+    init {
+        clipChildren = true
+        clipToPadding = true
+        isFocusable = false
+        addView(
+            textureView,
+            LayoutParams(MATCH_PARENT, MATCH_PARENT),
+        )
+        textureView.isFocusable = false
+        textureView.isClickable = false
+    }
+
+    fun attachPlayer(player: ExoPlayer) {
+        if (attachedPlayer === player) return
+        attachedPlayer?.clearVideoTextureView(textureView)
+        attachedPlayer = player
+        player.setVideoTextureView(textureView)
+    }
+
+    fun detachPlayer(player: ExoPlayer) {
+        if (attachedPlayer === player) {
+            player.clearVideoTextureView(textureView)
+            attachedPlayer = null
         }
+    }
+
+    fun setVideoSize(videoSize: VideoSize) {
+        if (videoSize.width <= 0 || videoSize.height <= 0) return
+        videoAspectRatio = videoSize.width * videoSize.pixelWidthHeightRatio / videoSize.height
+        updateTextureTransform()
+    }
+
+    override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
+        super.onSizeChanged(width, height, oldWidth, oldHeight)
+        updateTextureTransform()
+    }
+
+    private fun updateTextureTransform() {
+        val viewWidth = width.toFloat()
+        val viewHeight = height.toFloat()
+        if (viewWidth <= 0f || viewHeight <= 0f || videoAspectRatio <= 0f) return
+
+        val viewAspectRatio = viewWidth / viewHeight
+        textureTransform.reset()
+        if (viewAspectRatio > videoAspectRatio) {
+            val scaleY = viewAspectRatio / videoAspectRatio
+            textureTransform.setScale(1f, scaleY, viewWidth / 2f, viewHeight / 2f)
+        } else {
+            val scaleX = videoAspectRatio / viewAspectRatio
+            textureTransform.setScale(scaleX, 1f, viewWidth / 2f, viewHeight / 2f)
+        }
+        textureView.setTransform(textureTransform)
     }
 }

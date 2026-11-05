@@ -86,6 +86,7 @@ import com.euthopiar.ui.settings.components.SettingsTokens
 import com.euthopiar.ui.settings.components.settingsPressable
 import com.euthopiar.ui.theme.Accent
 import com.euthopiar.ui.theme.AppFontFamily
+import com.euthopiar.ui.theme.EuthopiarGlassTokens
 import com.euthopiar.ui.theme.LocalAmoledMode
 import com.euthopiar.ui.theme.LocalReduceMotion
 import dev.chrisbanes.haze.HazeState
@@ -145,7 +146,7 @@ fun SupportEuthopiarSheet(
         } catch (_: Exception) {}
     }
 
-    val dismissWithAnim: () -> Unit = {
+    val dismissWithAnim: (Float) -> Unit = { velocity ->
         if (!isDismissing) {
             isDismissing = true
             coroutineScope.launch {
@@ -154,7 +155,11 @@ fun SupportEuthopiarSheet(
                 } else {
                     sheetProgress.animateTo(
                         targetValue = 0f,
-                        animationSpec = tween(durationMillis = 160, easing = LinearOutSlowInEasing)
+                        initialVelocity = if (velocity > 0f) -velocity / 1000f else 0f,
+                        animationSpec = spring(
+                            dampingRatio = 0.85f,
+                            stiffness = 450f
+                        )
                     )
                     onDismiss()
                 }
@@ -162,17 +167,17 @@ fun SupportEuthopiarSheet(
         }
     }
 
-    BackHandler { dismissWithAnim() }
+    BackHandler { dismissWithAnim(0f) }
 
     val animValue = sheetProgress.value
     val maxSheetHeight = (configuration.screenHeightDp * 0.90f).dp
-    val sheetShape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
-    val sheetFill = if (isAmoled) Color.Black.copy(alpha = 0.88f) else Color(0xFF0E1118).copy(alpha = 0.74f)
-    val fallbackColor = if (isAmoled) Color.Black.copy(alpha = 0.94f) else Color(0xFF0E1118).copy(alpha = 0.94f)
+    val sheetShape = RoundedCornerShape(topStart = EuthopiarGlassTokens.RadiusSheet, topEnd = EuthopiarGlassTokens.RadiusSheet)
+    val sheetFill = EuthopiarGlassTokens.cardFill(isAmoled)
+    val fallbackColor = EuthopiarGlassTokens.fallbackFill(isAmoled)
 
     // Dynamic scrim fade proportional to drag offset
     val scrimDragFactor = if (sheetHeightPx > 0f) (1f - (dragOffsetY / sheetHeightPx)).coerceIn(0f, 1f) else 1f
-    val scrimAlpha = if (reduceMotion) 0.62f else (0.62f * animValue * scrimDragFactor).coerceIn(0f, 0.62f)
+    val scrimAlpha = if (reduceMotion) EuthopiarGlassTokens.ScrimAlpha else (EuthopiarGlassTokens.ScrimAlpha * animValue * scrimDragFactor).coerceIn(0f, EuthopiarGlassTokens.ScrimAlpha)
 
     // Content rise animation matching SeasonSheet
     val contentAlpha = if (reduceMotion) 1f else animValue
@@ -216,7 +221,7 @@ fun SupportEuthopiarSheet(
 
     val onDragEnd = { velocity: Float ->
         if (dragOffsetY > 120f || velocity > 600f) {
-            dismissWithAnim()
+            dismissWithAnim(velocity)
         } else {
             coroutineScope.launch {
                 Animatable(dragOffsetY).animateTo(
@@ -260,7 +265,7 @@ fun SupportEuthopiarSheet(
 
             override suspend fun onPreFling(available: Velocity): Velocity {
                 if (dragOffsetY > 120f || available.y > 600f) {
-                    dismissWithAnim()
+                    dismissWithAnim(available.y)
                     return available
                 } else if (dragOffsetY > 0f) {
                     coroutineScope.launch {
@@ -288,7 +293,7 @@ fun SupportEuthopiarSheet(
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
-                onClick = dismissWithAnim
+                onClick = { dismissWithAnim(0f) }
             )
     ) {
         // Scrim with dynamic opacity
@@ -321,7 +326,7 @@ fun SupportEuthopiarSheet(
                 .then(
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hazeState != null) {
                         Modifier.hazeEffect(state = hazeState) {
-                            blurRadius = 22.dp
+                            blurRadius = EuthopiarGlassTokens.BlurRadius
                             tints = listOf(HazeTint(sheetFill))
                             fallbackTint = HazeTint(fallbackColor)
                         }
@@ -330,8 +335,8 @@ fun SupportEuthopiarSheet(
                     }
                 )
                 .border(
-                    width = 0.5.dp,
-                    color = Color.White.copy(alpha = 0.18f),
+                    width = EuthopiarGlassTokens.HairlineWidth,
+                    color = EuthopiarGlassTokens.HairlineBorder,
                     shape = sheetShape
                 )
         ) {
@@ -373,48 +378,31 @@ fun SupportEuthopiarSheet(
                         .navigationBarsPadding()
                         .padding(bottom = 24.dp)
                 ) {
-                    // Eyebrow
+                    // Title
                     Text(
-                        text = "SUPPORT",
-                        style = TextStyle(
-                            fontFamily = AppFontFamily,
-                            fontWeight = FontWeight.Medium,
-                            fontSize = 11.sp,
-                            lineHeight = 14.sp,
-                            letterSpacing = (11 * 0.08).sp,
-                            color = SettingsTokens.TextWhite45
-                        )
+                        text = "Support Euthopiar",
+                        style = EuthopiarGlassTokens.HeaderTitle
                     )
 
                     Spacer(modifier = Modifier.height(4.dp))
 
-                    // Title
-                    Text(
-                        text = "Support Euthopiar",
-                        style = TextStyle(
-                            fontFamily = AppFontFamily,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 24.sp,
-                            lineHeight = 28.sp,
-                            color = SettingsTokens.TextWhite96
-                        )
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
                     // Subtitle
                     Text(
                         text = "Free and open source. If it is part of your evenings, a coffee helps keep it going.",
-                        style = TextStyle(
-                            fontFamily = AppFontFamily,
-                            fontWeight = FontWeight.Normal,
-                            fontSize = 13.sp,
-                            lineHeight = 18.sp,
-                            color = SettingsTokens.TextWhite72
-                        )
+                        style = EuthopiarGlassTokens.HeaderSubtitle
                     )
 
-                    Spacer(modifier = Modifier.height(22.dp))
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Subtle Hairline Divider
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(EuthopiarGlassTokens.HairlineWidth)
+                            .background(EuthopiarGlassTokens.HairlineDivider)
+                    )
+
+                    Spacer(modifier = Modifier.height(18.dp))
 
                     // Primary Button: "Buy me a coffee" with tactile 0.96f scale
                     Box(

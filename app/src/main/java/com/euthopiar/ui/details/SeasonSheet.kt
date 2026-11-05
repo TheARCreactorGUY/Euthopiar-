@@ -49,6 +49,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.euthopiar.core.model.EpisodeItem
 import com.euthopiar.ui.theme.AppFontFamily
+import com.euthopiar.ui.theme.EuthopiarGlassTokens
+import com.euthopiar.ui.theme.LocalAmoledMode
 import com.euthopiar.ui.theme.LocalReduceMotion
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeTint
@@ -58,19 +60,15 @@ import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 /**
- * Approved Frosted Glass Season Sheet (Fix 2):
- * - Dark translucent fill (74% near-black with hint of blue-gray: Color(0xFF0E1118))
- * - Background blur about 22px
- * - 0.5px hairline on the top edge (white 18%)
- * - 28dp top corners, 36x4dp drag handle (white 28%)
- * - Dark scrim behind (62% black)
- * - Pinned header: "Select season" (26sp, medium, line height 1.05, slightly negative letter spacing)
- * - Subtitle: series name and season count (12sp muted)
- * - Rows: 48dp tall, NO boxes, NO borders around rows, separated by 0.5px hairlines
- * - "Season X" on left (16sp, medium if selected), episode count on right (11sp muted)
- * - Fixed 22dp slot: solid white circle (92%) with dark check for selected season; reserved empty for unselected
- * - Capped at 70% screen height, scrolls inside with centered scroll to selected season
- * - Bottom edge fade (70dp)
+ * Approved Frosted Glass Season Sheet:
+ * - Obsidian dark 85% alpha (92% AMOLED)
+ * - 24dp Haze background blur
+ * - 0.5dp hairline border @ 16% white alpha
+ * - 28dp top corners, 36x4dp drag handle
+ * - Full-screen black scrim @ 65% opacity
+ * - Pinned header: "Select season" (20sp Bold, 96% white), series name & season count (13sp Normal, 54% white)
+ * - Subtle hairline divider: 0.5dp @ 10% white alpha
+ * - Rows: 48dp tall with 0.5dp hairline separators
  * - Pop selection animation with 200ms close delay
  */
 @Composable
@@ -88,6 +86,7 @@ fun SeasonSheet(
     val reduceMotion = LocalReduceMotion.current
     val haptic = LocalHapticFeedback.current
     val configuration = LocalConfiguration.current
+    val isAmoled = LocalAmoledMode.current
     val density = LocalDensity.current
 
     val sheetProgress = remember { Animatable(0f) }
@@ -101,7 +100,7 @@ fun SeasonSheet(
         } else {
             sheetProgress.animateTo(
                 targetValue = 1f,
-                animationSpec = tween(durationMillis = 340, easing = FastOutSlowInEasing)
+                animationSpec = spring(dampingRatio = 0.85f, stiffness = 380f)
             )
         }
     }
@@ -139,9 +138,10 @@ fun SeasonSheet(
         }
     }
 
-    val sheetShape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
-    val sheetFill = Color(0xFF0E1118).copy(alpha = 0.74f)
-    val scrimAlpha = if (reduceMotion) 0.62f else (0.62f * (animValue / (250f / 340f))).coerceIn(0f, 0.62f)
+    val sheetShape = RoundedCornerShape(topStart = EuthopiarGlassTokens.RadiusSheet, topEnd = EuthopiarGlassTokens.RadiusSheet)
+    val sheetFill = EuthopiarGlassTokens.cardFill(isAmoled)
+    val fallbackFill = EuthopiarGlassTokens.fallbackFill(isAmoled)
+    val scrimAlpha = if (reduceMotion) EuthopiarGlassTokens.ScrimAlpha else (EuthopiarGlassTokens.ScrimAlpha * (animValue / (250f / 340f))).coerceIn(0f, EuthopiarGlassTokens.ScrimAlpha)
     val headerAlpha = if (reduceMotion) 1f else animValue
     val headerOffsetY = if (reduceMotion) 0f else (1f - animValue) * with(density) { 8.dp.toPx() }
 
@@ -154,7 +154,7 @@ fun SeasonSheet(
                 onClick = dismissWithAnim
             )
     ) {
-        // Scrim: 62% black fade in ~250ms
+        // Scrim
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -182,18 +182,20 @@ fun SeasonSheet(
                 )
                 .draggable(
                     state = rememberDraggableState { delta ->
-                        if (delta > 0 || dragOffsetY > 0) {
-                            dragOffsetY = (dragOffsetY + delta).coerceAtLeast(0f)
-                        }
+                        val next = dragOffsetY + if (dragOffsetY + delta < 0f) delta * 0.18f else delta
+                        dragOffsetY = next.coerceAtLeast(-24f)
                     },
                     orientation = Orientation.Vertical,
-                    onDragStopped = {
-                        if (dragOffsetY > 120f) {
+                    onDragStopped = { velocity ->
+                        // Project momentum: fast downward flick (velocity > 900f px/s) or drag > 120f dismisses
+                        val projected = dragOffsetY + (velocity * 0.15f)
+                        if (dragOffsetY > 120f || (dragOffsetY > 24f && velocity > 900f) || projected > 220f) {
                             dismissWithAnim()
                         } else {
                             coroutineScope.launch {
                                 Animatable(dragOffsetY).animateTo(
                                     targetValue = 0f,
+                                    initialVelocity = velocity,
                                     animationSpec = spring(
                                         dampingRatio = Spring.DampingRatioLowBouncy,
                                         stiffness = Spring.StiffnessMedium
@@ -209,17 +211,17 @@ fun SeasonSheet(
                 .then(
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hazeState != null) {
                         Modifier.hazeEffect(state = hazeState) {
-                            blurRadius = 22.dp
+                            blurRadius = EuthopiarGlassTokens.BlurRadius
                             tints = listOf(HazeTint(sheetFill))
-                            fallbackTint = HazeTint(Color(0xFF0E1118).copy(alpha = 0.94f))
+                            fallbackTint = HazeTint(fallbackFill)
                         }
                     } else {
-                        Modifier.background(Color(0xFF0E1118).copy(alpha = 0.94f))
+                        Modifier.background(fallbackFill)
                     }
                 )
                 .border(
-                    width = 0.5.dp,
-                    color = Color.White.copy(alpha = 0.18f),
+                    width = EuthopiarGlassTokens.HairlineWidth,
+                    color = EuthopiarGlassTokens.HairlineBorder,
                     shape = sheetShape
                 )
         ) {
@@ -239,7 +241,7 @@ fun SeasonSheet(
                     )
                 }
 
-                // Fixed Header with fade and 8dp rise motion
+                // Fixed Header matching UpdateInfoDialog
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -247,19 +249,12 @@ fun SeasonSheet(
                             alpha = headerAlpha
                             translationY = headerOffsetY
                         }
-                        .padding(horizontal = 20.dp)
-                        .padding(bottom = 12.dp)
+                        .padding(horizontal = 24.dp)
+                        .padding(bottom = 14.dp)
                 ) {
                     Text(
                         text = "Select season",
-                        style = TextStyle(
-                            fontFamily = AppFontFamily,
-                            fontSize = 26.sp,
-                            fontWeight = FontWeight.Medium,
-                            lineHeight = 27.sp,
-                            letterSpacing = (-0.3).sp,
-                            color = Color.White
-                        )
+                        style = EuthopiarGlassTokens.HeaderTitle
                     )
 
                     Spacer(modifier = Modifier.height(4.dp))
@@ -272,21 +267,16 @@ fun SeasonSheet(
                     val displayTitle = seriesTitle.ifBlank { "Series" }
                     Text(
                         text = "$displayTitle · $seasonsCountText",
-                        style = TextStyle(
-                            fontFamily = AppFontFamily,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Normal,
-                            color = Color.White.copy(alpha = 0.60f)
-                        )
+                        style = EuthopiarGlassTokens.HeaderSubtitle
                     )
                 }
 
-                // Hairline below header (0.5px white 14%)
+                // Subtle Hairline Divider below header
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(0.5.dp)
-                        .background(Color.White.copy(alpha = 0.14f))
+                        .height(EuthopiarGlassTokens.HairlineWidth)
+                        .background(EuthopiarGlassTokens.HairlineDivider)
                 )
 
                 // Scrollable Season Rows with bottom edge fade
@@ -315,13 +305,13 @@ fun SeasonSheet(
                                 }
                             )
 
-                            // 0.5px hairline between rows
+                            // 0.5dp hairline divider between rows
                             if (index < availableSeasons.size - 1) {
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .height(0.5.dp)
-                                        .background(Color.White.copy(alpha = 0.14f))
+                                        .height(EuthopiarGlassTokens.HairlineWidth)
+                                        .background(EuthopiarGlassTokens.HairlineDivider)
                                 )
                             }
                         }
@@ -336,7 +326,7 @@ fun SeasonSheet(
                                 .height(70.dp)
                                 .background(
                                     Brush.verticalGradient(
-                                        listOf(Color.Transparent, Color(0xFF0E1118).copy(alpha = 0.85f))
+                                        listOf(Color.Transparent, sheetFill.copy(alpha = 0.85f))
                                     )
                                 )
                         )
@@ -370,7 +360,7 @@ private fun SeasonRow(
     )
 
     val checkScale by animateFloatAsState(
-        targetValue = if (isSelected) 1f else 0.7f,
+        targetValue = if (isSelected) 1f else 0.92f,
         animationSpec = spring(
             dampingRatio = 0.55f, // tiny overshoot pop
             stiffness = Spring.StiffnessMedium
@@ -401,7 +391,7 @@ private fun SeasonRow(
                 onClick = onSelect
             )
             .background(if (isPressed) Color.White.copy(alpha = 0.06f) else Color.Transparent)
-            .padding(horizontal = 20.dp),
+            .padding(horizontal = 24.dp),
         contentAlignment = Alignment.CenterStart
     ) {
         Row(
@@ -409,14 +399,14 @@ private fun SeasonRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            // "Season X" on the left (16sp, medium if selected)
+            // "Season X" on the left (15.5sp, semi-bold if selected)
             Text(
                 text = "Season $seasonNumber",
                 style = TextStyle(
                     fontFamily = AppFontFamily,
-                    fontSize = 16.sp,
-                    fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
-                    color = if (isSelected) Color.White else Color.White.copy(alpha = 0.85f)
+                    fontSize = 15.5.sp,
+                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (isSelected) Color.White else EuthopiarGlassTokens.TextWhite82
                 )
             )
 
@@ -424,18 +414,18 @@ private fun SeasonRow(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                // Episode count in 11sp muted
+                // Episode count in 12sp muted
                 Text(
                     text = "$episodeCount ${if (episodeCount == 1) "episode" else "episodes"}",
                     style = TextStyle(
                         fontFamily = AppFontFamily,
-                        fontSize = 11.sp,
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.Normal,
-                        color = Color.White.copy(alpha = 0.60f)
+                        color = EuthopiarGlassTokens.TextWhite54
                     )
                 )
 
-                // Fixed 22dp slot: solid white circle (92%) with dark check for selected, empty reserved for unselected
+                // Fixed 22dp slot: solid white circle with dark check for selected, empty reserved for unselected
                 Box(
                     modifier = Modifier.size(22.dp),
                     contentAlignment = Alignment.Center
@@ -449,13 +439,13 @@ private fun SeasonRow(
                                     scaleY = checkScale
                                 }
                                 .clip(CircleShape)
-                                .background(Color.White.copy(alpha = 0.92f)),
+                                .background(Color.White),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = Icons.Outlined.Check,
                                 contentDescription = "Selected",
-                                tint = Color(0xFF0E1118),
+                                tint = EuthopiarGlassTokens.TextDark,
                                 modifier = Modifier.size(13.dp)
                             )
                         }

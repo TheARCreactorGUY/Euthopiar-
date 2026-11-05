@@ -76,27 +76,37 @@ class PlaylistRepository private constructor(private val context: Context) {
     private val _userPlaylists = MutableStateFlow<List<Playlist>>(emptyList())
     val userPlaylists: StateFlow<List<Playlist>> = _userPlaylists.asStateFlow()
 
+    @Volatile
+    private var isDiskLoaded = false
+
     init {
         loadUserPlaylists()
     }
 
     private fun loadUserPlaylists() {
         scope.launch {
-            try {
-                val parsed = jsonStore.read()
-                _userPlaylists.update { current ->
-                    if (current.isEmpty()) {
-                        parsed
-                    } else {
-                        val currentIds = current.map { it.id }.toSet()
-                        val missingFromMemory = parsed.filterNot { it.id in currentIds }
-                        current + missingFromMemory
-                    }
-                }
-            } catch (_: Exception) {
-                // If deserialization fails, fallback to empty user playlists
-            }
+            awaitLoaded()
         }
+    }
+
+    suspend fun awaitLoaded(): List<Playlist> {
+        if (isDiskLoaded && _userPlaylists.value.isNotEmpty()) return _userPlaylists.value
+        try {
+            val parsed = jsonStore.read()
+            _userPlaylists.update { current ->
+                if (current.isEmpty()) {
+                    parsed
+                } else {
+                    val currentIds = current.map { it.id }.toSet()
+                    val missingFromMemory = parsed.filterNot { it.id in currentIds }
+                    current + missingFromMemory
+                }
+            }
+            isDiskLoaded = true
+        } catch (_: Exception) {
+            isDiskLoaded = true
+        }
+        return _userPlaylists.value
     }
 
     /**
@@ -199,7 +209,7 @@ class PlaylistRepository private constructor(private val context: Context) {
         )
     }
 
-    fun createPlaylist(title: String, initialItems: List<PlaylistItem> = emptyList()): Playlist {
+    fun createPlaylist(title: String, initialItems: List<PlaylistItem> = emptyList(), syncToRemote: Boolean = true): Playlist {
         val cleanTitle = title.replace('+', ' ').trim().ifBlank { "New Playlist" }
         val cleanedInitialItems = initialItems.map {
             it.copy(title = it.title.replace('+', ' ').trim(), episodeTitle = it.episodeTitle?.replace('+', ' ')?.trim())
@@ -217,6 +227,9 @@ class PlaylistRepository private constructor(private val context: Context) {
             try {
                 jsonStore.update { diskList ->
                     if (diskList.any { it.id == newPlaylist.id }) diskList else listOf(newPlaylist) + diskList
+                }
+                if (syncToRemote) {
+                    com.euthopiar.data.sync.MediaSyncManager.getInstance(context).notifyPlaylistsChanged()
                 }
             } catch (_: Exception) {}
         }
@@ -236,7 +249,7 @@ class PlaylistRepository private constructor(private val context: Context) {
         }
     }
 
-    fun addItemToPlaylist(playlistId: String, item: PlaylistItem) {
+    fun addItemToPlaylist(playlistId: String, item: PlaylistItem, syncToRemote: Boolean = true) {
         val cleanItem = item.copy(
             title = item.title.replace('+', ' ').trim(),
             episodeTitle = item.episodeTitle?.replace('+', ' ')?.trim()
@@ -244,8 +257,15 @@ class PlaylistRepository private constructor(private val context: Context) {
         _userPlaylists.update { list ->
             list.map { pl ->
                 if (pl.id == playlistId) {
+                    val existing = pl.items.find { it.uniqueKey == cleanItem.uniqueKey }
+                    val mergedItem = if (existing != null) {
+                        cleanItem.copy(
+                            posterUrl = cleanItem.posterUrl ?: existing.posterUrl,
+                            backdropUrl = cleanItem.backdropUrl ?: existing.backdropUrl
+                        )
+                    } else cleanItem
                     val filtered = pl.items.filterNot { it.uniqueKey == cleanItem.uniqueKey }
-                    pl.copy(items = listOf(cleanItem) + filtered)
+                    pl.copy(items = listOf(mergedItem) + filtered)
                 } else pl
             }
         }
@@ -254,10 +274,20 @@ class PlaylistRepository private constructor(private val context: Context) {
                 jsonStore.update { diskList ->
                     diskList.map { pl ->
                         if (pl.id == playlistId) {
+                            val existing = pl.items.find { it.uniqueKey == cleanItem.uniqueKey }
+                            val mergedItem = if (existing != null) {
+                                cleanItem.copy(
+                                    posterUrl = cleanItem.posterUrl ?: existing.posterUrl,
+                                    backdropUrl = cleanItem.backdropUrl ?: existing.backdropUrl
+                                )
+                            } else cleanItem
                             val filtered = pl.items.filterNot { it.uniqueKey == cleanItem.uniqueKey }
-                            pl.copy(items = listOf(cleanItem) + filtered)
+                            pl.copy(items = listOf(mergedItem) + filtered)
                         } else pl
                     }
+                }
+                if (syncToRemote) {
+                    com.euthopiar.data.sync.MediaSyncManager.getInstance(context).notifyPlaylistsChanged()
                 }
             } catch (_: Exception) {}
         }
@@ -303,6 +333,62 @@ class PlaylistRepository private constructor(private val context: Context) {
      * Returns all user-created custom playlists.
      */
     fun getUserPlaylists(): List<Playlist> = _userPlaylists.value
+
+    /**
+     * Backfills missing poster/backdrop artwork across all user playlists for items matching [mediaId] or [title].
+     */
+    suspend fun backfillItemArtwork(
+        mediaId: String,
+        title: String,
+        posterUrl: String,
+        backdropUrl: String?,
+        year: Int? = null
+    ) {
+        if (posterUrl.isBlank()) return
+        val normTitle = title.replace('+', ' ').trim().lowercase()
+        var changed = false
+        _userPlaylists.update { list ->
+            list.map { pl ->
+                var plChanged = false
+                val updatedItems = pl.items.map { item ->
+                    val matches = item.mediaId == mediaId || item.title.trim().lowercase() == normTitle
+                    if (matches && (item.posterUrl.isNullOrBlank() || item.backdropUrl.isNullOrBlank())) {
+                        plChanged = true
+                        changed = true
+                        item.copy(
+                            posterUrl = item.posterUrl?.takeIf { it.isNotBlank() } ?: posterUrl,
+                            backdropUrl = item.backdropUrl?.takeIf { it.isNotBlank() } ?: backdropUrl ?: posterUrl,
+                            year = item.year ?: year
+                        )
+                    } else {
+                        item
+                    }
+                }
+                if (plChanged) pl.copy(items = updatedItems) else pl
+            }
+        }
+        if (changed) {
+            try {
+                jsonStore.update { diskList ->
+                    diskList.map { pl ->
+                        val updatedItems = pl.items.map { item ->
+                            val matches = item.mediaId == mediaId || item.title.trim().lowercase() == normTitle
+                            if (matches && (item.posterUrl.isNullOrBlank() || item.backdropUrl.isNullOrBlank())) {
+                                item.copy(
+                                    posterUrl = item.posterUrl?.takeIf { it.isNotBlank() } ?: posterUrl,
+                                    backdropUrl = item.backdropUrl?.takeIf { it.isNotBlank() } ?: backdropUrl ?: posterUrl,
+                                    year = item.year ?: year
+                                )
+                            } else {
+                                item
+                            }
+                        }
+                        pl.copy(items = updatedItems)
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+    }
 
     /**
      * Restores playlists from a configuration snapshot, preserving existing unique entries.

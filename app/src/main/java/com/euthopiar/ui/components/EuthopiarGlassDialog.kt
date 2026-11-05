@@ -2,6 +2,11 @@ package com.euthopiar.ui.components
 
 import android.os.Build
 import android.view.WindowManager
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -19,6 +24,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Movie
@@ -27,13 +33,17 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
@@ -43,13 +53,14 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
 import com.euthopiar.ui.settings.plugins.pluginsPressable
+import com.euthopiar.ui.theme.EuthopiarGlassTokens
 import com.euthopiar.ui.theme.LocalAmoledMode
+import com.euthopiar.ui.theme.LocalReduceMotion
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeTint
 import dev.chrisbanes.haze.hazeEffect
@@ -57,18 +68,18 @@ import dev.chrisbanes.haze.hazeEffect
 /**
  * Universal Frosted-Glass Alert & Confirmation Dialog for Euthopiar.
  *
- * Strict Design Specifications:
- * - Scrim: Full-screen black at 60% opacity (Color.Black.copy(alpha = 0.6f)).
- * - Card: Max width 360dp, 16dp horizontal margin, 28dp corner radius.
- * - Surface: Dark frosted glass acrylic (blur ~22px / Haze or AMOLED fallback, 0.5dp hairline border).
+ * Strictly adheres to the UpdateInfoDialog gold-standard formula:
+ * - Scrim: Full-screen black at 65% opacity.
+ * - Card: Max width 380dp, 16dp horizontal margin, 28dp corner radius.
+ * - Surface: Dark frosted obsidian glass (blur 24dp Haze, 0.5dp hairline border @ 16% white).
  * - Inner padding: 24dp all around.
- * - Icon tile (optional): 40x40dp rounded square, 13dp radius, glass fill (white 7%) with 0.5dp hairline (white 16%), 20dp outline icon.
- * - Headline: 22sp Medium, white 100%, line height 24sp, letter spacing -0.01em, max 3 lines with ellipsis.
- * - Body: 14sp Regular, white 60%, line height 20sp.
- * - Item row (optional): Bounded between two 0.5dp white 14% hairlines with 12dp vertical padding, 20dp space below before buttons.
- * - Buttons: 48dp height pills (radius 24dp), 12dp gap, 15sp Medium centered text, 98% press scale.
- *   - Cancel (Safe choice) on the LEFT: Solid white fill, near-black text (#0B0B0F), initial D-pad focus.
- *   - Confirm (Destructive/Action) on the RIGHT: Frosted glass fill (white 7%), 0.5dp hairline (white 16%), white text. NEVER RED.
+ * - Icon tile (optional): 44x44dp rounded square, 13dp radius, glass fill (white 7%) with 0.5dp hairline (white 16%).
+ * - Headline: 20sp Bold, 96% white, line height 24sp.
+ * - Body: 13.5sp Normal, 72% white, line height 19sp.
+ * - Item row (optional): Bounded between two 0.5dp hairlines (white 10%) with 12dp vertical padding.
+ * - Buttons: 48dp height pills (CircleShape), 12dp gap.
+ *   - Cancel on the LEFT: Solid white pill, dark text (#0B0B0F), initial D-pad focus.
+ *   - Confirm on the RIGHT: Frosted glass pill, 0.5dp hairline, white text. NEVER RED.
  *   - Single-button info mode: Full-width solid white pill when dismissText is null or blank.
  */
 @Composable
@@ -89,12 +100,31 @@ fun EuthopiarGlassDialog(
     val haptic = LocalHapticFeedback.current
     val cancelFocusRequester = remember { FocusRequester() }
     val isAmoled = LocalAmoledMode.current
+    val reduceMotion = LocalReduceMotion.current
+    var isVisible by remember { mutableStateOf(reduceMotion) }
 
     LaunchedEffect(Unit) {
+        isVisible = true
         try {
             cancelFocusRequester.requestFocus()
         } catch (_: Exception) {}
     }
+
+    val cardScale by animateFloatAsState(
+        targetValue = if (isVisible) 1f else 0.94f,
+        animationSpec = if (reduceMotion) snap() else spring(dampingRatio = 0.78f, stiffness = 550f),
+        label = "dialogCardScale"
+    )
+    val cardAlpha by animateFloatAsState(
+        targetValue = if (isVisible) 1f else 0f,
+        animationSpec = if (reduceMotion) snap() else tween(durationMillis = 160, easing = LinearOutSlowInEasing),
+        label = "dialogCardAlpha"
+    )
+    val scrimAlpha by animateFloatAsState(
+        targetValue = if (isVisible) EuthopiarGlassTokens.ScrimAlpha else 0f,
+        animationSpec = if (reduceMotion) snap() else tween(durationMillis = 180, easing = LinearOutSlowInEasing),
+        label = "dialogScrimAlpha"
+    )
 
     Dialog(
         onDismissRequest = onDismissRequest,
@@ -119,15 +149,15 @@ fun EuthopiarGlassDialog(
             }
         }
 
-        val cardShape = RoundedCornerShape(28.dp)
-        val cardFill = if (isAmoled) Color.Black.copy(alpha = 0.88f) else Color(0xFF0E1118).copy(alpha = 0.74f)
-        val fallbackFill = if (isAmoled) Color.Black.copy(alpha = 0.94f) else Color(0xFF0E1118).copy(alpha = 0.94f)
+        val cardShape = RoundedCornerShape(EuthopiarGlassTokens.RadiusDialog)
+        val cardFill = EuthopiarGlassTokens.cardFill(isAmoled)
+        val fallbackFill = EuthopiarGlassTokens.fallbackFill(isAmoled)
 
-        // Scrim: 60% full-screen black overlay
+        // Scrim: Animated black overlay
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.6f))
+                .background(Color.Black.copy(alpha = scrimAlpha))
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -135,12 +165,17 @@ fun EuthopiarGlassDialog(
                 ),
             contentAlignment = Alignment.Center
         ) {
-            // Dialog card: max 360dp, 16dp horizontal margin, 28dp radius, 24dp inner padding
+            // Dialog card: max 380dp, 16dp horizontal margin, 28dp radius, 24dp inner padding
             Box(
                 modifier = modifier
-                    .widthIn(max = 360.dp)
+                    .widthIn(max = 380.dp)
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp)
+                    .graphicsLayer {
+                        scaleX = cardScale
+                        scaleY = cardScale
+                        alpha = cardAlpha
+                    }
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
@@ -151,7 +186,7 @@ fun EuthopiarGlassDialog(
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                             if (hazeState != null) {
                                 Modifier.hazeEffect(state = hazeState) {
-                                    blurRadius = 22.dp
+                                    blurRadius = EuthopiarGlassTokens.BlurRadius
                                     tints = listOf(HazeTint(cardFill))
                                     fallbackTint = HazeTint(fallbackFill)
                                 }
@@ -163,8 +198,8 @@ fun EuthopiarGlassDialog(
                         }
                     )
                     .border(
-                        width = 0.5.dp,
-                        color = Color.White.copy(alpha = 0.18f),
+                        width = EuthopiarGlassTokens.HairlineWidth,
+                        color = EuthopiarGlassTokens.HairlineBorder,
                         shape = cardShape
                     )
                     .padding(24.dp)
@@ -172,16 +207,16 @@ fun EuthopiarGlassDialog(
                 Column(
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    // Optional Icon Tile: 40x40dp, 13dp radius, 20dp icon
+                    // Optional Icon Tile: 44x44dp, 13dp radius, 22dp icon
                     if (icon != null) {
                         Box(
                             modifier = Modifier
-                                .size(40.dp)
+                                .size(44.dp)
                                 .clip(RoundedCornerShape(13.dp))
                                 .background(Color.White.copy(alpha = 0.07f))
                                 .border(
-                                    0.5.dp,
-                                    Color.White.copy(alpha = 0.16f),
+                                    EuthopiarGlassTokens.HairlineWidth,
+                                    EuthopiarGlassTokens.HairlineBorder,
                                     RoundedCornerShape(13.dp)
                                 ),
                             contentAlignment = Alignment.Center
@@ -190,37 +225,26 @@ fun EuthopiarGlassDialog(
                                 imageVector = icon,
                                 contentDescription = null,
                                 tint = Color.White,
-                                modifier = Modifier.size(20.dp)
+                                modifier = Modifier.size(22.dp)
                             )
                         }
                         Spacer(modifier = Modifier.height(16.dp))
                     }
 
-                    // Headline: 22sp Medium, white 100%, line height 24sp, letter spacing -0.01em
+                    // Headline: 20sp Bold, 96% white, line height 24sp
                     Text(
                         text = title,
-                        style = TextStyle(
-                            color = Color.White,
-                            fontSize = 22.sp,
-                            fontWeight = FontWeight.Medium,
-                            lineHeight = 24.sp,
-                            letterSpacing = (-0.01).em
-                        ),
+                        style = EuthopiarGlassTokens.HeaderTitle,
                         maxLines = 3,
                         overflow = TextOverflow.Ellipsis
                     )
 
-                    // Optional Body: 14sp Regular, white 60%, line height 20sp
+                    // Optional Body: 13.5sp Normal, 72% white, line height 19sp
                     if (message.isNotBlank()) {
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(6.dp))
                         Text(
                             text = message,
-                            style = TextStyle(
-                                color = Color.White.copy(alpha = 0.60f),
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Normal,
-                                lineHeight = 20.sp
-                            )
+                            style = EuthopiarGlassTokens.BodyText
                         )
                     }
 
@@ -247,7 +271,7 @@ fun EuthopiarGlassDialog(
                                     .height(48.dp)
                                     .focusRequester(cancelFocusRequester)
                                     .focusable()
-                                    .clip(RoundedCornerShape(24.dp))
+                                    .clip(CircleShape)
                                     .background(Color.White)
                                     .pluginsPressable(
                                         scaleDown = 0.98f,
@@ -262,9 +286,7 @@ fun EuthopiarGlassDialog(
                             ) {
                                 Text(
                                     text = dismissText!!,
-                                    color = Color(0xFF0B0B0F),
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Medium
+                                    style = EuthopiarGlassTokens.PrimaryButtonText
                                 )
                             }
 
@@ -274,12 +296,12 @@ fun EuthopiarGlassDialog(
                                     .weight(1f)
                                     .height(48.dp)
                                     .focusable()
-                                    .clip(RoundedCornerShape(24.dp))
-                                    .background(Color.White.copy(alpha = 0.07f))
+                                    .clip(CircleShape)
+                                    .background(Color.White.copy(alpha = 0.08f))
                                     .border(
-                                        0.5.dp,
-                                        Color.White.copy(alpha = 0.16f),
-                                        RoundedCornerShape(24.dp)
+                                        EuthopiarGlassTokens.HairlineWidth,
+                                        EuthopiarGlassTokens.HairlineBorder,
+                                        CircleShape
                                     )
                                     .pluginsPressable(
                                         scaleDown = 0.98f,
@@ -295,8 +317,8 @@ fun EuthopiarGlassDialog(
                                 Text(
                                     text = confirmText,
                                     color = Color.White,
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Medium
+                                    fontSize = 14.5.sp,
+                                    fontWeight = FontWeight.SemiBold
                                 )
                             }
                         }
@@ -308,7 +330,7 @@ fun EuthopiarGlassDialog(
                                 .height(48.dp)
                                 .focusRequester(cancelFocusRequester)
                                 .focusable()
-                                .clip(RoundedCornerShape(24.dp))
+                                .clip(CircleShape)
                                 .background(Color.White)
                                 .pluginsPressable(
                                     scaleDown = 0.98f,
@@ -323,9 +345,7 @@ fun EuthopiarGlassDialog(
                         ) {
                             Text(
                                 text = confirmText,
-                                color = Color(0xFF0B0B0F),
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Medium
+                                style = EuthopiarGlassTokens.PrimaryButtonText
                             )
                         }
                     }
@@ -336,7 +356,7 @@ fun EuthopiarGlassDialog(
 }
 
 /**
- * Item row bounded by two 0.5dp hairlines (white 14%) with 12dp vertical padding.
+ * Item row bounded by two 0.5dp hairlines (white 10%) with 12dp vertical padding.
  * Displays a single poster preview (36x52dp, 6dp radius), title, and metadata.
  */
 @Composable
@@ -350,8 +370,8 @@ fun EuthopiarDialogSingleItemRow(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(0.5.dp)
-                .background(Color.White.copy(alpha = 0.14f))
+                .height(EuthopiarGlassTokens.HairlineWidth)
+                .background(EuthopiarGlassTokens.HairlineDivider)
         )
         Row(
             modifier = Modifier
@@ -374,7 +394,7 @@ fun EuthopiarDialogSingleItemRow(
                         .size(width = 36.dp, height = 52.dp)
                         .clip(RoundedCornerShape(6.dp))
                         .background(Color.White.copy(alpha = 0.08f))
-                        .border(0.5.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(6.dp)),
+                        .border(EuthopiarGlassTokens.HairlineWidth, EuthopiarGlassTokens.HairlineBorder, RoundedCornerShape(6.dp)),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
@@ -404,7 +424,7 @@ fun EuthopiarDialogSingleItemRow(
                     Text(
                         text = metadata,
                         style = TextStyle(
-                            color = Color.White.copy(alpha = 0.50f),
+                            color = Color.White.copy(alpha = 0.54f),
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Normal
                         ),
@@ -417,14 +437,14 @@ fun EuthopiarDialogSingleItemRow(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(0.5.dp)
-                .background(Color.White.copy(alpha = 0.14f))
+                .height(EuthopiarGlassTokens.HairlineWidth)
+                .background(EuthopiarGlassTokens.HairlineDivider)
         )
     }
 }
 
 /**
- * Item row bounded by two 0.5dp hairlines (white 14%) with 12dp vertical padding.
+ * Item row bounded by two 0.5dp hairlines (white 10%) with 12dp vertical padding.
  * Displays up to 3 overlapping posters (26x38dp, 6dp radius, 8dp overlap) and a summary label.
  */
 @Composable
@@ -437,8 +457,8 @@ fun EuthopiarDialogMultiItemRow(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(0.5.dp)
-                .background(Color.White.copy(alpha = 0.14f))
+                .height(EuthopiarGlassTokens.HairlineWidth)
+                .background(EuthopiarGlassTokens.HairlineDivider)
         )
         Row(
             modifier = Modifier
@@ -461,7 +481,7 @@ fun EuthopiarDialogMultiItemRow(
                             .padding(start = (index * 18).dp)
                             .size(width = 26.dp, height = 38.dp)
                             .clip(RoundedCornerShape(6.dp))
-                            .border(0.5.dp, Color.White.copy(alpha = 0.20f), RoundedCornerShape(6.dp))
+                            .border(EuthopiarGlassTokens.HairlineWidth, EuthopiarGlassTokens.HairlineBorder, RoundedCornerShape(6.dp))
                     ) {
                         AppAsyncImage(
                             model = url,
@@ -490,8 +510,8 @@ fun EuthopiarDialogMultiItemRow(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(0.5.dp)
-                .background(Color.White.copy(alpha = 0.14f))
+                .height(EuthopiarGlassTokens.HairlineWidth)
+                .background(EuthopiarGlassTokens.HairlineDivider)
         )
     }
 }

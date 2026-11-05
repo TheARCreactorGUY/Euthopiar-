@@ -1,5 +1,6 @@
 package com.euthopiar.ui.theme
 
+import android.os.SystemClock
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -8,9 +9,6 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import android.os.SystemClock
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -30,8 +28,67 @@ import androidx.compose.ui.composed
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.dp
+
+/**
+ * Standardized High-Fidelity Physics & Motion System for Euthopiar v1.0.8
+ * Strict compliance with Apple Fluid Interfaces, Emil Kowalski standards, and Taste-Skill.
+ */
+object EuthopiarMotionTokens {
+    // 1. Tactile Press Feedback (Immediate finger contact, subtle natural bounce on lift)
+    const val PressScaleLarge = 0.96f
+    const val PressScaleCompact = 0.94f
+    val SpringPress = spring<Float>(
+        dampingRatio = 0.76f,
+        stiffness = 520f
+    )
+
+    // 2. Spatial Navigation & Screen Pushes (Organic screen travel with exit parallax)
+    val SpringSpatial = spring<IntOffset>(
+        dampingRatio = 0.82f,
+        stiffness = 380f
+    )
+    const val ExitParallaxFraction = 0.25f // Outgoing screen drifts by -it / 4
+
+    // 3. Fluid Toggles & Stepper Snap (Apple iOS UISwitch standard)
+    val SpringToggleKnob = spring<Dp>(
+        dampingRatio = 0.70f,
+        stiffness = 420f
+    )
+
+    // 4. Dialog, Sheet & Popover Emergence (Bloom from origin with subtle overshoot)
+    val SpringDialogScale = spring<Float>(
+        dampingRatio = 0.80f,
+        stiffness = 450f
+    )
+    const val DialogInitialScale = 0.94f
+
+    // 5. Expandable Content Accordions (Zero mechanical jerk at boundary)
+    val SpringAccordion = spring<IntOffset>(
+        dampingRatio = 0.82f,
+        stiffness = 380f
+    )
+
+    // 6. Micro Interactions, Sheets & Snappy Sliders
+    val SpringMicro = spring<Float>(
+        dampingRatio = 0.75f,
+        stiffness = 600f
+    )
+    val SpringSheet = spring<Float>(
+        dampingRatio = 0.80f,
+        stiffness = 450f
+    )
+    val SpringSnappy = spring<Float>(
+        dampingRatio = 0.80f,
+        stiffness = 500f
+    )
+}
 
 object Motion {
     const val DurationMicro = 120
@@ -53,16 +110,13 @@ val HudExitEasing = CubicBezierEasing(0.40f, 0.0f, 1.0f, 1.0f)
  */
 fun Modifier.pressScale(
     interactionSource: MutableInteractionSource,
-    pressedScale: Float = 0.98f
+    pressedScale: Float = EuthopiarMotionTokens.PressScaleLarge
 ): Modifier = composed {
     val reduceMotion = LocalReduceMotion.current
     val isPressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(
         targetValue = if (isPressed && !reduceMotion) pressedScale else 1f,
-        animationSpec = if (reduceMotion) snap() else spring(
-            dampingRatio = Spring.DampingRatioNoBouncy,
-            stiffness = Spring.StiffnessMedium
-        ),
+        animationSpec = if (reduceMotion) snap() else EuthopiarMotionTokens.SpringPress,
         label = "pressScale"
     )
     graphicsLayer {
@@ -75,18 +129,18 @@ val LocalReduceMotion = compositionLocalOf { false }
 val LocalAmoledMode = compositionLocalOf { true }
 
 /**
- * Standard pressable modifier for consumer-grade streaming UI (recoil scale 0.96, alpha 1.0, non-bouncy spring, haptics).
+ * Standard pressable modifier for consumer-grade streaming UI (recoil scale 0.96, alpha 1.0, tuned spring, haptics).
  * Exposes proper accessibility click semantics and Role.Button by default.
  */
 @OptIn(ExperimentalFoundationApi::class)
 fun Modifier.pressable(
     enabled: Boolean = true,
-    scaleDown: Float = 0.96f,
+    scaleDown: Float = EuthopiarMotionTokens.PressScaleLarge,
     pressedAlpha: Float = 1.0f,
     role: Role? = Role.Button,
     onClickLabel: String? = null,
     interactionSource: MutableInteractionSource? = null,
-    debounceIntervalMs: Long = 500L,
+    debounceIntervalMs: Long = 300L,
     onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit
 ): Modifier = composed {
@@ -96,19 +150,13 @@ fun Modifier.pressable(
 
     val scale by animateFloatAsState(
         targetValue = if (isPressed && enabled && !reduceMotion) scaleDown else 1f,
-        animationSpec = if (reduceMotion) snap() else spring(
-            dampingRatio = Spring.DampingRatioNoBouncy,
-            stiffness = Spring.StiffnessMedium
-        ),
+        animationSpec = if (reduceMotion) snap() else EuthopiarMotionTokens.SpringPress,
         label = "pressScale"
     )
 
     val alpha by animateFloatAsState(
         targetValue = if (isPressed && enabled && !reduceMotion) pressedAlpha else 1f,
-        animationSpec = if (reduceMotion) snap() else spring(
-            dampingRatio = Spring.DampingRatioNoBouncy,
-            stiffness = Spring.StiffnessMedium
-        ),
+        animationSpec = if (reduceMotion) snap() else EuthopiarMotionTokens.SpringPress,
         label = "pressAlpha"
     )
 
@@ -176,7 +224,7 @@ fun Modifier.playButtonSpringPress(
     enabled: Boolean = true,
     role: Role? = Role.Button,
     onClickLabel: String? = null,
-    debounceIntervalMs: Long = 500L,
+    debounceIntervalMs: Long = 300L,
     onClick: () -> Unit
 ): Modifier = composed {
     val reduceMotion = LocalReduceMotion.current
@@ -184,14 +232,11 @@ fun Modifier.playButtonSpringPress(
     var isPressed by remember { mutableStateOf(false) }
 
     val scale by animateFloatAsState(
-        targetValue = if (isPressed && enabled && !reduceMotion) 0.96f else 1f,
+        targetValue = if (isPressed && enabled && !reduceMotion) EuthopiarMotionTokens.PressScaleLarge else 1f,
         animationSpec = if (isPressed) {
-            tween(durationMillis = 70, easing = LinearEasing)
+            spring(dampingRatio = 0.78f, stiffness = 600f)
         } else {
-            spring(
-                dampingRatio = 0.85f,
-                stiffness = Spring.StiffnessMedium
-            )
+            EuthopiarMotionTokens.SpringPress
         },
         label = "playSpring"
     )

@@ -31,32 +31,32 @@ data class TraktUser(
 
 @Serializable
 data class TraktMovie(
-    val title: String,
+    val title: String = "",
     val year: Int? = null,
-    val ids: TraktIds
+    val ids: TraktIds = TraktIds()
 )
 
 @Serializable
 data class TraktShow(
-    val title: String,
+    val title: String = "",
     val year: Int? = null,
-    val ids: TraktIds
+    val ids: TraktIds = TraktIds()
 )
 
 @Serializable
 data class TraktEpisode(
-    val season: Int,
-    val number: Int,
+    val season: Int = 1,
+    val number: Int = 1,
     val title: String? = null,
     val ids: TraktIds? = null
 )
 
 @Serializable
 data class TraktIds(
-    val trakt: Int? = null,
+    val trakt: Long? = null,
     val slug: String? = null,
     val imdb: String? = null,
-    val tmdb: Int? = null
+    val tmdb: Long? = null
 )
 
 @Serializable
@@ -73,4 +73,88 @@ data class TraktScrobbleResponse(
     val id: Long? = null,
     val action: String? = null,
     val progress: Float? = null
+)
+
+@Serializable
+data class TraktWatchlistItem(
+    val id: Long? = null,
+    val rank: Int? = null,
+    val listed_at: String? = null,
+    val type: String = "", // "movie" or "show"
+    val movie: TraktMovie? = null,
+    val show: TraktShow? = null
+)
+
+@Serializable
+data class TraktPlaybackProgressItem(
+    val id: Long = 0L,
+    val progress: Float = 0f,
+    val paused_at: String? = null,
+    val type: String = "", // "movie" or "episode"
+    val movie: TraktMovie? = null,
+    val show: TraktShow? = null,
+    val episode: TraktEpisode? = null
+)
+
+@Serializable
+data class TraktHistoryItem(
+    val id: Long = 0L,
+    val watched_at: String? = null,
+    val action: String? = null, // "scrobble", "checkin", "watch"
+    val type: String = "", // "movie" or "episode"
+    val movie: TraktMovie? = null,
+    val show: TraktShow? = null,
+    val episode: TraktEpisode? = null
+)
+
+@Serializable
+data class TraktCustomList(
+    val name: String = "",
+    val description: String? = null,
+    val privacy: String = "private",
+    val item_count: Int = 0,
+    val ids: TraktListIds = TraktListIds()
+)
+
+@Serializable
+data class TraktListIds(
+    val trakt: Long = 0L,
+    val slug: String = ""
+)
+
+@Serializable
+data class TraktListItem(
+    val id: Long? = null,
+    val rank: Int? = null,
+    val listed_at: String? = null,
+    val type: String = "",
+    val movie: TraktMovie? = null,
+    val show: TraktShow? = null
+)
+
+@Serializable
+data class TraktSyncItemsPayload(
+    val movies: List<TraktMovie> = emptyList(),
+    val shows: List<TraktShow> = emptyList()
+)
+
+@Serializable
+data class TraktSyncResponse(
+    val added: TraktSyncCount? = null,
+    val deleted: TraktSyncCount? = null,
+    val existing: TraktSyncCount? = null,
+    val not_found: TraktSyncNotFound? = null
+)
+
+@Serializable
+data class TraktSyncCount(
+    val movies: Int = 0,
+    val shows: Int = 0,
+    val episodes: Int = 0
+)
+
+@Serializable
+data class TraktSyncNotFound(
+    val movies: List<TraktMovie> = emptyList(),
+    val shows: List<TraktShow> = emptyList()
 )

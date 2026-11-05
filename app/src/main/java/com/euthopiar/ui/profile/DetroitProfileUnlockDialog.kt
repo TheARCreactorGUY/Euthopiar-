@@ -1,7 +1,8 @@
 package com.euthopiar.ui.profile
 
+import android.os.Build
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -41,12 +42,16 @@ import androidx.compose.ui.window.DialogProperties
 import com.euthopiar.data.profile.UserProfile
 import com.euthopiar.data.profile.hashPin
 import com.euthopiar.ui.theme.AppFontFamily
+import com.euthopiar.ui.theme.EuthopiarGlassTokens
 import com.euthopiar.ui.theme.LocalAmoledMode
 import com.euthopiar.ui.theme.LocalReduceMotion
+import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.HazeTint
+import dev.chrisbanes.haze.hazeEffect
 import kotlinx.coroutines.launch
 
 /**
- * Profile Unlock PIN Dialog matching Euthopiar minimal glass design language.
+ * Profile Unlock PIN Dialog matching Euthopiar frosted glass design language.
  */
 @Composable
 fun DetroitProfileUnlockDialog(
@@ -54,14 +59,13 @@ fun DetroitProfileUnlockDialog(
     onDismissRequest: () -> Unit,
     onUnlocked: () -> Unit,
     onSwitchProfileClick: (() -> Unit)? = null,
+    hazeState: HazeState? = null,
 ) {
     var enteredPin by remember { mutableStateOf("") }
     var isError by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val haptic = LocalHapticFeedback.current
     val isAmoled = LocalAmoledMode.current
-
-    val dialogBg = if (isAmoled) ProfileGlassTokens.AmoledBackground else ProfileGlassTokens.BaseDarkBackground
 
     val reduceMotion = LocalReduceMotion.current
     val coroutineScope = rememberCoroutineScope()
@@ -70,7 +74,10 @@ fun DetroitProfileUnlockDialog(
 
     LaunchedEffect(Unit) {
         if (!reduceMotion) {
-            dialogAnim.animateTo(1f, tween(200, easing = FastOutSlowInEasing))
+            dialogAnim.animateTo(
+                targetValue = 1f,
+                animationSpec = spring(dampingRatio = 0.78f, stiffness = 550f)
+            )
         } else {
             dialogAnim.snapTo(1f)
         }
@@ -81,7 +88,7 @@ fun DetroitProfileUnlockDialog(
         isClosing = true
         coroutineScope.launch {
             if (!reduceMotion) {
-                dialogAnim.animateTo(0f, tween(160, easing = FastOutSlowInEasing))
+                dialogAnim.animateTo(0f, tween(180))
             }
             action()
         }
@@ -130,6 +137,14 @@ fun DetroitProfileUnlockDialog(
         }
     }
 
+    val cardShape = RoundedCornerShape(EuthopiarGlassTokens.RadiusDialog)
+    val cardFill = EuthopiarGlassTokens.cardFill(isAmoled)
+    val fallbackColor = EuthopiarGlassTokens.fallbackFill(isAmoled)
+    val animVal = dialogAnim.value
+    val scrimAlpha = if (reduceMotion) EuthopiarGlassTokens.ScrimAlpha else (EuthopiarGlassTokens.ScrimAlpha * animVal).coerceIn(0f, EuthopiarGlassTokens.ScrimAlpha)
+    val cardScale = if (reduceMotion) 1f else 0.94f + 0.06f * animVal
+    val cardTranslationY = if (reduceMotion) 0f else (1f - animVal) * 30f
+
     Dialog(
         onDismissRequest = { animateDismiss(onDismissRequest) },
         properties = DialogProperties(
@@ -141,7 +156,7 @@ fun DetroitProfileUnlockDialog(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.72f * dialogAnim.value))
+                .background(Color.Black.copy(alpha = scrimAlpha))
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -153,14 +168,28 @@ fun DetroitProfileUnlockDialog(
                 modifier = Modifier
                     .fillMaxWidth(0.90f)
                     .graphicsLayer {
-                        alpha = dialogAnim.value
-                        val scale = 0.94f + (0.06f * dialogAnim.value)
-                        scaleX = scale
-                        scaleY = scale
+                        alpha = animVal
+                        scaleX = cardScale
+                        scaleY = cardScale
+                        translationY = cardTranslationY
                     }
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(dialogBg)
-                    .border(ProfileGlassTokens.HairlineWidthDp, ProfileGlassTokens.HairlineBorder, RoundedCornerShape(20.dp))
+                    .clip(cardShape)
+                    .then(
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hazeState != null) {
+                            Modifier.hazeEffect(state = hazeState) {
+                                blurRadius = EuthopiarGlassTokens.BlurRadius
+                                tints = listOf(HazeTint(cardFill))
+                                fallbackTint = HazeTint(fallbackColor)
+                            }
+                        } else {
+                            Modifier.background(fallbackColor)
+                        }
+                    )
+                    .border(
+                        width = EuthopiarGlassTokens.HairlineWidth,
+                        color = EuthopiarGlassTokens.HairlineBorder,
+                        shape = cardShape
+                    )
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
@@ -185,26 +214,14 @@ fun DetroitProfileUnlockDialog(
 
                     Text(
                         text = profile.name,
-                        style = TextStyle(
-                            fontFamily = AppFontFamily,
-                            fontWeight = FontWeight.Medium,
-                            fontSize = 24.sp,
-                            lineHeight = 28.sp,
-                            color = Color.White,
-                        ),
+                        style = EuthopiarGlassTokens.HeaderTitle,
                     )
 
                     Spacer(modifier = Modifier.height(4.dp))
 
                     Text(
                         text = "Enter 4-digit PIN to access",
-                        style = TextStyle(
-                            fontFamily = AppFontFamily,
-                            fontWeight = FontWeight.Normal,
-                            fontSize = 13.sp,
-                            lineHeight = 16.sp,
-                            color = ProfileGlassTokens.TextMuted50,
-                        ),
+                        style = EuthopiarGlassTokens.HeaderSubtitle,
                     )
 
                     Spacer(modifier = Modifier.height(20.dp))
@@ -244,14 +261,14 @@ fun DetroitProfileUnlockDialog(
                             ProfileGlassPill(
                                 text = "Switch Profile",
                                 onClick = onSwitchProfileClick,
-                                visualHeight = 36.dp,
+                                visualHeight = 40.dp,
                                 fontSize = 13
                             )
                         }
                         ProfileGlassPill(
                             text = "Cancel",
                             onClick = onDismissRequest,
-                            visualHeight = 36.dp,
+                            visualHeight = 40.dp,
                             fontSize = 13
                         )
                     }

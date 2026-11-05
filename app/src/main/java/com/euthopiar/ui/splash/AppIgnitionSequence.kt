@@ -4,6 +4,8 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -15,6 +17,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
@@ -39,6 +42,7 @@ import com.euthopiar.ui.theme.Background
 import com.euthopiar.ui.theme.LocalAmoledMode
 import com.euthopiar.ui.theme.LocalReduceMotion
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -68,6 +72,9 @@ fun AppIgnitionSequence(
     val statusBarTopPx = with(density) { statusBarTopPadding.toPx() }
     val targetLeftX = with(density) { 16.dp.toPx() }
     val headerHeightPx = with(density) { 56.dp.toPx() }
+
+    val destinationMode by AppLaunchCoordinator.destinationMode.collectAsState()
+    val reportedTarget by AppLaunchCoordinator.wordmarkTargetOffset.collectAsState()
 
     // Reduced motion fast path
     if (reduceMotion) {
@@ -103,9 +110,14 @@ fun AppIgnitionSequence(
         // Minimum fluid settling duration to establish visual anchor
         val minDelayJob = launch { delay(300L) }
 
-        // Wait directly for Home catalog data to be 100% ready (safety ceiling of 8000ms for dead network)
+        // Wait directly for Home catalog data to be 100% ready or Onboarding/PIN Lock fast path (safety ceiling of 8000ms for dead network)
         withTimeoutOrNull(8000L) {
-            AppLaunchCoordinator.isHomeDataReady.first { it }
+            combine(
+                AppLaunchCoordinator.isHomeDataReady,
+                AppLaunchCoordinator.destinationMode
+            ) { homeReady, mode ->
+                homeReady || mode == LaunchDestinationMode.ONBOARDING || mode == LaunchDestinationMode.PIN_LOCK
+            }.first { it }
         }
 
         // Ensure minimum visual anchor presence
@@ -113,12 +125,12 @@ fun AppIgnitionSequence(
 
         breathingJob.cancel()
 
-        // Phase 2: Shared Coordinate Docking (Wordmark glides smoothly into TopHeaderBar)
+        // Phase 2: Shared Coordinate Docking with Apple/Emil spring physics (velocity continuity)
         dockClock.animateTo(
             targetValue = 1.0f,
-            animationSpec = tween(
-                durationMillis = 440,
-                easing = SharedDockEasing
+            animationSpec = spring(
+                dampingRatio = 0.90f,
+                stiffness = 320f
             )
         )
 
@@ -126,93 +138,112 @@ fun AppIgnitionSequence(
         onIgnitionFinished()
     }
 
-    var textWidthPx by remember { mutableFloatStateOf(0f) }
-    var textHeightPx by remember { mutableFloatStateOf(0f) }
+    var textWidthPx by remember { mutableFloatStateOf(with(density) { 136.dp.toPx() }) }
+    var textHeightPx by remember { mutableFloatStateOf(with(density) { 22.dp.toPx() }) }
 
     val baseBg = if (isAmoled) Color.Black else Background
 
     BoxWithConstraints(
-        modifier = modifier
-            .fillMaxSize()
-            .graphicsLayer {
-                // Overlay fades out strictly during the second half of docking
-                val dock = dockClock.value
-                alpha = if (dock <= 0.3f) 1f else (1f - ((dock - 0.3f) / 0.7f)).coerceIn(0f, 1f)
-            }
-            .background(baseBg)
-            .drawWithCache {
-                val center = Offset(size.width / 2f, size.height / 2f)
-                val baseRadius = 220.dp.toPx()
-
-                // Display Color Science: AMOLED non-linear cubic stops vs LCD velvet obsidian
-                val amoledColors = listOf(
-                    Color.White.copy(alpha = 0.18f),
-                    Color(0xFFEDEFEF).copy(alpha = 0.10f),
-                    Color(0xFFCCD4E2).copy(alpha = 0.045f),
-                    Color(0xFF1B222E).copy(alpha = 0.01f),
-                    Color.Transparent
-                )
-                val lcdColors = listOf(
-                    Color.White.copy(alpha = 0.22f),
-                    Color(0xFFB0C0D8).copy(alpha = 0.12f),
-                    Color(0xFF2A3444).copy(alpha = 0.05f),
-                    Color(0xFF12151B).copy(alpha = 0.012f),
-                    Color.Transparent
-                )
-                val gradientColors = if (isAmoled) amoledColors else lcdColors
-
-                onDrawBehind {
-                    val breath = breathingClock.value
-                    val dock = dockClock.value
-                    val currentRadius = (baseRadius + 28.dp.toPx() * breath) * (1f - dock * 0.4f)
-                    val currentAlpha = (1f - dock).coerceIn(0f, 1f)
-
-                    if (currentAlpha > 0.01f) {
-                        val brush = Brush.radialGradient(
-                            colors = gradientColors,
-                            center = center,
-                            radius = currentRadius.coerceAtLeast(10f)
-                        )
-                        drawCircle(brush = brush, center = center, radius = currentRadius, alpha = currentAlpha)
-                    }
-                }
-            }
+        modifier = modifier.fillMaxSize()
     ) {
         val screenWidthPx = constraints.maxWidth.toFloat()
         val screenHeightPx = constraints.maxHeight.toFloat()
 
+        // Child backdrop Box with dark background & radial glow fading out
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    val dock = dockClock.value
+                    alpha = if (dock <= 0.15f) 1f else (1f - ((dock - 0.15f) / 0.70f)).coerceIn(0f, 1f)
+                }
+                .background(baseBg)
+                .drawWithCache {
+                    val center = Offset(size.width / 2f, size.height / 2f)
+                    val baseRadius = 220.dp.toPx()
+
+                    // Display Color Science: AMOLED non-linear cubic stops vs LCD velvet obsidian
+                    val amoledColors = listOf(
+                        Color.White.copy(alpha = 0.18f),
+                        Color(0xFFEDEFEF).copy(alpha = 0.10f),
+                        Color(0xFFCCD4E2).copy(alpha = 0.045f),
+                        Color(0xFF1B222E).copy(alpha = 0.01f),
+                        Color.Transparent
+                    )
+                    val lcdColors = listOf(
+                        Color.White.copy(alpha = 0.22f),
+                        Color(0xFFB0C0D8).copy(alpha = 0.12f),
+                        Color(0xFF2A3444).copy(alpha = 0.05f),
+                        Color(0xFF12151B).copy(alpha = 0.012f),
+                        Color.Transparent
+                    )
+                    val gradientColors = if (isAmoled) amoledColors else lcdColors
+
+                    onDrawBehind {
+                        val breath = breathingClock.value
+                        val dock = dockClock.value
+                        val currentRadius = (baseRadius + 28.dp.toPx() * breath * (1f - dock)) * (1f - dock * 0.45f)
+                        val currentAlpha = (1f - dock).coerceIn(0f, 1f)
+
+                        if (currentAlpha > 0.01f) {
+                            val brush = Brush.radialGradient(
+                                colors = gradientColors,
+                                center = center,
+                                radius = currentRadius.coerceAtLeast(10f)
+                            )
+                            drawCircle(brush = brush, center = center, radius = currentRadius, alpha = currentAlpha)
+                        }
+                    }
+                }
+        )
+
         // Shared Docking Wordmark ("EUTHOPIAR")
         // Starts centered with hero presence (1.35x scale) and glides smoothly into TopHeaderBar (1.0x scale)
         // 100% Hardware-accelerated inside graphicsLayer (Zero Recomposition during 60/120fps motion)
+        val isNonHome = destinationMode == LaunchDestinationMode.ONBOARDING || destinationMode == LaunchDestinationMode.PIN_LOCK
+
         Box(
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .graphicsLayer {
                     val dock = dockClock.value
                     val breath = breathingClock.value
+                    val liveMode = destinationMode
+                    val liveTarget = reportedTarget
+                    val nonHome = liveMode == LaunchDestinationMode.ONBOARDING || liveMode == LaunchDestinationMode.PIN_LOCK
 
                     val startScale = 1.35f
-                    val targetScale = 1.00f
-                    val currentScale = (startScale + (0.03f * breath * (1f - dock))) + (targetScale - startScale) * dock
-
-                    // Center coordinates when scaled by startScale
                     val startLeftX = (screenWidthPx - (textWidthPx * startScale)) / 2f
                     val startTopY = (screenHeightPx - textHeightPx) / 2f
 
-                    // Target header coordinates
-                    val targetTopY = statusBarTopPx + ((headerHeightPx - textHeightPx) / 2f).coerceAtLeast(0f)
+                    if (nonHome) {
+                        val currentScale = startScale + (0.07f * dock)
+                        translationX = startLeftX
+                        translationY = startTopY
+                        scaleX = currentScale
+                        scaleY = currentScale
+                        alpha = (1f - dock).coerceIn(0f, 1f)
+                        transformOrigin = TransformOrigin(0.5f, 0.5f)
+                    } else {
+                        val targetScale = 1.00f
+                        val currentScale = (startScale + (0.03f * breath * (1f - dock))) + (targetScale - startScale) * dock
 
-                    val currentX = startLeftX + (targetLeftX - startLeftX) * dock
-                    val currentY = startTopY + (targetTopY - startTopY) * dock
+                        val resolvedTargetLeftX = liveTarget?.x ?: targetLeftX
+                        val resolvedTargetTopY = liveTarget?.y ?: (statusBarTopPx + ((headerHeightPx - textHeightPx) / 2f).coerceAtLeast(0f))
 
-                    translationX = currentX
-                    translationY = currentY
-                    scaleX = currentScale
-                    scaleY = currentScale
-                    transformOrigin = TransformOrigin(0f, 0.5f)
+                        val currentX = startLeftX + (resolvedTargetLeftX - startLeftX) * dock
+                        val currentY = startTopY + (resolvedTargetTopY - startTopY) * dock
+
+                        translationX = currentX
+                        translationY = currentY
+                        scaleX = currentScale
+                        scaleY = currentScale
+                        alpha = 1f
+                        transformOrigin = TransformOrigin(0f, 0.5f)
+                    }
                 }
                 .onSizeChanged { size ->
-                    if (size.width > 0 && textWidthPx == 0f) {
+                    if (size.width > 0) {
                         textWidthPx = size.width.toFloat()
                         textHeightPx = size.height.toFloat()
                     }

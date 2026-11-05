@@ -2,6 +2,8 @@ package com.euthopiar.ui.settings.pages
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -47,9 +49,9 @@ import dev.chrisbanes.haze.HazeState
  */
 private fun resolveSubtitleColor(colorName: String): Color {
     return when (colorName.uppercase()) {
-        "YELLOW" -> Color(0xFFFFEB3B)
-        "CYAN" -> Color(0xFF00E5FF)
-        "GREEN" -> Color(0xFF76FF03)
+        "YELLOW" -> Color(0xFFFFE082)
+        "CYAN" -> Color(0xFF80DEEA)
+        "GREEN" -> Color(0xFFA5D6A7)
         else -> Color.White
     }
 }
@@ -101,9 +103,9 @@ fun PlaybackSettingsPage(
     val qualityOptions = remember {
         listOf(
             PopoverOption("Auto", "Auto", "Adaptive resolution based on connection"),
-            PopoverOption("1080p", "1080p FHD", "Crisp high-definition · Optimal for Wi-Fi"),
-            PopoverOption("720p", "720p HD", "Balanced resolution · Data saver"),
-            PopoverOption("480p", "480p SD", "Low bandwidth · Mobile friendly")
+            PopoverOption("1080p", "1080p FHD", "Crisp high-definition \u00B7 Optimal for Wi-Fi"),
+            PopoverOption("720p", "720p HD", "Balanced resolution \u00B7 Data saver"),
+            PopoverOption("480p", "480p SD", "Low bandwidth \u00B7 Mobile friendly")
         )
     }
 
@@ -119,9 +121,9 @@ fun PlaybackSettingsPage(
     val colorOptions = remember {
         listOf(
             PopoverOption("WHITE", "White", "Classic clean subtitle", Color.White),
-            PopoverOption("YELLOW", "Yellow", "High-contrast cinema standard", Color(0xFFFFEB3B)),
-            PopoverOption("CYAN", "Cyan", "Modern high-visibility blue", Color(0xFF00E5FF)),
-            PopoverOption("GREEN", "Green", "Retro high-contrast tint", Color(0xFF76FF03))
+            PopoverOption("YELLOW", "Yellow", "High-contrast cinema standard", Color(0xFFFFE082)),
+            PopoverOption("CYAN", "Cyan", "Modern high-visibility blue", Color(0xFF80DEEA)),
+            PopoverOption("GREEN", "Green", "Retro high-contrast tint", Color(0xFFA5D6A7))
         )
     }
 
@@ -313,11 +315,11 @@ fun PlaybackSettingsPage(
             hazeState = hazeState
         )
 
-        // Sub-settings for Auto-Skip Intro (smooth 220ms expand/collapse)
+        // Sub-settings for Auto-Skip Intro (smooth spring expand/collapse)
         AnimatedVisibility(
             visible = autoSkipIntro,
-            enter = if (reduceMotion) fadeIn(tween(120)) else expandVertically(tween(220)) + fadeIn(tween(180)),
-            exit = if (reduceMotion) fadeOut(tween(120)) else shrinkVertically(tween(220)) + fadeOut(tween(180))
+            enter = if (reduceMotion) fadeIn(snap()) else expandVertically(spring(dampingRatio = 0.82f, stiffness = 380f)) + fadeIn(tween(180)),
+            exit = if (reduceMotion) fadeOut(snap()) else shrinkVertically(spring(dampingRatio = 0.82f, stiffness = 380f)) + fadeOut(tween(180))
         ) {
             Column(modifier = Modifier.fillMaxWidth()) {
                 OpenSettingsRow(
@@ -464,7 +466,7 @@ private fun LiveCinemaCaptionStageCard(
     val targetBufferProgress = (bufferSizeMb.coerceIn(0, 100) / 100f)
     val animatedBufferProgress by animateFloatAsState(
         targetValue = targetBufferProgress,
-        animationSpec = tween(if (reduceMotion) 0 else 220),
+        animationSpec = if (reduceMotion) snap() else spring(dampingRatio = 0.85f, stiffness = 400f),
         label = "bufferProgress"
     )
 
@@ -491,7 +493,7 @@ private fun LiveCinemaCaptionStageCard(
                 blurRadius = 18.dp,
                 customFill = Color.White.copy(alpha = 0.05f)
             )
-            .padding(14.dp)
+            .padding(16.dp)
     ) {
         Column(
             modifier = Modifier.fillMaxWidth(),
@@ -573,11 +575,11 @@ private fun LiveCinemaCaptionStageCard(
                 }
             }
 
-            // Center Live Caption Viewport (80dp height, 12dp radius, dark cinema frame)
+            // Center Live Caption Viewport (80-112dp height, 12dp radius, dark cinema frame)
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(80.dp)
+                    .heightIn(min = 80.dp, max = 112.dp)
                     .clip(RoundedCornerShape(SettingsTokens.RadiusControl))
                     .background(Color.Black.copy(alpha = 0.48f))
                     .border(

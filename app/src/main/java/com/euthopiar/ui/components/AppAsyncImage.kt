@@ -32,16 +32,24 @@ fun AppAsyncImage(
     alignment: Alignment = Alignment.Center
 ) {
     val context = LocalContext.current
-    var isError by remember(model) {
-        mutableStateOf(model == null || (model is String && model.isBlank()))
+    val isBlankModel = model == null || (model is String && model.isBlank())
+    var isError by remember(model) { mutableStateOf(isBlankModel) }
+    var retryCount by remember(model) { mutableIntStateOf(0) }
+
+    LaunchedEffect(isError, retryCount, model) {
+        if (isError && !isBlankModel && retryCount < 2) {
+            kotlinx.coroutines.delay(700L * (retryCount + 1))
+            retryCount += 1
+            isError = false
+        }
     }
 
     Box(
         modifier = modifier.background(SurfaceLow),
         contentAlignment = Alignment.Center
     ) {
-        if (!isError) {
-            val imageRequest = remember(model, context) {
+        if (!isError && !isBlankModel) {
+            val imageRequest = remember(model, retryCount, context) {
                 if (model is ImageRequest) {
                     model
                 } else {
@@ -62,7 +70,7 @@ fun AppAsyncImage(
             )
         }
 
-        if (isError && !titleForFallback.isNullOrBlank()) {
+        if ((isError || isBlankModel) && !titleForFallback.isNullOrBlank()) {
             val initial = titleForFallback.trim().take(1).uppercase()
             Text(
                 text = initial,

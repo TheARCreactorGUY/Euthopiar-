@@ -596,7 +596,7 @@ fun StreamHeroCard(
                 val badgeBrush = if (isSelected) {
                     SolidColor(Color.White)
                 } else {
-                    Brush.horizontalGradient(listOf(Color(0xFF8B5CF6).copy(alpha = 0.25f), Color(0xFF00E5FF).copy(alpha = 0.25f)))
+                    SolidColor(Color.White.copy(alpha = 0.10f))
                 }
                 Box(
                     modifier = Modifier
@@ -605,7 +605,7 @@ fun StreamHeroCard(
                         .border(
                             HairlineWidth,
                             if (isSelected) Color.White
-                            else Color(0xFF00E5FF).copy(alpha = 0.40f),
+                            else Color.White.copy(alpha = 0.22f),
                             RoundedCornerShape(6.dp)
                         )
                         .padding(horizontal = 8.dp, vertical = 3.dp)
@@ -617,7 +617,7 @@ fun StreamHeroCard(
                             fontWeight = FontWeight.Medium,
                             letterSpacing = 0.8.sp
                         ),
-                        color = if (isSelected) PlayerTokens.LabelDark else Color(0xFF00E5FF)
+                        color = if (isSelected) PlayerTokens.LabelDark else Color.White.copy(alpha = 0.90f)
                     )
                 }
 
@@ -1217,8 +1217,7 @@ fun ServerBottomSheet(
 
                 Box(
                     modifier = Modifier
-                        .size(36.dp)
-                        .videoOverlayGlass(shape = PlayerTokens.RadiusCircle)
+                        .size(48.dp)
                         .playerPressable(
                             role = Role.Button,
                             onClickLabel = "Close",
@@ -1226,12 +1225,19 @@ fun ServerBottomSheet(
                         ),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Close,
-                        contentDescription = "Close",
-                        tint = Color.White,
-                        modifier = Modifier.size(18.dp)
-                    )
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .videoOverlayGlass(shape = PlayerTokens.RadiusCircle),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Close,
+                            contentDescription = "Close",
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
             }
 

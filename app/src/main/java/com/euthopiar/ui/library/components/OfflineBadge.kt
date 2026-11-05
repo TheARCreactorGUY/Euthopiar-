@@ -11,7 +11,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.FileDownload
-import androidx.compose.material.icons.outlined.Pause
+import com.euthopiar.ui.icons.LucideIcons
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -31,6 +31,7 @@ import com.euthopiar.download.DownloadItem
 import com.euthopiar.download.DownloadState
 import com.euthopiar.ui.library.LibraryColors
 import com.euthopiar.ui.library.LibraryDimens
+import com.euthopiar.ui.theme.LocalAmoledMode
 import com.euthopiar.ui.theme.LocalReduceMotion
 
 /**
@@ -45,6 +46,8 @@ fun OfflinePosterBadge(
     if (downloadItem == null) return
 
     val reduceMotion = LocalReduceMotion.current
+    val isAmoled = LocalAmoledMode.current
+    val badgeFill = if (isAmoled) Color.Black.copy(alpha = 0.92f) else Color(0xFF0F1219).copy(alpha = 0.85f)
     val progressTarget = (downloadItem.progressPercentage / 100f).coerceIn(0f, 1f)
     val animatedProgress by animateFloatAsState(
         targetValue = progressTarget,
@@ -64,8 +67,8 @@ fun OfflinePosterBadge(
         modifier = modifier
             .size(24.dp)
             .clip(RoundedCornerShape(8.dp))
-            .background(Color(0xFF0E0F17).copy(alpha = 0.85f))
-            .border(0.5.dp, Color.White.copy(alpha = 0.20f), RoundedCornerShape(8.dp))
+            .background(badgeFill)
+            .border(0.5.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(8.dp))
             .semantics { contentDescription = a11yDesc },
         contentAlignment = Alignment.Center
     ) {
@@ -98,7 +101,7 @@ fun OfflinePosterBadge(
             }
             DownloadState.PAUSED -> {
                 Icon(
-                    imageVector = Icons.Outlined.Pause,
+                    imageVector = LucideIcons.Pause,
                     contentDescription = null,
                     tint = Color.White.copy(alpha = 0.70f),
                     modifier = Modifier.size(13.dp)

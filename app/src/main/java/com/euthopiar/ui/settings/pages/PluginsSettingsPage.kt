@@ -55,6 +55,7 @@ import com.euthopiar.core.addons.addonTransportBaseUrl
 import com.euthopiar.core.model.PluginManifest
 import com.euthopiar.ui.settings.PluginManagerViewModel
 import com.euthopiar.ui.settings.plugins.*
+import com.euthopiar.ui.theme.AppFontFamily
 import com.euthopiar.ui.theme.LocalAmoledMode
 import com.euthopiar.ui.theme.LocalReduceMotion
 import kotlinx.coroutines.launch
@@ -124,6 +125,7 @@ fun PluginsSettingsPage(
     val notDownloadedCount = (totalAvailableScrapers - installedPlugins.size).coerceAtLeast(0)
 
     val pageBg = if (isAmoled) PluginsGlassTokens.AmoledBackground else PluginsGlassTokens.BaseDarkBackground
+    val navBarBottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
 
     // Collapsible header math
     val maxCollapseHeight = 175.dp
@@ -423,7 +425,7 @@ fun PluginsSettingsPage(
                         // TAB 1: REPOSITORIES
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
+                            contentPadding = PaddingValues(start = 20.dp, top = 16.dp, end = 20.dp, bottom = 24.dp + navBarBottomInset),
                             verticalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
                             // Section: ADD REPOSITORY
@@ -806,7 +808,7 @@ fun PluginsSettingsPage(
                         // TAB 2: STREMIO ADDONS
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
+                            contentPadding = PaddingValues(start = 20.dp, top = 16.dp, end = 20.dp, bottom = 24.dp + navBarBottomInset),
                             verticalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
                             // Section: ADD STREMIO ADDON
@@ -1149,7 +1151,7 @@ fun PluginsSettingsPage(
                         // TAB 3: INSTALLED SCRAPERS (Virtualized LazyColumn for 120 FPS performance)
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
+                            contentPadding = PaddingValues(start = 20.dp, top = 16.dp, end = 20.dp, bottom = 24.dp + navBarBottomInset),
                             verticalArrangement = Arrangement.spacedBy(14.dp)
                         ) {
                             // 44dp Glass Search Field

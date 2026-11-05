@@ -176,4 +176,70 @@ class AmbientBackdropTrailerTest {
 
         assertFalse("Ambient trailer must pause when full trailer dialog is open", canPlayWithDialog)
     }
+
+    @Test
+    fun testLetterboxDetectorCalculations() {
+        // Zoom for 0 bar should be 1.0f
+        val zeroZoom = LetterboxDetector.zoomFor(0f)
+        org.junit.Assert.assertEquals(1.0f, zeroZoom, 0.001f)
+
+        // Zoom for 0.10f bar should be 1 / (1 - 0.20) = 1.25f
+        val wideZoom = LetterboxDetector.zoomFor(0.10f)
+        org.junit.Assert.assertEquals(1.25f, wideZoom, 0.001f)
+
+        // Sample window over check
+        assertTrue("Position >= 20% duration should be considered over", LetterboxDetector.isSampleWindowOver(30_000L, 100_000L))
+        assertFalse("Position < 20% duration should still sample", LetterboxDetector.isSampleWindowOver(10_000L, 100_000L))
+    }
+
+    @Test
+    fun testLetterboxTrackerStability() {
+        val tracker = LetterboxTracker()
+        // Needs 4 stable samples before returning zoom
+        org.junit.Assert.assertNull(tracker.onSample(0.12f))
+        org.junit.Assert.assertNull(tracker.onSample(0.12f))
+        org.junit.Assert.assertNull(tracker.onSample(0.12f))
+        val zoom = tracker.onSample(0.12f)
+        org.junit.Assert.assertNotNull("After 4 stable samples, zoom must be calculated", zoom)
+        assertTrue("Zoom should be greater than 1 for letterboxed content", zoom!! > 1.0f)
+    }
+
+    @Test
+    fun testInAppYouTubeExtractorVideoIdExtraction() {
+        val extractor = com.euthopiar.core.trailer.InAppYouTubeExtractor()
+
+        val id1 = extractor.extractVideoId("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+        org.junit.Assert.assertEquals("dQw4w9WgXcQ", id1)
+
+        val id2 = extractor.extractVideoId("https://youtu.be/dQw4w9WgXcQ")
+        org.junit.Assert.assertEquals("dQw4w9WgXcQ", id2)
+
+        val id3 = extractor.extractVideoId("https://www.youtube.com/embed/dQw4w9WgXcQ")
+        org.junit.Assert.assertEquals("dQw4w9WgXcQ", id3)
+
+        val id4 = extractor.extractVideoId("https://www.youtube.com/shorts/dQw4w9WgXcQ")
+        org.junit.Assert.assertEquals("dQw4w9WgXcQ", id4)
+
+        val id5 = extractor.extractVideoId("dQw4w9WgXcQ")
+        org.junit.Assert.assertEquals("dQw4w9WgXcQ", id5)
+    }
+
+    @Test
+    fun testTrailerPlaybackSourceModel() {
+        val source = com.euthopiar.core.trailer.TrailerPlaybackSource(
+            videoUrl = "https://googlevideo.com/videoplayback?id=123",
+            audioUrl = "https://googlevideo.com/videoplayback?id=456"
+        )
+        org.junit.Assert.assertEquals("https://googlevideo.com/videoplayback?id=123", source.videoUrl)
+        org.junit.Assert.assertEquals("https://googlevideo.com/videoplayback?id=456", source.audioUrl)
+    }
+
+    @Test
+    fun testCacheInvalidation() {
+        val resolver = com.euthopiar.core.trailer.TrailerPlaybackResolver
+        resolver.invalidateCache("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+        resolver.invalidateCache("https://youtu.be/dQw4w9WgXcQ")
+        resolver.invalidateCache("")
+        resolver.clearCache()
+    }
 }

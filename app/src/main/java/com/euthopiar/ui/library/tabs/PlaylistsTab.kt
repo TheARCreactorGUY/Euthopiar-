@@ -2,6 +2,7 @@ package com.euthopiar.ui.library.tabs
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -27,6 +28,8 @@ import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -47,15 +50,17 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.euthopiar.data.repository.Playlist
-import com.euthopiar.ui.components.VelvetAlertDialog
+import com.euthopiar.ui.components.EuthopiarGlassDialog
 import com.euthopiar.ui.library.LibraryColors
 import com.euthopiar.ui.library.LibraryDimens
 import com.euthopiar.ui.library.LibraryTypography
 import com.euthopiar.ui.library.components.LibraryGlassIconTile
+import com.euthopiar.ui.library.components.LibraryGlassPill
 import com.euthopiar.ui.library.components.PlaylistMosaic
 import com.euthopiar.ui.theme.AppFontFamily
 import com.euthopiar.ui.theme.LocalReduceMotion
@@ -77,18 +82,21 @@ fun PlaylistsTab(
 
     if (playlistToDelete != null) {
         val target = playlistToDelete!!
-        VelvetAlertDialog(
+        EuthopiarGlassDialog(
             onDismissRequest = { playlistToDelete = null },
-            title = "Delete playlist?",
-            message = "Are you sure you want to delete \"${com.euthopiar.ui.library.sanitizeTitle(target.title)}\"? This action cannot be undone.",
+            title = "Delete Playlist?",
+            message = "Are you sure you want to delete \"${com.euthopiar.ui.library.sanitizeTitle(target.title)}\"? This collection cannot be recovered.",
             confirmText = "Delete",
             dismissText = "Cancel",
+            icon = Icons.Outlined.DeleteOutline,
             isDestructive = true,
+            hazeState = hazeState,
             onConfirm = {
                 val id = target.id
                 playlistToDelete = null
                 onDeletePlaylist?.invoke(id)
-            }
+            },
+            onDismiss = { playlistToDelete = null }
         )
     }
 
@@ -100,7 +108,53 @@ fun PlaylistsTab(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 110.dp),
         modifier = modifier.fillMaxSize()
     ) {
-        // Uniform 2-column square grid for all playlists (no featured banner)
+        // Dedicated first-time onboarding empty state when no playlists exist
+        if (playlists.isEmpty()) {
+            item(
+                key = "empty_playlists_state",
+                span = { GridItemSpan(maxLineSpan) }
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 54.dp, horizontal = 24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    LibraryGlassIconTile(
+                        icon = Icons.Default.VideoLibrary,
+                        contentDescription = null,
+                        size = 52.dp,
+                        radius = 18.dp,
+                        iconSize = 26.dp,
+                        hazeState = hazeState
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = "No playlists yet",
+                        style = LibraryTypography.title15,
+                        color = LibraryColors.TextWhite
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Group movies and series into custom collections to watch later or share.",
+                        style = LibraryTypography.metadata11,
+                        color = LibraryColors.TextMuted55,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 24.dp)
+                    )
+                    Spacer(modifier = Modifier.height(20.dp))
+                    LibraryGlassPill(
+                        text = "Create playlist",
+                        icon = Icons.Default.Add,
+                        isPrimary = true,
+                        onClick = onCreatePlaylistClick,
+                        hazeState = hazeState
+                    )
+                }
+            }
+        }
+
+        // Uniform 2-column square grid for all playlists
         itemsIndexed(
             items = playlists,
             key = { _, pl -> "playlist_${pl.id}" }
@@ -116,12 +170,14 @@ fun PlaylistsTab(
             )
         }
 
-        // Trailing tile completing the grid: "+ New playlist"
-        item(key = "new_playlist_tile") {
-            NewPlaylistTile(
-                onClick = onCreatePlaylistClick,
-                hazeState = hazeState
-            )
+        // Trailing tile completing the grid: "+ New playlist" (shown when playlists exist)
+        if (playlists.isNotEmpty()) {
+            item(key = "new_playlist_tile") {
+                NewPlaylistTile(
+                    onClick = onCreatePlaylistClick,
+                    hazeState = hazeState
+                )
+            }
         }
     }
 }
@@ -146,11 +202,11 @@ private fun StaggeredPlaylistTile(
     val animProgress = remember { Animatable(if (reduceMotion) 1f else 0f) }
 
     LaunchedEffect(Unit) {
-        if (!reduceMotion && index < 8) {
-            delay((index * 35L).coerceAtMost(300L))
+        if (!reduceMotion && index < 4) {
+            delay((index * 16L).coerceAtMost(80L))
             animProgress.animateTo(
                 targetValue = 1f,
-                animationSpec = tween(durationMillis = 320, easing = FastOutSlowInEasing)
+                animationSpec = tween(durationMillis = 240, easing = LinearOutSlowInEasing)
             )
         } else {
             animProgress.snapTo(1f)
@@ -169,7 +225,7 @@ private fun StaggeredPlaylistTile(
                 translationY = (1f - animProgress.value) * 12.dp.value
             }
             .pressable(
-                scaleDown = 0.98f,
+                scaleDown = 0.96f,
                 role = Role.Button,
                 onClick = onClick,
                 onLongClick = onLongClick
@@ -207,6 +263,7 @@ private fun StaggeredPlaylistTile(
                         fontFamily = AppFontFamily,
                         fontWeight = FontWeight.Normal,
                         fontSize = 11.sp,
+                        fontFeatureSettings = "tnum",
                         color = Color.White
                     )
                 )
@@ -234,6 +291,7 @@ private fun StaggeredPlaylistTile(
                 fontFamily = AppFontFamily,
                 fontWeight = FontWeight.Normal,
                 fontSize = 12.sp,
+                fontFeatureSettings = "tnum",
                 color = LibraryColors.TextMuted55
             ),
             maxLines = 1,
@@ -261,7 +319,7 @@ private fun NewPlaylistTile(
         modifier = modifier
             .fillMaxWidth()
             .pressable(
-                scaleDown = 0.98f,
+                scaleDown = 0.96f,
                 role = Role.Button,
                 onClickLabel = "Create new playlist",
                 onClick = onClick

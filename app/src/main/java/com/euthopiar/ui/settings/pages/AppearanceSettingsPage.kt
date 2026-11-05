@@ -1,6 +1,8 @@
 package com.euthopiar.ui.settings.pages
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -18,6 +20,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -358,12 +361,12 @@ private fun LiveInterfaceStageCard(
 
     val animatedWidth by animateDpAsState(
         targetValue = targetWidth,
-        animationSpec = tween(if (reduceMotion) 0 else 220),
+        animationSpec = if (reduceMotion) tween(0) else spring(dampingRatio = 0.78f, stiffness = 420f),
         label = "posterWidth"
     )
     val animatedHeight by animateDpAsState(
         targetValue = targetHeight,
-        animationSpec = tween(if (reduceMotion) 0 else 220),
+        animationSpec = if (reduceMotion) tween(0) else spring(dampingRatio = 0.78f, stiffness = 420f),
         label = "posterHeight"
     )
 
@@ -426,63 +429,68 @@ private fun LiveInterfaceStageCard(
             }
 
             // Live Section Title Preview ("Trending movies")
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                when (sectionLabelStyle) {
-                    SectionLabelStyle.AccentBar -> {
-                        // 2dp wide by 12dp tall pure white vertical pill bar (#FFFFFF, never yellow)
-                        Box(
-                            modifier = Modifier
-                                .width(2.dp)
-                                .height(12.dp)
-                                .clip(CircleShape)
-                                .background(Color.White)
-                        )
-                        Text(
-                            text = "Trending movies",
-                            style = TextStyle(
-                                fontFamily = AppFontFamily,
-                                fontWeight = FontWeight.Medium,
-                                fontSize = 13.sp,
-                                lineHeight = 16.sp,
-                                color = Color.White.copy(alpha = 0.95f)
+            AnimatedContent(
+                targetState = sectionLabelStyle,
+                label = "sectionLabelPreview"
+            ) { style ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    when (style) {
+                        SectionLabelStyle.AccentBar -> {
+                            // 2dp wide by 12dp tall pure white vertical pill bar (#FFFFFF, never yellow)
+                            Box(
+                                modifier = Modifier
+                                    .width(2.dp)
+                                    .height(12.dp)
+                                    .clip(CircleShape)
+                                    .background(Color.White)
                             )
-                        )
-                    }
-                    SectionLabelStyle.Eyebrow -> {
-                        Column {
                             Text(
-                                text = "TRENDING MOVIES",
+                                text = "Trending movies",
                                 style = TextStyle(
                                     fontFamily = AppFontFamily,
                                     fontWeight = FontWeight.Medium,
-                                    fontSize = 10.sp,
-                                    lineHeight = 13.sp,
-                                    letterSpacing = (10 * 0.09).sp,
-                                    color = Color.White.copy(alpha = 0.60f)
+                                    fontSize = 13.sp,
+                                    lineHeight = 16.sp,
+                                    color = Color.White.copy(alpha = 0.95f)
                                 )
                             )
                         }
-                    }
-                    SectionLabelStyle.RuleLine -> {
-                        Text(
-                            text = "Trending movies",
-                            style = TextStyle(
-                                fontFamily = AppFontFamily,
-                                fontWeight = FontWeight.Medium,
-                                fontSize = 13.sp,
-                                lineHeight = 16.sp,
-                                color = Color.White.copy(alpha = 0.95f)
+                        SectionLabelStyle.Eyebrow -> {
+                            Column {
+                                Text(
+                                    text = "TRENDING MOVIES",
+                                    style = TextStyle(
+                                        fontFamily = AppFontFamily,
+                                        fontWeight = FontWeight.Medium,
+                                        fontSize = 10.sp,
+                                        lineHeight = 13.sp,
+                                        letterSpacing = (10 * 0.09).sp,
+                                        color = Color.White.copy(alpha = 0.60f)
+                                    )
+                                )
+                            }
+                        }
+                        SectionLabelStyle.RuleLine -> {
+                            Text(
+                                text = "Trending movies",
+                                style = TextStyle(
+                                    fontFamily = AppFontFamily,
+                                    fontWeight = FontWeight.Medium,
+                                    fontSize = 13.sp,
+                                    lineHeight = 16.sp,
+                                    color = Color.White.copy(alpha = 0.95f)
+                                )
                             )
-                        )
-                        HorizontalDivider(
-                            thickness = SettingsTokens.HairlineWidth,
-                            color = Color.White.copy(alpha = 0.16f),
-                            modifier = Modifier.weight(1f)
-                        )
+                            HorizontalDivider(
+                                thickness = SettingsTokens.HairlineWidth,
+                                color = Color.White.copy(alpha = 0.16f),
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
                     }
                 }
             }
@@ -513,6 +521,10 @@ private fun LiveInterfaceStageCard(
                         contentAlignment = Alignment.BottomStart
                     ) {
                         if (top10Style == Top10Style.PosterTinted) {
+                            val density = LocalDensity.current
+                            val glowRadiusPx = with(density) { 36.dp.toPx() }
+                            val glowCenterX = with(density) { 16.dp.toPx() }
+                            val glowCenterYOffset = with(density) { 14.dp.toPx() }
                             // Radial white/silver ambient glow behind numeral at bottom-left
                             Box(
                                 modifier = Modifier
@@ -522,8 +534,8 @@ private fun LiveInterfaceStageCard(
                                             brush = Brush.radialGradient(
                                                 0.0f to Color.White.copy(alpha = 0.20f),
                                                 1.0f to Color.Transparent,
-                                                center = Offset(16f, size.height - 14f),
-                                                radius = 36f
+                                                center = Offset(glowCenterX, size.height - glowCenterYOffset),
+                                                radius = glowRadiusPx
                                             )
                                         )
                                     }

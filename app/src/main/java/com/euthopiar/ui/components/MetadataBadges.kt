@@ -17,6 +17,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
+import com.euthopiar.ui.icons.LucideIcons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
@@ -164,7 +165,7 @@ fun StatusBadge(
         DownloadState.COMPLETED -> Pair("Ready", Icons.Filled.Check)
         DownloadState.DOWNLOADING -> Pair("Downloading", Icons.Filled.Download)
         DownloadState.QUEUED -> Pair("Queued", Icons.Filled.Schedule)
-        DownloadState.PAUSED -> Pair("Paused", Icons.Filled.Pause)
+        DownloadState.PAUSED -> Pair("Paused", LucideIcons.Pause)
         DownloadState.FAILED -> Pair("Failed", Icons.Filled.Close)
     }
     FrostedBadge(

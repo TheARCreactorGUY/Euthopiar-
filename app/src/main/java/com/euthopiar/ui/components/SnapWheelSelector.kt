@@ -6,7 +6,10 @@ import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.gestures.snapping.SnapPosition
 import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import com.euthopiar.ui.theme.EuthopiarMotionTokens
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -192,6 +195,14 @@ fun SnapWheelSelector(
                 items = options,
                 key = { _, option -> option }
             ) { index, option ->
+                val itemInteractionSource = remember { MutableInteractionSource() }
+                val isItemPressed by itemInteractionSource.collectIsPressedAsState()
+                val pressScale by animateFloatAsState(
+                    targetValue = if (isItemPressed && !reduceMotion) 0.95f else 1f,
+                    animationSpec = EuthopiarMotionTokens.SpringPress,
+                    label = "wheelPress"
+                )
+
                 Box(
                     modifier = Modifier
                         .width(itemWidth)
@@ -203,7 +214,7 @@ fun SnapWheelSelector(
                             this.contentDescription = option
                         }
                         .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
+                            interactionSource = itemInteractionSource,
                             indication = null
                         ) {
                             if (index != selectedIndex) {
@@ -249,12 +260,12 @@ fun SnapWheelSelector(
                                     val scale = 1.0f - (1.0f - 0.68f) * frac
                                     val computedAlpha = 1.0f - (1.0f - 0.40f) * frac
 
-                                    scaleX = scale
-                                    scaleY = scale
+                                    scaleX = scale * pressScale
+                                    scaleY = scale * pressScale
                                     alpha = computedAlpha
                                 } else {
-                                    scaleX = 0.68f
-                                    scaleY = 0.68f
+                                    scaleX = 0.68f * pressScale
+                                    scaleY = 0.68f * pressScale
                                     alpha = 0.40f
                                 }
                             }
@@ -284,8 +295,13 @@ fun SnapWheelSelector(
                                         val maxDist = itemInfo.size.toFloat().coerceAtLeast(1f)
                                         val dotFrac = (dist / (maxDist * 0.35f)).coerceIn(0f, 1f)
                                         alpha = 1.0f - dotFrac
+                                        val dotScale = 0.65f + 0.35f * (1.0f - dotFrac)
+                                        scaleX = dotScale
+                                        scaleY = dotScale
                                     } else {
                                         alpha = 0f
+                                        scaleX = 0.65f
+                                        scaleY = 0.65f
                                     }
                                 }
                                 .background(Color.White, CircleShape)

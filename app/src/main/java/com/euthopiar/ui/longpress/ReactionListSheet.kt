@@ -37,6 +37,7 @@ import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.FileDownload
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.PlayArrow
+import com.euthopiar.ui.icons.LucideIcons
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.ThumbDown
 import androidx.compose.material.icons.outlined.ThumbUp
@@ -311,7 +312,7 @@ fun ReactionListSheet(
 
                 // Row 1: Play / Resume
                 ReactionListActionRow(
-                    icon = Icons.Outlined.PlayArrow,
+                    icon = LucideIcons.Play,
                     label = if (isResume) "Resume" else "Play",
                     onClick = {
                         dismissWithAnim()
@@ -322,7 +323,7 @@ fun ReactionListSheet(
 
                 // Row 2: Add to watchlist / In watchlist
                 ReactionListActionRow(
-                    icon = if (item.inWatchlist) Icons.Outlined.Bookmark else Icons.Outlined.BookmarkBorder,
+                    icon = if (item.inWatchlist) LucideIcons.BookmarkFilled else LucideIcons.Bookmark,
                     label = if (item.inWatchlist) "In watchlist" else "Add to watchlist",
                     iconTint = if (item.inWatchlist) Accent else Color.White,
                     onClick = actions.onToggleWatchlist

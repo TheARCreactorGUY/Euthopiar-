@@ -131,6 +131,11 @@ class MainActivity : ComponentActivity() {
         if (!isWarmStart) {
             com.euthopiar.ui.splash.AppLaunchCoordinator.reset()
         }
+
+        // Automatic background reconciliation for Trakt & Simkl
+        lifecycleScope.launch(Dispatchers.IO) {
+            com.euthopiar.data.sync.MediaSyncManager.getInstance(applicationContext).syncAll()
+        }
         setContent {
             EuthopiarTheme {
                 var showSplash by rememberSaveable { mutableStateOf(!isWarmStart) }
@@ -301,14 +306,18 @@ class MainActivity : ComponentActivity() {
                 lifecycleScope.launch(Dispatchers.IO) {
                     try {
                         val prefs = PreferencesRepository.getInstance(applicationContext)
+                        val syncVerifier = applicationContext.getSharedPreferences("simkl_auth_prefs", Context.MODE_PRIVATE)
+                            .getString("pending_code_verifier", null)
                         val storedVerifier = prefs.simklCodeVerifier.firstOrNull()?.ifBlank { null }
-                        val verifier = storedVerifier ?: SimklClient.getInstance().pendingCodeVerifier
+                        val verifier = syncVerifier ?: storedVerifier ?: SimklClient.getInstance().pendingCodeVerifier
                         val result = SimklClient.getInstance().exchangeCodeForToken(code, codeVerifier = verifier)
                         result.fold(
                             onSuccess = { tokenResp ->
                                 prefs.setSimklAuth(tokenResp.accessToken)
                                 prefs.setSimklScrobbleEnabled(true)
                                 prefs.clearSimklCodeVerifier()
+                                applicationContext.getSharedPreferences("simkl_auth_prefs", Context.MODE_PRIVATE).edit().clear().commit()
+                                com.euthopiar.data.sync.MediaSyncManager.getInstance(applicationContext).syncAll(force = true)
                             },
                             onFailure = { err ->
                                 android.util.Log.e("MainActivity", "Simkl token exchange failed: ${err.message}", err)
@@ -316,6 +325,44 @@ class MainActivity : ComponentActivity() {
                         )
                     } catch (e: Exception) {
                         android.util.Log.e("MainActivity", "Simkl OAuth error: ${e.message}", e)
+                    }
+                }
+            }
+        }
+
+        val isTrakt = (uri.scheme?.equals("euthopiar", ignoreCase = true) == true &&
+            uri.host.equals("auth", ignoreCase = true) &&
+            uri.path?.startsWith("/trakt") == true) ||
+            (uri.scheme?.equals("http", ignoreCase = true) == true &&
+            uri.host?.equals("localhost", ignoreCase = true) == true)
+
+        if (isTrakt) {
+            val code = uri.getQueryParameter("code")
+            if (!code.isNullOrBlank()) {
+                lifecycleScope.launch(Dispatchers.IO) {
+                    try {
+                        val prefs = PreferencesRepository.getInstance(applicationContext)
+                        val syncVerifier = applicationContext.getSharedPreferences("trakt_auth_prefs", Context.MODE_PRIVATE)
+                            .getString("pending_code_verifier", null)
+                        val storedVerifier = prefs.traktCodeVerifier.firstOrNull()?.ifBlank { null }
+                        val verifier = syncVerifier ?: storedVerifier ?: com.euthopiar.core.sync.trakt.TraktClient.getInstance().pendingCodeVerifier
+                        val result = com.euthopiar.core.sync.trakt.TraktClient.getInstance().exchangeCodeForToken(code, codeVerifier = verifier)
+                        result.fold(
+                            onSuccess = { tokenResp ->
+                                val profile = com.euthopiar.core.sync.trakt.TraktClient.getInstance().getUserProfile(tokenResp.accessToken).getOrNull()
+                                val username = profile?.username?.ifBlank { "Trakt User" } ?: "Trakt User"
+                                prefs.setTraktAuth(tokenResp.accessToken, tokenResp.refreshToken, username)
+                                prefs.setTraktScrobbleEnabled(true)
+                                prefs.clearTraktCodeVerifier()
+                                applicationContext.getSharedPreferences("trakt_auth_prefs", Context.MODE_PRIVATE).edit().clear().commit()
+                                com.euthopiar.data.sync.MediaSyncManager.getInstance(applicationContext).syncAll(force = true)
+                            },
+                            onFailure = { err ->
+                                android.util.Log.e("MainActivity", "Trakt token exchange failed: ${err.message}", err)
+                            }
+                        )
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainActivity", "Trakt OAuth error: ${e.message}", e)
                     }
                 }
             }

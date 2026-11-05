@@ -64,6 +64,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.euthopiar.data.repository.Playlist
 import com.euthopiar.ui.theme.AppFontFamily
+import com.euthopiar.ui.theme.EuthopiarGlassTokens
 import com.euthopiar.ui.theme.LocalAmoledMode
 import com.euthopiar.ui.theme.LocalReduceMotion
 import dev.chrisbanes.haze.HazeState
@@ -74,15 +75,12 @@ import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 /**
- * Frosted Glass Bottom Sheet for creating a new playlist (Season Sheet Formula):
+ * Frosted Glass Bottom Sheet for creating a new playlist:
  * - 28dp top rounded frosted glass panel with 4x36dp handle
- * - In-window overlay supporting 22dp Haze blur over library posters and ambient background
- * - Large 26sp headline "New playlist"
- * - 46dp glass text field with 0.5px hairline border (no crimson/red)
- * - Auto-focus with keyboard
- * - Case-insensitive duplicate check & 40-char limit with live counter
- * - Full-width white pill button "Create playlist"
- * - Subtle horizontal shake animation on validation error
+ * - In-window overlay supporting 24dp Haze blur
+ * - 20sp Bold headline "New playlist"
+ * - 48dp glass text field with 0.5dp hairline border
+ * - 48dp solid white pill button "Create playlist"
  * - Vertical drag-to-dismiss gesture and animated black scrim
  */
 @Composable
@@ -174,10 +172,10 @@ fun CreatePlaylistDialog(
     val maxSheetHeight = (configuration.screenHeightDp * 0.85f).dp
     var sheetHeightPx by remember { mutableFloatStateOf(0f) }
 
-    val sheetShape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
-    val sheetFill = if (isAmoled) Color.Black.copy(alpha = 0.88f) else Color(0xFF0E0F17).copy(alpha = 0.74f)
-    val fallbackFill = if (isAmoled) Color.Black.copy(alpha = 0.94f) else Color(0xFF0E0F17).copy(alpha = 0.94f)
-    val scrimAlpha = if (reduceMotion) 0.60f else (0.60f * (animValue / (250f / 340f))).coerceIn(0f, 0.60f)
+    val sheetShape = RoundedCornerShape(topStart = EuthopiarGlassTokens.RadiusSheet, topEnd = EuthopiarGlassTokens.RadiusSheet)
+    val sheetFill = EuthopiarGlassTokens.cardFill(isAmoled)
+    val fallbackFill = EuthopiarGlassTokens.fallbackFill(isAmoled)
+    val scrimAlpha = if (reduceMotion) EuthopiarGlassTokens.ScrimAlpha else (EuthopiarGlassTokens.ScrimAlpha * (animValue / (250f / 340f))).coerceIn(0f, EuthopiarGlassTokens.ScrimAlpha)
 
     Box(
         modifier = modifier
@@ -244,7 +242,7 @@ fun CreatePlaylistDialog(
                 .then(
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hazeState != null) {
                         Modifier.hazeEffect(state = hazeState) {
-                            blurRadius = 22.dp
+                            blurRadius = EuthopiarGlassTokens.BlurRadius
                             tints = listOf(HazeTint(sheetFill))
                             fallbackTint = HazeTint(fallbackFill)
                         }
@@ -253,8 +251,8 @@ fun CreatePlaylistDialog(
                     }
                 )
                 .border(
-                    width = 0.5.dp,
-                    color = Color.White.copy(alpha = 0.18f),
+                    width = EuthopiarGlassTokens.HairlineWidth,
+                    color = EuthopiarGlassTokens.HairlineBorder,
                     shape = sheetShape
                 )
         ) {
@@ -283,30 +281,23 @@ fun CreatePlaylistDialog(
 
                 Text(
                     text = "New playlist",
-                    style = TextStyle(
-                        fontFamily = AppFontFamily,
-                        fontWeight = FontWeight.Medium,
-                        fontSize = 26.sp,
-                        lineHeight = 28.sp,
-                        letterSpacing = (-0.02).sp,
-                        color = Color.White
-                    )
+                    style = EuthopiarGlassTokens.HeaderTitle
                 )
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Glass Text Field (46dp tall, 14dp radius, 0.5px hairline border)
+                // Glass Text Field (48dp tall, 16dp radius, 0.5dp hairline border)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .offset { IntOffset(shakeOffset.value.roundToInt(), 0) }
-                        .height(46.dp)
-                        .clip(RoundedCornerShape(14.dp))
+                        .height(48.dp)
+                        .clip(RoundedCornerShape(16.dp))
                         .background(Color.White.copy(alpha = 0.07f))
                         .border(
-                            width = 0.5.dp,
-                            color = if (errorMessage != null) Color.White.copy(alpha = 0.50f) else Color.White.copy(alpha = 0.20f),
-                            shape = RoundedCornerShape(14.dp)
+                            width = EuthopiarGlassTokens.HairlineWidth,
+                            color = if (errorMessage != null) Color.White.copy(alpha = 0.50f) else EuthopiarGlassTokens.HairlineBorder,
+                            shape = RoundedCornerShape(16.dp)
                         )
                         .padding(horizontal = 16.dp),
                     contentAlignment = Alignment.CenterStart
@@ -317,7 +308,7 @@ fun CreatePlaylistDialog(
                             style = TextStyle(
                                 fontFamily = AppFontFamily,
                                 fontWeight = FontWeight.Normal,
-                                fontSize = 15.sp,
+                                fontSize = 14.5.sp,
                                 color = Color.White.copy(alpha = 0.40f)
                             )
                         )
@@ -335,7 +326,7 @@ fun CreatePlaylistDialog(
                         textStyle = TextStyle(
                             fontFamily = AppFontFamily,
                             fontWeight = FontWeight.Normal,
-                            fontSize = 15.sp,
+                            fontSize = 14.5.sp,
                             color = Color.White
                         ),
                         cursorBrush = SolidColor(Color.White),
@@ -358,35 +349,33 @@ fun CreatePlaylistDialog(
                             style = TextStyle(
                                 fontFamily = AppFontFamily,
                                 fontSize = 12.sp,
-                                color = Color.White.copy(alpha = 0.70f)
+                                color = Color(0xFFFF6B6B)
                             )
                         )
                     } else {
                         Spacer(modifier = Modifier.width(1.dp))
                     }
 
-                    if (title.length >= 30) {
-                        Text(
-                            text = "${title.length}/40",
-                            style = TextStyle(
-                                fontFamily = AppFontFamily,
-                                fontSize = 11.sp,
-                                color = Color.White.copy(alpha = 0.50f)
-                            )
+                    Text(
+                        text = "${title.length}/40",
+                        style = TextStyle(
+                            fontFamily = AppFontFamily,
+                            fontSize = 11.sp,
+                            color = Color.White.copy(alpha = 0.40f)
                         )
-                    }
+                    )
                 }
 
-                Spacer(modifier = Modifier.height(18.dp))
+                Spacer(modifier = Modifier.height(20.dp))
 
-                // White Pill Button "Create playlist"
+                // Primary Action Button: 48dp Solid White Pill
                 val isButtonActive = trimmed.isNotEmpty() && !isDuplicate
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(48.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(if (isButtonActive) Color.White else Color.White.copy(alpha = 0.30f))
+                        .clip(CircleShape)
+                        .background(if (isButtonActive) Color.White else Color.White.copy(alpha = 0.35f))
                         .clickable(
                             role = Role.Button,
                             onClick = {
@@ -407,12 +396,7 @@ fun CreatePlaylistDialog(
                 ) {
                     Text(
                         text = "Create playlist",
-                        style = TextStyle(
-                            fontFamily = AppFontFamily,
-                            fontWeight = FontWeight.Medium,
-                            fontSize = 15.sp,
-                            color = if (isButtonActive) Color(0xFF0B0B0F) else Color(0xFF0B0B0F).copy(alpha = 0.6f)
-                        )
+                        style = EuthopiarGlassTokens.PrimaryButtonText
                     )
                 }
             }

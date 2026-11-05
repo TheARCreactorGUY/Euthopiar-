@@ -2,9 +2,13 @@ package com.euthopiar.ui.components
 
 import android.graphics.Bitmap
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,6 +43,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -64,6 +69,8 @@ import com.euthopiar.ui.theme.Accent
 import com.euthopiar.ui.theme.AppTypography
 import com.euthopiar.ui.theme.Background
 import com.euthopiar.ui.theme.Dimens
+import com.euthopiar.ui.theme.EuthopiarMotionTokens
+import com.euthopiar.ui.theme.LocalReduceMotion
 import com.euthopiar.ui.theme.Outline
 import com.euthopiar.ui.theme.ShapeS
 import com.euthopiar.ui.theme.SurfaceHigh
@@ -246,6 +253,15 @@ private fun TopTenRankCardPosterTinted(
     val tabPeekWidth = if (isTwoDigit) 90.dp else 58.dp
     val totalItemWidth = posterWidth + tabPeekWidth
 
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val reduceMotion = LocalReduceMotion.current
+    val cardScale by animateFloatAsState(
+        targetValue = if (isPressed && !reduceMotion) EuthopiarMotionTokens.PressScaleLarge else 1f,
+        animationSpec = if (reduceMotion) snap() else EuthopiarMotionTokens.SpringPress,
+        label = "topTenCardScale"
+    )
+
     val tintColor = rememberPosterTint(
         itemId = item.id,
         imageUrl = item.posterUrl ?: item.backdropUrl,
@@ -279,7 +295,12 @@ private fun TopTenRankCardPosterTinted(
                 this.role = Role.Button
                 this.contentDescription = "Rank $rank, ${item.title}"
             }
-            .pressable(onClick = onClick, onLongClick = onLongClick)
+            .pressable(
+                scaleDown = 1f,
+                interactionSource = interactionSource,
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
             .tvFocusable(shape = ShapeS)
     ) {
         // LAYER 1: GLOW (Luminous multi-stop radial diffusion centered behind numeral, radius ~140dp, BlendMode.Plus)
@@ -300,8 +321,8 @@ private fun TopTenRankCardPosterTinted(
                 }
         )
 
-        // LAYER 2: RANK NUMBER (150sp full flagship size, bold/black font weight, vertical brush 95% -> 4%, right 25-30% covered by card)
-        val rankFontSize = 150.sp
+        // LAYER 2: RANK NUMBER (Flagship size, bold/black font weight, vertical brush 95% -> 4%, right 25-30% covered by card)
+        val rankFontSize = if (isTwoDigit) 132.sp else 150.sp
         val rankLetterSpacing = if (isTwoDigit) (-0.06).em else (-0.04).em
         val rankXOffset = if (isTwoDigit) (-8).dp else (-4).dp
 
@@ -329,6 +350,10 @@ private fun TopTenRankCardPosterTinted(
                 .fillMaxHeight()
                 .align(Alignment.CenterEnd)
                 .zIndex(2f)
+                .graphicsLayer {
+                    scaleX = cardScale
+                    scaleY = cardScale
+                }
                 .clip(ShapeS)
                 .background(SurfaceLow)
                 .border(0.5.dp, Color.White.copy(alpha = 0.03f), ShapeS)
@@ -368,6 +393,15 @@ private fun TopTenRankCardGlassTab(
     val totalItemWidth = posterWidth + tabPeekWidth
     val glassTabWidth = if (isTwoDigit) 108.dp else 84.dp
 
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val reduceMotion = LocalReduceMotion.current
+    val cardScale by animateFloatAsState(
+        targetValue = if (isPressed && !reduceMotion) EuthopiarMotionTokens.PressScaleLarge else 1f,
+        animationSpec = if (reduceMotion) snap() else EuthopiarMotionTokens.SpringPress,
+        label = "topTenGlassCardScale"
+    )
+
     val glassGlowBrush = remember {
         Brush.radialGradient(
             colors = listOf(
@@ -395,7 +429,12 @@ private fun TopTenRankCardGlassTab(
                 this.role = Role.Button
                 this.contentDescription = "Rank $rank, ${item.title}"
             }
-            .pressable(onClick = onClick, onLongClick = onLongClick)
+            .pressable(
+                scaleDown = 1f,
+                interactionSource = interactionSource,
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
             .tvFocusable(shape = ShapeS)
     ) {
         // LAYER 1: GLOW (Subtle radial gradient behind tab using Accent, radius ~90dp, alpha ~55% fading to 0%)
@@ -459,6 +498,10 @@ private fun TopTenRankCardGlassTab(
                 .fillMaxHeight()
                 .align(Alignment.CenterEnd)
                 .zIndex(2f)
+                .graphicsLayer {
+                    scaleX = cardScale
+                    scaleY = cardScale
+                }
                 .clip(ShapeS)
                 .background(SurfaceLow)
                 .border(0.5.dp, Color.White.copy(alpha = 0.03f), ShapeS)
@@ -515,6 +558,15 @@ private fun LegacyTopTenRankCard(
     // 5-degree forward italic slant: tan(5°) ≈ 0.08748866f
     val italicSkewFactor = -0.08749f
 
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val reduceMotion = LocalReduceMotion.current
+    val cardScale by animateFloatAsState(
+        targetValue = if (isPressed && !reduceMotion) EuthopiarMotionTokens.PressScaleLarge else 1f,
+        animationSpec = if (reduceMotion) snap() else EuthopiarMotionTokens.SpringPress,
+        label = "legacyTopTenCardScale"
+    )
+
     Box(
         modifier = Modifier
             .width(totalCardWidth)
@@ -523,7 +575,12 @@ private fun LegacyTopTenRankCard(
                 this.role = Role.Button
                 this.contentDescription = "Rank $rank, ${item.title}"
             }
-            .pressable(onClick = onClick, onLongClick = onLongClick)
+            .pressable(
+                scaleDown = 1f,
+                interactionSource = interactionSource,
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
             .tvFocusable(shape = ShapeS)
     ) {
         // LAYER 1: NUMERAL (Rendered behind the poster, anchored to bottom-left with 5° italic slant)
@@ -589,6 +646,10 @@ private fun LegacyTopTenRankCard(
                 .fillMaxHeight()
                 .align(Alignment.CenterEnd)
                 .zIndex(1f)
+                .graphicsLayer {
+                    scaleX = cardScale
+                    scaleY = cardScale
+                }
                 .clip(ShapeS)
                 .background(SurfaceLow)
                 .border(0.5.dp, Color.White.copy(alpha = 0.03f), ShapeS)

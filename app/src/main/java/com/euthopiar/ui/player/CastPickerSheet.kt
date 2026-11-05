@@ -18,6 +18,7 @@ import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.SmartDisplay
 import androidx.compose.material.icons.outlined.Tv
+import com.euthopiar.ui.icons.LucideIcons
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -120,7 +121,7 @@ fun CastPickerSheet(
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
-                                imageVector = Icons.Outlined.CastConnected,
+                                imageVector = LucideIcons.CastConnected,
                                 contentDescription = null,
                                 tint = Color.White,
                                 modifier = Modifier.size(20.dp)
@@ -277,7 +278,7 @@ fun CastPickerSheet(
                         }
                     }
                     Icon(
-                        imageVector = Icons.Outlined.Cast,
+                        imageVector = LucideIcons.Cast,
                         contentDescription = null,
                         tint = Color.White.copy(alpha = 0.55f),
                         modifier = Modifier.size(16.dp)

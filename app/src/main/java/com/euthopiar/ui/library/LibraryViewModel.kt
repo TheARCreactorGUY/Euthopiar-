@@ -82,6 +82,10 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     private val preferencesRepository = com.euthopiar.data.preferences.PreferencesRepository.getInstance(application)
     private val downloadRepository = com.euthopiar.download.DownloadRepository.getInstance(application)
 
+    init {
+        com.euthopiar.data.sync.MediaSyncManager.getInstance(application).repairMissingLocalPostersAsync()
+    }
+
     private val _selectedSection = MutableStateFlow(LibrarySection.SAVED)
     val selectedSection: StateFlow<LibrarySection> = _selectedSection.asStateFlow()
 
@@ -330,6 +334,9 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
             }
             val resolvedType = try { MediaType.valueOf(w.mediaType) } catch (_: Exception) { MediaType.MOVIE }
             val isMovie = resolvedType == MediaType.MOVIE
+            val cachedTmdb = if (w.posterUrl.isNullOrBlank() && hist?.posterUrl.isNullOrBlank()) {
+                com.euthopiar.core.util.TmdbBridge.getCachedEnrichedDetails(w.mediaId, !isMovie)
+            } else null
 
             LibraryItem(
                 id = hist?.id ?: w.mediaId,
@@ -338,8 +345,8 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                 episodeTitle = if (isMovie) null else hist?.episodeTitle?.let { sanitizeTitle(it) },
                 seasonNumber = if (isMovie) null else hist?.seasonNumber,
                 episodeNumber = if (isMovie) null else hist?.episodeNumber,
-                posterUrl = w.posterUrl ?: hist?.posterUrl,
-                backdropUrl = w.backdropUrl ?: hist?.backdropUrl,
+                posterUrl = w.posterUrl ?: hist?.posterUrl ?: cachedTmdb?.posterUrl,
+                backdropUrl = w.backdropUrl ?: hist?.backdropUrl ?: cachedTmdb?.backdropUrl,
                 mediaType = resolvedType,
                 rating = w.rating,
                 year = w.year,
@@ -366,6 +373,9 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                     try { MediaType.valueOf(it) } catch (_: Exception) { null }
                 } ?: if (h.seasonNumber != null || h.episodeNumber != null) MediaType.TV_SERIES else MediaType.MOVIE
                 val isMovie = resolvedType == MediaType.MOVIE
+                val cachedTmdb = if (h.posterUrl.isNullOrBlank()) {
+                    com.euthopiar.core.util.TmdbBridge.getCachedEnrichedDetails(h.mediaId, !isMovie)
+                } else null
 
                 LibraryItem(
                     id = h.id,
@@ -374,8 +384,8 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                     episodeTitle = if (isMovie) null else h.episodeTitle?.let { sanitizeTitle(it) },
                     seasonNumber = if (isMovie) null else h.seasonNumber,
                     episodeNumber = if (isMovie) null else h.episodeNumber,
-                    posterUrl = h.posterUrl,
-                    backdropUrl = h.backdropUrl,
+                    posterUrl = h.posterUrl ?: cachedTmdb?.posterUrl,
+                    backdropUrl = h.backdropUrl ?: cachedTmdb?.backdropUrl,
                     mediaType = resolvedType,
                     rating = null,
                     year = null,
@@ -492,7 +502,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 
         when (sortOrder) {
             LibrarySortOrder.RECENTLY_ADDED -> rawList.sortedByDescending { it.timestamp.coerceAtLeast(0L) }
-            LibrarySortOrder.TITLE -> rawList.sortedBy { it.title.lowercase().trim() }
+            LibrarySortOrder.TITLE -> rawList.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { normalizeTitleForSort(it.title) })
             LibrarySortOrder.RELEASE_DATE -> rawList.sortedByDescending { it.year ?: 0 }
         }
     }
@@ -799,5 +809,17 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
             delay(500L)
             _isRefreshing.value = false
         }
+    }
+}
+
+
+private fun normalizeTitleForSort(rawTitle: String): String {
+    val trimmed = rawTitle.trim()
+    val lower = trimmed.lowercase()
+    return when {
+        lower.startsWith("the ") -> trimmed.substring(4).trimStart()
+        lower.startsWith("a ") -> trimmed.substring(2).trimStart()
+        lower.startsWith("an ") -> trimmed.substring(3).trimStart()
+        else -> trimmed
     }
 }

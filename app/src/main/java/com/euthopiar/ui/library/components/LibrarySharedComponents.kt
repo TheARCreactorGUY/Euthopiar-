@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
@@ -87,6 +88,7 @@ import com.euthopiar.ui.library.LibraryDimens
 import com.euthopiar.ui.library.LibraryTypography
 import com.euthopiar.ui.theme.AppFontFamily
 import com.euthopiar.ui.theme.LocalAmoledMode
+import com.euthopiar.ui.theme.EuthopiarGlassTokens
 import com.euthopiar.ui.theme.LocalReduceMotion
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeTint
@@ -111,7 +113,7 @@ fun Modifier.libraryGlassSurface(
         .then(
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hazeState != null) {
                 Modifier.hazeEffect(state = hazeState) {
-                    blurRadius = 18.dp
+                    blurRadius = EuthopiarGlassTokens.BlurRadius
                     tints = listOf(HazeTint(Color.White.copy(alpha = alphaFill)))
                     fallbackTint = HazeTint(LibraryColors.GlassFallback)
                 }
@@ -120,8 +122,8 @@ fun Modifier.libraryGlassSurface(
             }
         )
         .border(
-            width = LibraryDimens.hairline,
-            color = if (isActive) LibraryColors.GlassBorderActive else LibraryColors.GlassBorder,
+            width = EuthopiarGlassTokens.HairlineWidth,
+            color = if (isActive) LibraryColors.GlassBorderActive else EuthopiarGlassTokens.HairlineBorder,
             shape = shape
         )
 }
@@ -135,7 +137,7 @@ fun LibraryHairlineDivider(
 ) {
     HorizontalDivider(
         thickness = LibraryDimens.hairline,
-        color = LibraryColors.Hairline,
+        color = EuthopiarGlassTokens.HairlineDivider,
         modifier = modifier
     )
 }
@@ -314,7 +316,7 @@ fun LibraryGlassToggle(
 
     Box(
         modifier = modifier
-            .size(width = 44.dp, height = 48.dp) // 48dp touch target
+            .size(width = 48.dp, height = 48.dp) // 48dp craft floor touch target
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -566,6 +568,7 @@ fun LibraryGlassPill(
 
     Box(
         modifier = modifier
+            .sizeIn(minHeight = 44.dp)
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
@@ -573,7 +576,7 @@ fun LibraryGlassPill(
             .then(
                 if (isPrimary) {
                     Modifier
-                        .clip(RoundedCornerShape(14.dp))
+                        .clip(CircleShape)
                         .background(Color.White)
                 } else {
                     Modifier.libraryGlassSurface(

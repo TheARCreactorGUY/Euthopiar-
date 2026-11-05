@@ -1,5 +1,6 @@
 package com.euthopiar.ui.components
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
@@ -89,6 +90,11 @@ fun AppTabRow(
             tabs.forEachIndexed { index, title ->
                 val isSelected = selectedTabIndex == index
                 val interactionSource = remember { MutableInteractionSource() }
+                val textColor by animateColorAsState(
+                    targetValue = if (isSelected) contentColor else Color.White.copy(alpha = 0.55f),
+                    animationSpec = tween(180),
+                    label = "tabTextColor_$index"
+                )
 
                 Box(
                     modifier = Modifier
@@ -122,7 +128,7 @@ fun AppTabRow(
                             fontFamily = AppFontFamily,
                             fontSize = 14.sp,
                             fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
-                            color = if (isSelected) contentColor else Color.White.copy(alpha = 0.55f)
+                            color = textColor
                         )
                     )
                 }

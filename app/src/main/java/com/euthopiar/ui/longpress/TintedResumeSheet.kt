@@ -29,6 +29,7 @@ import androidx.compose.material.icons.outlined.ThumbUp
 import com.euthopiar.ui.library.sanitizeTitle
 import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.BookmarkBorder
+import com.euthopiar.ui.icons.LucideIcons
 import androidx.compose.material.icons.rounded.ThumbUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -391,7 +392,7 @@ fun TintedResumeSheet(
 
                     Box(modifier = Modifier.weight(1.0f), contentAlignment = Alignment.TopCenter) {
                         CircleAction(
-                            icon = if (item.inWatchlist) Icons.Rounded.Bookmark else Icons.Rounded.BookmarkBorder,
+                            icon = if (item.inWatchlist) LucideIcons.BookmarkFilled else LucideIcons.Bookmark,
                             label = "Watchlist",
                             isActive = item.inWatchlist,
                             onClick = actions.onToggleWatchlist

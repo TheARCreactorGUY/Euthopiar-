@@ -226,7 +226,7 @@ fun ProfileStudioSheet(
         }
     }
 
-    fun animateDismiss(onComplete: () -> Unit) {
+    fun animateDismiss(initialVelocity: Float = 0f, onComplete: () -> Unit) {
         if (isClosingSheet) return
         isClosingSheet = true
         focusManager.clearFocus()
@@ -242,10 +242,21 @@ fun ProfileStudioSheet(
                     )
                 }
                 val sheetJob = launch {
-                    sheetAnimOffsetY.animateTo(
-                        targetValue = exitTarget,
-                        animationSpec = tween(durationMillis = exitDuration, easing = CubicBezierEasing(0.4f, 0f, 1f, 1f))
-                    )
+                    if (initialVelocity > 0f) {
+                        sheetAnimOffsetY.animateTo(
+                            targetValue = exitTarget,
+                            initialVelocity = initialVelocity,
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioNoBouncy,
+                                stiffness = Spring.StiffnessMediumLow
+                            )
+                        )
+                    } else {
+                        sheetAnimOffsetY.animateTo(
+                            targetValue = exitTarget,
+                            animationSpec = tween(durationMillis = exitDuration, easing = CubicBezierEasing(0.4f, 0f, 1f, 1f))
+                        )
+                    }
                 }
                 scrimJob.join()
                 sheetJob.join()
@@ -254,12 +265,12 @@ fun ProfileStudioSheet(
         }
     }
 
-    fun attemptDismiss() {
+    fun attemptDismiss(initialVelocity: Float = 0f) {
         if (isClosingSheet) return
         if (hasUnsavedChanges) {
             showDiscardConfirm = true
         } else {
-            animateDismiss { onDismiss() }
+            animateDismiss(initialVelocity = initialVelocity) { onDismiss() }
         }
     }
 
@@ -372,7 +383,7 @@ fun ProfileStudioSheet(
                                             val velocityY = velocityTracker.calculateVelocity().y
                                             val dismissThresholdPx = with(density) { 110.dp.toPx() }
                                             if (sheetAnimOffsetY.value > dismissThresholdPx || velocityY > 1200f) {
-                                                attemptDismiss()
+                                                attemptDismiss(initialVelocity = velocityY.coerceAtLeast(0f))
                                             } else {
                                                 coroutineScope.launch {
                                                     launch {

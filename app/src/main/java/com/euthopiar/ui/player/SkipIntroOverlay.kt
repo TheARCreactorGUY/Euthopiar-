@@ -9,7 +9,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.FastForward
+import com.euthopiar.ui.icons.LucideIcons
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -131,7 +131,7 @@ fun SkipIntroOverlay(
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Icon(
-                    imageVector = Icons.Outlined.FastForward,
+                    imageVector = LucideIcons.FastForward,
                     contentDescription = null,
                     tint = Color.White,
                     modifier = Modifier.size(14.dp)

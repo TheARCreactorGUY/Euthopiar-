@@ -4,6 +4,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -36,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.euthopiar.core.model.PluginManifest
 import com.euthopiar.ui.settings.PluginManagerViewModel
+import com.euthopiar.ui.theme.AppFontFamily
 import com.euthopiar.ui.theme.LocalAmoledMode
 
 /**
@@ -77,7 +79,7 @@ fun ProviderDetailSheet(
         sheetState = sheetState,
         shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp, bottomStart = 0.dp, bottomEnd = 0.dp),
         containerColor = containerBg,
-        scrimColor = Color.Black.copy(alpha = 0.60f),
+        scrimColor = Color.Black.copy(alpha = 0.65f),
         dragHandle = {
             Column(modifier = Modifier.fillMaxWidth()) {
                 PluginsHairlineDivider()
@@ -145,7 +147,7 @@ fun ProviderDetailSheet(
                             overflow = TextOverflow.Ellipsis
                         )
 
-                        val authorStr = if (plugin.author.isNotBlank()) " · By ${plugin.author}" else ""
+                        val authorStr = if (plugin.author.isNotBlank()) " \u00B7 By ${plugin.author}" else ""
                         val versionStr = "v${plugin.versionName.ifBlank { plugin.version.toString() }}$authorStr"
                         Text(
                             text = versionStr,
@@ -163,7 +165,7 @@ fun ProviderDetailSheet(
                 // Description (Clamped to 6 lines with More/Less expander)
                 if (plugin.description.isNotBlank()) {
                     Column(
-                        modifier = Modifier.animateContentSize(animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)),
+                        modifier = Modifier.animateContentSize(animationSpec = spring(dampingRatio = 0.82f, stiffness = 380f)),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         Text(
@@ -206,9 +208,10 @@ fun ProviderDetailSheet(
                             )
                         )
 
-                        Row(
+                        FlowRow(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             plugin.supportedTypes.forEach { type ->
                                 Box(
@@ -361,7 +364,7 @@ fun ProviderDetailSheet(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(44.dp)
+                            .height(48.dp)
                             .clip(RoundedCornerShape(PluginsGlassTokens.RadiusPill))
                             .background(PluginsGlassTokens.GlassFill)
                             .border(
@@ -395,7 +398,7 @@ fun ProviderDetailSheet(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(44.dp)
+                            .height(48.dp)
                             .clip(RoundedCornerShape(PluginsGlassTokens.RadiusPill))
                             .background(Color.White)
                             .pluginsPressable(enabled = !isInstalling, scaleDown = 0.98f, onClick = onInstall),

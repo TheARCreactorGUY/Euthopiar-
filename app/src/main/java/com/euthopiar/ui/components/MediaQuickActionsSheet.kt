@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.PlayArrow
+import com.euthopiar.ui.icons.LucideIcons
 import androidx.compose.material.icons.outlined.Share
 import com.euthopiar.ui.library.sanitizeTitle
 import androidx.compose.material3.HorizontalDivider
@@ -134,7 +135,7 @@ fun MediaQuickActionsSheet(
             // Action 1: Play / Resume (if provided)
             if (onPlayClick != null) {
                 QuickActionRow(
-                    icon = Icons.Outlined.PlayArrow,
+                    icon = LucideIcons.Play,
                     label = "Play",
                     onClick = {
                         onDismissRequest()
@@ -145,7 +146,7 @@ fun MediaQuickActionsSheet(
 
             // Action 2: Add / Remove Watchlist
             QuickActionRow(
-                icon = if (isBookmarked) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder,
+                icon = if (isBookmarked) LucideIcons.BookmarkFilled else LucideIcons.Bookmark,
                 label = if (isBookmarked) "In watchlist" else "Add to watchlist",
                 iconTint = if (isBookmarked) Accent else TextPrimary,
                 onClick = {

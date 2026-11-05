@@ -61,12 +61,14 @@ import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.PlayArrow
+import com.euthopiar.ui.icons.LucideIcons
 import androidx.compose.material.icons.outlined.PlaylistAdd
 import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import com.euthopiar.ui.theme.pressable
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SheetState
 import androidx.compose.material3.Text
@@ -119,6 +121,7 @@ import com.euthopiar.ui.library.LibraryDimens
 import com.euthopiar.ui.library.sanitizeTitle
 import com.euthopiar.ui.navigation.LocalNavbarVisible
 import com.euthopiar.ui.theme.AppFontFamily
+import com.euthopiar.ui.theme.EuthopiarGlassTokens
 import com.euthopiar.ui.theme.LocalAmoledMode
 import com.euthopiar.ui.theme.LocalReduceMotion
 import dev.chrisbanes.haze.HazeState
@@ -190,7 +193,7 @@ fun MediaDetailsActionSheet(
         } else {
             sheetProgress.animateTo(
                 targetValue = 1f,
-                animationSpec = tween(durationMillis = 340, easing = FastOutSlowInEasing)
+                animationSpec = spring(dampingRatio = 0.85f, stiffness = 380f)
             )
         }
     }
@@ -254,10 +257,10 @@ fun MediaDetailsActionSheet(
     val maxSheetHeight = (configuration.screenHeightDp * 0.85f).dp
     var sheetHeightPx by remember { mutableFloatStateOf(0f) }
 
-    val sheetShape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
-    val sheetFill = if (isAmoled) Color.Black.copy(alpha = 0.88f) else Color(0xFF0F101A).copy(alpha = 0.70f)
-    val fallbackFill = if (isAmoled) Color.Black.copy(alpha = 0.94f) else Color(0xFF0F101A).copy(alpha = 0.94f)
-    val scrimAlpha = if (reduceMotion) 0.60f else (0.60f * (animValue / (250f / 340f))).coerceIn(0f, 0.60f)
+    val sheetShape = RoundedCornerShape(topStart = EuthopiarGlassTokens.RadiusSheet, topEnd = EuthopiarGlassTokens.RadiusSheet)
+    val sheetFill = EuthopiarGlassTokens.cardFill(isAmoled)
+    val fallbackFill = EuthopiarGlassTokens.fallbackFill(isAmoled)
+    val scrimAlpha = if (reduceMotion) EuthopiarGlassTokens.ScrimAlpha else (EuthopiarGlassTokens.ScrimAlpha * (animValue / (250f / 340f))).coerceIn(0f, EuthopiarGlassTokens.ScrimAlpha)
 
     Box(
         modifier = modifier
@@ -297,18 +300,20 @@ fun MediaDetailsActionSheet(
                 )
                 .draggable(
                     state = rememberDraggableState { delta ->
-                        if (delta > 0 || dragOffsetY > 0) {
-                            dragOffsetY = (dragOffsetY + delta).coerceAtLeast(0f)
-                        }
+                        val next = dragOffsetY + if (dragOffsetY + delta < 0f) delta * 0.18f else delta
+                        dragOffsetY = next.coerceAtLeast(-24f)
                     },
                     orientation = Orientation.Vertical,
-                    onDragStopped = {
-                        if (dragOffsetY > 120f) {
+                    onDragStopped = { velocity ->
+                        // Project momentum: fast downward flick (velocity > 900f px/s) or drag > 120f dismisses
+                        val projected = dragOffsetY + (velocity * 0.15f)
+                        if (dragOffsetY > 120f || (dragOffsetY > 24f && velocity > 900f) || projected > 220f) {
                             dismissWithAnim()
                         } else {
                             scope.launch {
                                 Animatable(dragOffsetY).animateTo(
                                     targetValue = 0f,
+                                    initialVelocity = velocity,
                                     animationSpec = spring(
                                         dampingRatio = Spring.DampingRatioLowBouncy,
                                         stiffness = Spring.StiffnessMedium
@@ -324,7 +329,7 @@ fun MediaDetailsActionSheet(
                 .then(
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hazeState != null) {
                         Modifier.hazeEffect(state = hazeState) {
-                            blurRadius = 24.dp
+                            blurRadius = EuthopiarGlassTokens.BlurRadius
                             tints = listOf(HazeTint(sheetFill))
                             fallbackTint = HazeTint(fallbackFill)
                         }
@@ -333,8 +338,8 @@ fun MediaDetailsActionSheet(
                     }
                 )
                 .border(
-                    width = 0.5.dp,
-                    color = Color.White.copy(alpha = 0.18f),
+                    width = EuthopiarGlassTokens.HairlineWidth,
+                    color = EuthopiarGlassTokens.HairlineBorder,
                     shape = sheetShape
                 )
         ) {
@@ -503,8 +508,8 @@ private fun WatchlistCategoryContent(
 
         categories.forEachIndexed { index, (key, label, hint) ->
             val icon = when (key) {
-                "TO_BE_WATCHED" -> Icons.Outlined.BookmarkBorder
-                "WATCHING" -> Icons.Outlined.PlayArrow
+                "TO_BE_WATCHED" -> LucideIcons.Bookmark
+                "WATCHING" -> LucideIcons.Play
                 else -> Icons.Outlined.CheckCircle
             }
             val isSelected = selectedCategoryKey == key
@@ -587,21 +592,27 @@ private fun AddToPlaylistContent(
             if (hasBackButton) {
                 Box(
                     modifier = Modifier
-                        .size(36.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(Color.White.copy(alpha = 0.07f))
-                        .border(0.5.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(10.dp))
-                        .clickable(role = Role.Button, onClick = onBack),
+                        .size(48.dp)
+                        .pressable(onClick = onBack),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
-                        contentDescription = "Back to categories",
-                        tint = Color.White,
-                        modifier = Modifier.size(18.dp)
-                    )
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color.White.copy(alpha = 0.07f))
+                            .border(0.5.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(10.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
+                            contentDescription = "Back to categories",
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
-                Spacer(modifier = Modifier.width(12.dp))
+                Spacer(modifier = Modifier.width(6.dp))
             }
 
             Column(modifier = Modifier.weight(1f)) {
@@ -778,22 +789,28 @@ private fun NewPlaylistNamingContent(
         ) {
             Box(
                 modifier = Modifier
-                    .size(36.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(Color.White.copy(alpha = 0.07f))
-                    .border(0.5.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(10.dp))
-                    .clickable(role = Role.Button, onClick = onBack),
+                    .size(48.dp)
+                    .pressable(onClick = onBack),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
-                    contentDescription = "Back",
-                    tint = Color.White,
-                    modifier = Modifier.size(18.dp)
-                )
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Color.White.copy(alpha = 0.07f))
+                        .border(0.5.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(10.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
+                        contentDescription = "Back",
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
             }
 
-            Spacer(modifier = Modifier.width(14.dp))
+            Spacer(modifier = Modifier.width(6.dp))
 
             Text(
                 text = "New playlist",
@@ -1147,7 +1164,7 @@ fun RoundSelectionIndicator(
 ) {
     val reduceMotion = LocalReduceMotion.current
     val checkScale by animateFloatAsState(
-        targetValue = if (isSelected) 1f else 0.7f,
+        targetValue = if (isSelected) 1f else 0.92f,
         animationSpec = if (reduceMotion) tween(0) else spring(dampingRatio = 0.6f, stiffness = 500f),
         label = "checkScale"
     )

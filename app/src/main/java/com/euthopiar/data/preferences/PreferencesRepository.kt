@@ -108,9 +108,17 @@ class PreferencesRepository private constructor(private val context: Context) {
         val TRAKT_REFRESH_TOKEN = stringPreferencesKey("trakt_refresh_token")
         val TRAKT_USERNAME = stringPreferencesKey("trakt_username")
         val TRAKT_SCROBBLE_ENABLED = booleanPreferencesKey("trakt_scrobble_enabled")
+        val TRAKT_CODE_VERIFIER = stringPreferencesKey("trakt_code_verifier")
         val SIMKL_ACCESS_TOKEN = stringPreferencesKey("simkl_access_token")
         val SIMKL_SCROBBLE_ENABLED = booleanPreferencesKey("simkl_scrobble_enabled")
         val SIMKL_CODE_VERIFIER = stringPreferencesKey("simkl_code_verifier")
+        val TRAKT_SYNC_WATCHLIST = booleanPreferencesKey("trakt_sync_watchlist")
+        val TRAKT_SYNC_PLAYBACK = booleanPreferencesKey("trakt_sync_playback")
+        val TRAKT_SYNC_HISTORY = booleanPreferencesKey("trakt_sync_history")
+        val TRAKT_SYNC_LISTS = booleanPreferencesKey("trakt_sync_lists")
+        val SIMKL_SYNC_WATCHLIST = booleanPreferencesKey("simkl_sync_watchlist")
+        val SIMKL_SYNC_HISTORY = booleanPreferencesKey("simkl_sync_history")
+        val LAST_MEDIA_SYNC_TIMESTAMP = longPreferencesKey("last_media_sync_timestamp")
         val REAL_DEBRID_API_KEY = stringPreferencesKey("real_debrid_api_key")
         val ALL_DEBRID_API_KEY = stringPreferencesKey("all_debrid_api_key")
         val TORBOX_API_KEY = stringPreferencesKey("torbox_api_key")
@@ -533,6 +541,17 @@ class PreferencesRepository private constructor(private val context: Context) {
         context.preferencesDataStore.edit { it[PreferencesKeys.TRAKT_SCROBBLE_ENABLED] = enabled }
     }
 
+
+    val traktCodeVerifier: Flow<String> = context.preferencesDataStore.data.map { it[PreferencesKeys.TRAKT_CODE_VERIFIER] ?: "" }.distinctUntilChanged()
+
+    suspend fun setTraktCodeVerifier(verifier: String) {
+        context.preferencesDataStore.edit { it[PreferencesKeys.TRAKT_CODE_VERIFIER] = verifier }
+    }
+
+    suspend fun clearTraktCodeVerifier() {
+        context.preferencesDataStore.edit { it.remove(PreferencesKeys.TRAKT_CODE_VERIFIER) }
+    }
+
     // Simkl Preferences
     val simklAccessToken: Flow<String> = context.preferencesDataStore.data.map { it[PreferencesKeys.SIMKL_ACCESS_TOKEN] ?: "" }.distinctUntilChanged()
     val simklScrobbleEnabled: Flow<Boolean> = context.preferencesDataStore.data.map { it[PreferencesKeys.SIMKL_SCROBBLE_ENABLED] ?: true }.distinctUntilChanged()
@@ -557,6 +576,63 @@ class PreferencesRepository private constructor(private val context: Context) {
 
     suspend fun clearSimklCodeVerifier() {
         context.preferencesDataStore.edit { it.remove(PreferencesKeys.SIMKL_CODE_VERIFIER) }
+    }
+
+    // Media Sync Customization Preferences (Trakt & Simkl)
+    val traktSyncWatchlist: Flow<Boolean> = context.preferencesDataStore.data.map {
+        it[PreferencesKeys.TRAKT_SYNC_WATCHLIST] ?: true
+    }.distinctUntilChanged()
+
+    suspend fun setTraktSyncWatchlist(enabled: Boolean) {
+        context.preferencesDataStore.edit { it[PreferencesKeys.TRAKT_SYNC_WATCHLIST] = enabled }
+    }
+
+    val traktSyncPlayback: Flow<Boolean> = context.preferencesDataStore.data.map {
+        it[PreferencesKeys.TRAKT_SYNC_PLAYBACK] ?: true
+    }.distinctUntilChanged()
+
+    suspend fun setTraktSyncPlayback(enabled: Boolean) {
+        context.preferencesDataStore.edit { it[PreferencesKeys.TRAKT_SYNC_PLAYBACK] = enabled }
+    }
+
+    val traktSyncHistory: Flow<Boolean> = context.preferencesDataStore.data.map {
+        it[PreferencesKeys.TRAKT_SYNC_HISTORY] ?: true
+    }.distinctUntilChanged()
+
+    suspend fun setTraktSyncHistory(enabled: Boolean) {
+        context.preferencesDataStore.edit { it[PreferencesKeys.TRAKT_SYNC_HISTORY] = enabled }
+    }
+
+    val traktSyncLists: Flow<Boolean> = context.preferencesDataStore.data.map {
+        it[PreferencesKeys.TRAKT_SYNC_LISTS] ?: true
+    }.distinctUntilChanged()
+
+    suspend fun setTraktSyncLists(enabled: Boolean) {
+        context.preferencesDataStore.edit { it[PreferencesKeys.TRAKT_SYNC_LISTS] = enabled }
+    }
+
+    val simklSyncWatchlist: Flow<Boolean> = context.preferencesDataStore.data.map {
+        it[PreferencesKeys.SIMKL_SYNC_WATCHLIST] ?: true
+    }.distinctUntilChanged()
+
+    suspend fun setSimklSyncWatchlist(enabled: Boolean) {
+        context.preferencesDataStore.edit { it[PreferencesKeys.SIMKL_SYNC_WATCHLIST] = enabled }
+    }
+
+    val simklSyncHistory: Flow<Boolean> = context.preferencesDataStore.data.map {
+        it[PreferencesKeys.SIMKL_SYNC_HISTORY] ?: true
+    }.distinctUntilChanged()
+
+    suspend fun setSimklSyncHistory(enabled: Boolean) {
+        context.preferencesDataStore.edit { it[PreferencesKeys.SIMKL_SYNC_HISTORY] = enabled }
+    }
+
+    val lastMediaSyncTimestamp: Flow<Long> = context.preferencesDataStore.data.map {
+        it[PreferencesKeys.LAST_MEDIA_SYNC_TIMESTAMP] ?: 0L
+    }.distinctUntilChanged()
+
+    suspend fun setLastMediaSyncTimestamp(timestamp: Long) {
+        context.preferencesDataStore.edit { it[PreferencesKeys.LAST_MEDIA_SYNC_TIMESTAMP] = timestamp }
     }
 
     // Debrid Preferences

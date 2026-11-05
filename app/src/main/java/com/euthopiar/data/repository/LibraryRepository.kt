@@ -18,7 +18,8 @@ import kotlinx.coroutines.flow.flatMapLatest
 class LibraryRepository(
     private val watchlistDao: WatchlistDao,
     private val playbackHistoryDao: PlaybackHistoryDao,
-    private val profileManager: ProfileManager? = null
+    private val profileManager: ProfileManager? = null,
+    private val syncManagerProvider: (() -> com.euthopiar.data.sync.MediaSyncManager)? = null
 ) {
     private fun currentProfileId(): String = profileManager?.activeProfile?.value?.id ?: "default_user"
 
@@ -92,6 +93,12 @@ class LibraryRepository(
             )
             watchlistDao.insert(entity)
         }
+        if (status == "TO_BE_WATCHED" || status == "WATCHING") {
+            syncManagerProvider?.invoke()?.notifyWatchlistAdded(mediaDetail)
+        } else if (status == "COMPLETED") {
+            val isTv = mediaDetail.type.name.contains("TV", ignoreCase = true) || mediaDetail.type.name.contains("ANIME", ignoreCase = true)
+            syncManagerProvider?.invoke()?.notifyMediaCompleted(mediaDetail.id, mediaDetail.title, isTv)
+        }
     }
 
     suspend fun setWatchlistStatus(item: MediaItem, status: String) {
@@ -114,6 +121,12 @@ class LibraryRepository(
             )
             watchlistDao.insert(entity)
         }
+        if (status == "TO_BE_WATCHED" || status == "WATCHING") {
+            syncManagerProvider?.invoke()?.notifyWatchlistAdded(item)
+        } else if (status == "COMPLETED") {
+            val isTv = item.type.name.contains("TV", ignoreCase = true) || item.type.name.contains("ANIME", ignoreCase = true)
+            syncManagerProvider?.invoke()?.notifyMediaCompleted(item.id, item.title, isTv)
+        }
     }
 
     suspend fun toggleWatchlist(item: MediaItem): Boolean {
@@ -121,6 +134,7 @@ class LibraryRepository(
         val exists = watchlistDao.countWatchlist(item.id, profileId) > 0
         return if (exists) {
             watchlistDao.delete(item.id, profileId)
+            syncManagerProvider?.invoke()?.notifyWatchlistRemoved(item.id, item.title, item.type.name.contains("TV", ignoreCase = true))
             false
         } else {
             val entity = WatchlistEntity(
@@ -136,6 +150,7 @@ class LibraryRepository(
                 addedTimestamp = System.currentTimeMillis()
             )
             watchlistDao.insert(entity)
+            syncManagerProvider?.invoke()?.notifyWatchlistAdded(item)
             true
         }
     }
@@ -145,6 +160,7 @@ class LibraryRepository(
         val exists = watchlistDao.countWatchlist(mediaDetail.id, profileId) > 0
         return if (exists) {
             watchlistDao.delete(mediaDetail.id, profileId)
+            syncManagerProvider?.invoke()?.notifyWatchlistRemoved(mediaDetail.id, mediaDetail.title, mediaDetail.type.name.contains("TV", ignoreCase = true))
             false
         } else {
             val entity = WatchlistEntity(
@@ -160,12 +176,14 @@ class LibraryRepository(
                 addedTimestamp = System.currentTimeMillis()
             )
             watchlistDao.insert(entity)
+            syncManagerProvider?.invoke()?.notifyWatchlistAdded(mediaDetail)
             true
         }
     }
 
     suspend fun removeFromWatchlist(mediaId: String) {
         watchlistDao.delete(mediaId, currentProfileId())
+        syncManagerProvider?.invoke()?.notifyWatchlistRemoved(mediaId)
     }
 
     suspend fun removeFromWatchlistBatch(mediaIds: List<String>) {
@@ -306,6 +324,28 @@ class LibraryRepository(
             false
         }
 
+        val existing = playbackHistoryDao.getProgress(id)
+        val watchlistItem = if (posterUrl.isNullOrBlank() || backdropUrl.isNullOrBlank()) {
+            watchlistDao.getWatchlistItem(mediaId, profileId)
+        } else null
+        val isTv = seasonNumber != null || episodeNumber != null ||
+            mediaType?.contains("TV", ignoreCase = true) == true ||
+            mediaType?.contains("ANIME", ignoreCase = true) == true
+        val cachedTmdb = if (posterUrl.isNullOrBlank() || backdropUrl.isNullOrBlank()) {
+            com.euthopiar.core.util.TmdbBridge.getCachedEnrichedDetails(mediaId, isTv)
+        } else null
+
+        val resolvedPoster = posterUrl?.takeIf { it.isNotBlank() }
+            ?: existing?.posterUrl?.takeIf { it.isNotBlank() }
+            ?: watchlistItem?.posterUrl?.takeIf { it.isNotBlank() }
+            ?: cachedTmdb?.posterUrl?.takeIf { it.isNotBlank() }
+
+        val resolvedBackdrop = backdropUrl?.takeIf { it.isNotBlank() }
+            ?: existing?.backdropUrl?.takeIf { it.isNotBlank() }
+            ?: watchlistItem?.backdropUrl?.takeIf { it.isNotBlank() }
+            ?: cachedTmdb?.backdropUrl?.takeIf { it.isNotBlank() }
+            ?: resolvedPoster
+
         val entity = PlaybackHistoryEntity(
             id = id,
             mediaId = mediaId,
@@ -313,8 +353,8 @@ class LibraryRepository(
             episodeTitle = episodeTitle,
             seasonNumber = seasonNumber,
             episodeNumber = episodeNumber,
-            posterUrl = posterUrl,
-            backdropUrl = backdropUrl,
+            posterUrl = resolvedPoster,
+            backdropUrl = resolvedBackdrop,
             currentPositionMs = currentPositionMs,
             durationMs = durationMs,
             lastWatchedTimestamp = System.currentTimeMillis(),
@@ -400,11 +440,13 @@ class LibraryRepository(
             if (watchlistDao.countWatchlist(existing.mediaId, profileId) > 0) {
                 watchlistDao.updateStatus(existing.mediaId, "COMPLETED", profileId)
             }
+            syncManagerProvider?.invoke()?.notifyMediaCompleted(existing.mediaId, existing.title, existing.seasonNumber != null, existing.seasonNumber, existing.episodeNumber)
         } else {
             // Check if it's a mediaId in watchlist directly
             if (watchlistDao.countWatchlist(id, profileId) > 0) {
                 watchlistDao.updateStatus(id, "COMPLETED", profileId)
             }
+            syncManagerProvider?.invoke()?.notifyMediaCompleted(id, "", false)
         }
     }
 
@@ -421,7 +463,13 @@ class LibraryRepository(
                 instance ?: run {
                     val db = AppDatabase.getInstance(context)
                     val profileMgr = ProfileManager.getInstance(context)
-                    LibraryRepository(db.watchlistDao(), db.playbackHistoryDao(), profileMgr).also { instance = it }
+                    val appContext = context.applicationContext
+                    LibraryRepository(
+                        db.watchlistDao(),
+                        db.playbackHistoryDao(),
+                        profileMgr,
+                        syncManagerProvider = { com.euthopiar.data.sync.MediaSyncManager.getInstance(appContext) }
+                    ).also { instance = it }
                 }
             }
         }

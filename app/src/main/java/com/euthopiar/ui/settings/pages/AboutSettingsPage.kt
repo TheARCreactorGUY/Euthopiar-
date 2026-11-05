@@ -2,10 +2,18 @@ package com.euthopiar.ui.settings.pages
 
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Description
@@ -15,6 +23,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -25,6 +34,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -35,6 +45,8 @@ import androidx.compose.ui.window.DialogProperties
 import com.euthopiar.data.update.AppUpdateConfig
 import com.euthopiar.ui.settings.components.*
 import com.euthopiar.ui.theme.AppFontFamily
+import com.euthopiar.ui.theme.EuthopiarMotionTokens
+import com.euthopiar.ui.theme.LocalReduceMotion
 
 /**
  * Redesigned "About Euthopiar" Settings Screen.
@@ -55,6 +67,7 @@ fun AboutSettingsPage(
     onNavigateToUpdates: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
+    val reduceMotion = LocalReduceMotion.current
     var showLicensesDialog by remember { mutableStateOf(false) }
     var showPrivacyDialog by remember { mutableStateOf(false) }
     var showSupportSheet by remember { mutableStateOf(false) }
@@ -62,9 +75,9 @@ fun AboutSettingsPage(
     val versionName = remember(context) {
         try {
             val name = context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "1.0.0"
-            "v$name · Production"
+            "v$name \u00B7 Production"
         } catch (_: Exception) {
-            "v1.0.0 · Production"
+            "v1.0.0 \u00B7 Production"
         }
     }
 
@@ -101,7 +114,6 @@ fun AboutSettingsPage(
                         strokeWidth = SettingsTokens.HairlineWidth.toPx()
                     )
                 }
-                .padding(bottom = 20.dp)
         ) {
             // Emblem Tile + Brand Title Row
             Row(
@@ -287,27 +299,64 @@ fun AboutSettingsPage(
 
         // In-App Open-Source Licenses Glass Dialog
         if (showLicensesDialog) {
+            var licensesDialogVisible by remember { mutableStateOf(false) }
+            LaunchedEffect(Unit) { licensesDialogVisible = true }
+            val licensesScrimAlpha by animateFloatAsState(
+                targetValue = if (licensesDialogVisible) 0.60f else 0f,
+                animationSpec = tween(180),
+                label = "licensesScrim"
+            )
+            val licensesCardScale by animateFloatAsState(
+                targetValue = if (licensesDialogVisible) 1f else EuthopiarMotionTokens.DialogInitialScale,
+                animationSpec = if (reduceMotion) snap() else EuthopiarMotionTokens.SpringDialogScale,
+                label = "licensesScale"
+            )
+
             Dialog(
                 onDismissRequest = { showLicensesDialog = false },
                 properties = DialogProperties(usePlatformDefaultWidth = false)
             ) {
                 Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 24.dp)
-                        .clip(RoundedCornerShape(SettingsTokens.RadiusDialog))
-                        .settingsGlass(
-                            shape = RoundedCornerShape(SettingsTokens.RadiusDialog),
-                            hazeState = hazeState,
-                            blurRadius = 22.dp
-                        )
-                        .border(SettingsTokens.HairlineWidth, SettingsTokens.HairlineBorder, RoundedCornerShape(SettingsTokens.RadiusDialog))
-                        .padding(24.dp)
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = licensesScrimAlpha))
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = { showLicensesDialog = false }
+                        ),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 560.dp)
+                            .padding(horizontal = 24.dp)
+                            .graphicsLayer {
+                                scaleX = licensesCardScale
+                                scaleY = licensesCardScale
+                                alpha = if (licensesDialogVisible) 1f else 0f
+                            }
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = {} // Intercept clicks inside card
+                            )
+                            .clip(RoundedCornerShape(SettingsTokens.RadiusDialog))
+                            .settingsGlass(
+                                shape = RoundedCornerShape(SettingsTokens.RadiusDialog),
+                                hazeState = hazeState,
+                                blurRadius = 22.dp
+                            )
+                            .border(SettingsTokens.HairlineWidth, SettingsTokens.HairlineBorder, RoundedCornerShape(SettingsTokens.RadiusDialog))
+                            .padding(24.dp)
                     ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -433,30 +482,68 @@ fun AboutSettingsPage(
                 }
             }
         }
+    }
 
         // In-App Privacy Architecture Glass Dialog
         if (showPrivacyDialog) {
+            var privacyDialogVisible by remember { mutableStateOf(false) }
+            LaunchedEffect(Unit) { privacyDialogVisible = true }
+            val privacyScrimAlpha by animateFloatAsState(
+                targetValue = if (privacyDialogVisible) 0.60f else 0f,
+                animationSpec = tween(180),
+                label = "privacyScrim"
+            )
+            val privacyCardScale by animateFloatAsState(
+                targetValue = if (privacyDialogVisible) 1f else EuthopiarMotionTokens.DialogInitialScale,
+                animationSpec = if (reduceMotion) snap() else EuthopiarMotionTokens.SpringDialogScale,
+                label = "privacyScale"
+            )
+
             Dialog(
                 onDismissRequest = { showPrivacyDialog = false },
                 properties = DialogProperties(usePlatformDefaultWidth = false)
             ) {
                 Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 24.dp)
-                        .clip(RoundedCornerShape(SettingsTokens.RadiusDialog))
-                        .settingsGlass(
-                            shape = RoundedCornerShape(SettingsTokens.RadiusDialog),
-                            hazeState = hazeState,
-                            blurRadius = 22.dp
-                        )
-                        .border(SettingsTokens.HairlineWidth, SettingsTokens.HairlineBorder, RoundedCornerShape(SettingsTokens.RadiusDialog))
-                        .padding(24.dp)
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = privacyScrimAlpha))
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = { showPrivacyDialog = false }
+                        ),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 560.dp)
+                            .padding(horizontal = 24.dp)
+                            .graphicsLayer {
+                                scaleX = privacyCardScale
+                                scaleY = privacyCardScale
+                                alpha = if (privacyDialogVisible) 1f else 0f
+                            }
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = {} // Intercept clicks inside card
+                            )
+                            .clip(RoundedCornerShape(SettingsTokens.RadiusDialog))
+                            .settingsGlass(
+                                shape = RoundedCornerShape(SettingsTokens.RadiusDialog),
+                                hazeState = hazeState,
+                                blurRadius = 22.dp
+                            )
+                            .border(SettingsTokens.HairlineWidth, SettingsTokens.HairlineBorder, RoundedCornerShape(SettingsTokens.RadiusDialog))
+                            .padding(24.dp)
                     ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -578,5 +665,6 @@ fun AboutSettingsPage(
                 }
             }
         }
+    }
     }
 }

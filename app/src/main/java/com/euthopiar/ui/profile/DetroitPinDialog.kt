@@ -1,8 +1,9 @@
 package com.euthopiar.ui.profile
 
+import android.os.Build
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -44,8 +45,12 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.euthopiar.ui.theme.AppFontFamily
+import com.euthopiar.ui.theme.EuthopiarGlassTokens
 import com.euthopiar.ui.theme.LocalAmoledMode
 import com.euthopiar.ui.theme.LocalReduceMotion
+import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.HazeTint
+import dev.chrisbanes.haze.hazeEffect
 import kotlinx.coroutines.launch
 
 private enum class PinStep {
@@ -54,12 +59,13 @@ private enum class PinStep {
 }
 
 /**
- * 2-Step PIN Setup Dialog ported from Detroit with Euthopiar minimal glass design.
+ * 2-Step PIN Setup Dialog ported with Euthopiar frosted glass design.
  */
 @Composable
 fun DetroitPinDialog(
     onDismissRequest: () -> Unit,
     onPinConfirmed: (String) -> Unit,
+    hazeState: HazeState? = null,
 ) {
     var step by remember { mutableStateOf(PinStep.ENTER_NEW) }
     var firstPin by remember { mutableStateOf("") }
@@ -69,7 +75,6 @@ fun DetroitPinDialog(
     val haptic = LocalHapticFeedback.current
     val isAmoled = LocalAmoledMode.current
 
-    val dialogBg = if (isAmoled) ProfileGlassTokens.AmoledBackground else ProfileGlassTokens.BaseDarkBackground
     val currentEntered = if (step == PinStep.ENTER_NEW) firstPin else confirmPin
 
     val reduceMotion = LocalReduceMotion.current
@@ -79,7 +84,10 @@ fun DetroitPinDialog(
 
     LaunchedEffect(Unit) {
         if (!reduceMotion) {
-            dialogAnim.animateTo(1f, tween(200, easing = FastOutSlowInEasing))
+            dialogAnim.animateTo(
+                targetValue = 1f,
+                animationSpec = spring(dampingRatio = 0.78f, stiffness = 550f)
+            )
         } else {
             dialogAnim.snapTo(1f)
         }
@@ -90,7 +98,7 @@ fun DetroitPinDialog(
         isClosing = true
         coroutineScope.launch {
             if (!reduceMotion) {
-                dialogAnim.animateTo(0f, tween(160, easing = FastOutSlowInEasing))
+                dialogAnim.animateTo(0f, tween(180))
             }
             action()
         }
@@ -149,6 +157,14 @@ fun DetroitPinDialog(
         }
     }
 
+    val cardShape = RoundedCornerShape(EuthopiarGlassTokens.RadiusDialog)
+    val cardFill = EuthopiarGlassTokens.cardFill(isAmoled)
+    val fallbackColor = EuthopiarGlassTokens.fallbackFill(isAmoled)
+    val animVal = dialogAnim.value
+    val scrimAlpha = if (reduceMotion) EuthopiarGlassTokens.ScrimAlpha else (EuthopiarGlassTokens.ScrimAlpha * animVal).coerceIn(0f, EuthopiarGlassTokens.ScrimAlpha)
+    val cardScale = if (reduceMotion) 1f else 0.94f + 0.06f * animVal
+    val cardTranslationY = if (reduceMotion) 0f else (1f - animVal) * 30f
+
     Dialog(
         onDismissRequest = { animateDismiss(onDismissRequest) },
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -156,7 +172,7 @@ fun DetroitPinDialog(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.72f * dialogAnim.value))
+                .background(Color.Black.copy(alpha = scrimAlpha))
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -168,14 +184,28 @@ fun DetroitPinDialog(
                 modifier = Modifier
                     .fillMaxWidth(0.90f)
                     .graphicsLayer {
-                        alpha = dialogAnim.value
-                        val scale = 0.94f + (0.06f * dialogAnim.value)
-                        scaleX = scale
-                        scaleY = scale
+                        alpha = animVal
+                        scaleX = cardScale
+                        scaleY = cardScale
+                        translationY = cardTranslationY
                     }
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(dialogBg)
-                    .border(ProfileGlassTokens.HairlineWidthDp, ProfileGlassTokens.HairlineBorder, RoundedCornerShape(20.dp))
+                    .clip(cardShape)
+                    .then(
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hazeState != null) {
+                            Modifier.hazeEffect(state = hazeState) {
+                                blurRadius = EuthopiarGlassTokens.BlurRadius
+                                tints = listOf(HazeTint(cardFill))
+                                fallbackTint = HazeTint(fallbackColor)
+                            }
+                        } else {
+                            Modifier.background(fallbackColor)
+                        }
+                    )
+                    .border(
+                        width = EuthopiarGlassTokens.HairlineWidth,
+                        color = EuthopiarGlassTokens.HairlineBorder,
+                        shape = cardShape
+                    )
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
@@ -195,13 +225,7 @@ fun DetroitPinDialog(
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(
                                 text = if (currentStep == PinStep.ENTER_NEW) "Set 4-Digit PIN" else "Confirm PIN",
-                                style = TextStyle(
-                                    fontFamily = AppFontFamily,
-                                    fontWeight = FontWeight.Medium,
-                                    fontSize = 26.sp,
-                                    lineHeight = 28.sp,
-                                    color = Color.White,
-                                ),
+                                style = EuthopiarGlassTokens.HeaderTitle,
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
@@ -210,13 +234,7 @@ fun DetroitPinDialog(
                                 } else {
                                     "Re-enter the 4-digit PIN to confirm"
                                 },
-                                style = TextStyle(
-                                    fontFamily = AppFontFamily,
-                                    fontWeight = FontWeight.Normal,
-                                    fontSize = 13.sp,
-                                    lineHeight = 16.sp,
-                                    color = ProfileGlassTokens.TextMuted50,
-                                ),
+                                style = EuthopiarGlassTokens.HeaderSubtitle,
                                 textAlign = TextAlign.Center,
                             )
                         }
@@ -254,7 +272,7 @@ fun DetroitPinDialog(
                     ProfileGlassPill(
                         text = "Cancel",
                         onClick = onDismissRequest,
-                        visualHeight = 36.dp,
+                        visualHeight = 40.dp,
                         fontSize = 13
                     )
                 }

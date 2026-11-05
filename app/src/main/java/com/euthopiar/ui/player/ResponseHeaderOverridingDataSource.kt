@@ -29,6 +29,8 @@ class ResponseHeaderOverridingDataSource(
 
     private var currentDataSpec: DataSpec? = null
     private var interceptedStream: InputStream? = null
+    private var cachedUpstreamUri: Uri? = null
+    private var cachedUpstreamHeaders: Map<String, List<String>> = emptyMap()
 
     override fun addTransferListener(transferListener: TransferListener) {
         upstream.addTransferListener(transferListener)
@@ -45,6 +47,8 @@ class ResponseHeaderOverridingDataSource(
 
         currentDataSpec = effectiveDataSpec
         interceptedStream = null
+        cachedUpstreamUri = null
+        cachedUpstreamHeaders = emptyMap()
 
         val uriStr = effectiveDataSpec.uri.toString().lowercase()
         val path = effectiveDataSpec.uri.path?.lowercase() ?: ""
@@ -54,6 +58,8 @@ class ResponseHeaderOverridingDataSource(
 
         val openResult = if (isDashManifestRequest) {
             upstream.open(effectiveDataSpec)
+            cachedUpstreamUri = upstream.uri ?: effectiveDataSpec.uri
+            cachedUpstreamHeaders = upstream.responseHeaders
             val bytes = try {
                 val buffer = ByteArrayOutputStream()
                 val temp = ByteArray(8192)
@@ -86,7 +92,7 @@ class ResponseHeaderOverridingDataSource(
             upstream.open(effectiveDataSpec)
         }
 
-        val resolvedUri = upstream.uri?.toString()
+        val resolvedUri = (upstream.uri ?: cachedUpstreamUri)?.toString()
         if (!resolvedUri.isNullOrBlank() && resolvedUri != originalUriStr) {
             com.euthopiar.ui.player.sequential.SequentialStreamManager.pinResolvedUrl(originalUriStr, resolvedUri)
         }
@@ -103,10 +109,10 @@ class ResponseHeaderOverridingDataSource(
         return upstream.read(buffer, offset, length)
     }
 
-    override fun getUri(): Uri? = upstream.uri
+    override fun getUri(): Uri? = upstream.uri ?: cachedUpstreamUri ?: currentDataSpec?.uri
 
     override fun getResponseHeaders(): Map<String, List<String>> {
-        val originalHeaders = upstream.responseHeaders
+        val originalHeaders = upstream.responseHeaders.ifEmpty { cachedUpstreamHeaders }
         val headers = TreeMap<String, List<String>>(String.CASE_INSENSITIVE_ORDER)
         headers.putAll(originalHeaders)
 
@@ -255,6 +261,8 @@ class ResponseHeaderOverridingDataSource(
         } catch (_: Throwable) {}
         interceptedStream = null
         currentDataSpec = null
+        cachedUpstreamUri = null
+        cachedUpstreamHeaders = emptyMap()
         upstream.close()
     }
 

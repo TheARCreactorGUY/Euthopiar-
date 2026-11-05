@@ -9,8 +9,7 @@ import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -55,19 +54,14 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.euthopiar.R
 import com.euthopiar.data.common.DonationConfig
-import com.euthopiar.ui.settings.components.SettingsTokens
-import com.euthopiar.ui.settings.components.settingsGlass
 import com.euthopiar.ui.settings.components.settingsPressable
 import com.euthopiar.ui.theme.Accent
-import com.euthopiar.ui.theme.AppFontFamily
+import com.euthopiar.ui.theme.EuthopiarGlassTokens
 import com.euthopiar.ui.theme.LocalAmoledMode
 import com.euthopiar.ui.theme.LocalReduceMotion
 import dev.chrisbanes.haze.HazeState
@@ -79,14 +73,15 @@ import kotlinx.coroutines.launch
 /**
  * 24-Hour Home Donation Reminder Popup.
  *
- * Designed with frosted glassmorphism matching [UpdateInfoDialog] and [SeasonSheet]:
- * - Eyebrow: "SUPPORT EUTHOPIAR"
- * - Headline: "Enjoying Euthopiar?"
- * - Body: "Your smallest contribution helps keep the application free."
- * - Centered 170dp rounded QR card displaying the Buy Me a Coffee donation QR.
- * - Solid white pill "Donate" button with external link icon.
- * - Frosted pill "Later" button.
- * - Responsive scrolling for compact screens and TV D-pad focus resilience.
+ * Designed with frosted glassmorphism strictly matching [UpdateInfoDialog]:
+ * - Tonal depth: Obsidian 85% alpha (92% AMOLED) with 24dp Haze background blur
+ * - Specular border: 0.5dp at 16% white alpha
+ * - Corner geometry: 28dp radius
+ * - Header block: 20sp Bold title, 4dp gap, 13sp Normal subtitle (54% white)
+ * - Subtle hairline divider: 0.5dp at 10% white alpha
+ * - Primary action: 48dp solid white pill button with dark text
+ * - Secondary action: Quiet text button with tactile touch feedback
+ * - Organic spring entrance & dismiss physics
  */
 @Composable
 fun DonationReminderDialog(
@@ -111,7 +106,7 @@ fun DonationReminderDialog(
         } else {
             dialogProgress.animateTo(
                 targetValue = 1f,
-                animationSpec = tween(durationMillis = 280, easing = FastOutSlowInEasing)
+                animationSpec = spring(dampingRatio = 0.78f, stiffness = 550f)
             )
         }
         delay(60L)
@@ -129,7 +124,7 @@ fun DonationReminderDialog(
                 } else {
                     dialogProgress.animateTo(
                         targetValue = 0f,
-                        animationSpec = tween(durationMillis = 150, easing = LinearOutSlowInEasing)
+                        animationSpec = tween(durationMillis = 180)
                     )
                     onDismiss()
                 }
@@ -140,14 +135,15 @@ fun DonationReminderDialog(
     BackHandler { dismissWithAnim() }
 
     val animValue = dialogProgress.value
-    val scrimAlpha = if (reduceMotion) 0.60f else (0.60f * animValue).coerceIn(0f, 0.60f)
-    val cardScale = if (reduceMotion) 1f else 0.92f + 0.08f * animValue
-    val cardAlpha = if (reduceMotion) 1f else animValue
+    val scrimAlpha = if (reduceMotion) EuthopiarGlassTokens.ScrimAlpha else (EuthopiarGlassTokens.ScrimAlpha * animValue).coerceIn(0f, EuthopiarGlassTokens.ScrimAlpha)
+    val cardScale = if (reduceMotion) 1f else 0.94f + 0.06f * animValue
+    val cardTranslationY = if (reduceMotion) 0f else (1f - animValue) * 30f
+    val cardAlpha = if (reduceMotion) 1f else animValue.coerceIn(0f, 1f)
 
     val maxDialogHeight = (configuration.screenHeightDp - 32).coerceAtLeast(200).dp
-    val cardShape = RoundedCornerShape(SettingsTokens.RadiusDialog)
-    val cardFill = if (isAmoled) Color.Black.copy(alpha = 0.88f) else Color(0xFF0E1118).copy(alpha = 0.74f)
-    val fallbackColor = if (isAmoled) Color.Black.copy(alpha = 0.94f) else Color(0xFF0E1118).copy(alpha = 0.94f)
+    val cardShape = RoundedCornerShape(EuthopiarGlassTokens.RadiusDialog)
+    val cardFill = EuthopiarGlassTokens.cardFill(isAmoled)
+    val fallbackColor = EuthopiarGlassTokens.fallbackFill(isAmoled)
 
     val openDonationLink = {
         try {
@@ -179,19 +175,20 @@ fun DonationReminderDialog(
             ),
         contentAlignment = Alignment.Center
     ) {
-        // Scrim
+        // Scrim backdrop
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Black.copy(alpha = scrimAlpha))
         )
 
-        // Dialog Card Container
+        // Modal Dialog Card
         Box(
             modifier = Modifier
                 .graphicsLayer {
                     scaleX = cardScale
                     scaleY = cardScale
+                    translationY = cardTranslationY
                     alpha = cardAlpha
                 }
                 .widthIn(max = 380.dp)
@@ -201,13 +198,13 @@ fun DonationReminderDialog(
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
-                    onClick = { /* prevent dismiss on card click */ }
+                    onClick = { /* prevent modal dismiss on card click */ }
                 )
                 .clip(cardShape)
                 .then(
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hazeState != null) {
                         Modifier.hazeEffect(state = hazeState) {
-                            blurRadius = 22.dp
+                            blurRadius = EuthopiarGlassTokens.BlurRadius
                             tints = listOf(HazeTint(cardFill))
                             fallbackTint = HazeTint(fallbackColor)
                         }
@@ -216,146 +213,125 @@ fun DonationReminderDialog(
                     }
                 )
                 .border(
-                    width = 0.5.dp,
-                    color = Color.White.copy(alpha = 0.18f),
+                    width = EuthopiarGlassTokens.HairlineWidth,
+                    color = EuthopiarGlassTokens.HairlineBorder,
                     shape = cardShape
                 )
-                .padding(24.dp)
         ) {
             Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(scrollState),
-                horizontalAlignment = Alignment.CenterHorizontally
+                modifier = Modifier.fillMaxWidth()
             ) {
-                // Eyebrow
-                Text(
-                    text = "SUPPORT EUTHOPIAR",
-                    style = TextStyle(
-                        fontFamily = AppFontFamily,
-                        fontWeight = FontWeight.Medium,
-                        fontSize = 11.sp,
-                        lineHeight = 14.sp,
-                        letterSpacing = (11 * 0.08).sp,
-                        color = SettingsTokens.TextWhite45,
-                        textAlign = TextAlign.Center
-                    )
-                )
-
-                Spacer(modifier = Modifier.height(6.dp))
-
-                // Headline
-                Text(
-                    text = "Enjoying Euthopiar?",
-                    style = TextStyle(
-                        fontFamily = AppFontFamily,
-                        fontWeight = FontWeight.Medium,
-                        fontSize = 22.sp,
-                        lineHeight = 26.sp,
-                        color = SettingsTokens.TextWhite96,
-                        textAlign = TextAlign.Center
-                    )
-                )
-
-                Spacer(modifier = Modifier.height(6.dp))
-
-                // Body
-                Text(
-                    text = "Your smallest contribution helps keep the application free.",
-                    style = TextStyle(
-                        fontFamily = AppFontFamily,
-                        fontWeight = FontWeight.Normal,
-                        fontSize = 13.sp,
-                        lineHeight = 18.sp,
-                        color = SettingsTokens.TextWhite72,
-                        textAlign = TextAlign.Center
-                    ),
-                    modifier = Modifier.padding(horizontal = 4.dp)
-                )
-
-                Spacer(modifier = Modifier.height(18.dp))
-
-                // 170dp Rounded QR Code Card
-                Box(
-                    modifier = Modifier
-                        .size(170.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(Color.White)
-                        .padding(8.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Image(
-                        painter = painterResource(id = R.drawable.qr_donation),
-                        contentDescription = "Buy Me a Coffee QR Code",
-                        modifier = Modifier.size(154.dp)
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(20.dp))
-
-                // Primary "Donate" Button (46dp solid white pill)
-                Box(
+                // Header Block matching UpdateInfoDialog
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(46.dp)
-                        .clip(CircleShape)
-                        .background(Color.White)
-                        .focusRequester(focusRequester)
-                        .settingsPressable(onClick = openDonationLink)
-                        .tvFocusable(
-                            shape = CircleShape,
-                            focusedBorderColor = Accent,
-                            onClick = openDonationLink
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        Text(
-                            text = "Donate",
-                            style = TextStyle(
-                                fontFamily = AppFontFamily,
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 15.sp,
-                                color = SettingsTokens.TextDark
-                            )
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Icon(
-                            imageVector = Icons.Outlined.OpenInNew,
-                            contentDescription = null,
-                            tint = SettingsTokens.TextDark,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                // Secondary "Later" Button (40dp frosted glass pill)
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(40.dp)
-                        .settingsGlass(
-                            shape = CircleShape,
-                            blurRadius = 14.dp
-                        )
-                        .settingsPressable(onClick = dismissWithAnim)
-                        .tvFocusable(shape = CircleShape, onClick = dismissWithAnim),
-                    contentAlignment = Alignment.Center
+                        .padding(horizontal = 24.dp, vertical = 20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
-                        text = "Later",
-                        style = TextStyle(
-                            fontFamily = AppFontFamily,
-                            fontWeight = FontWeight.Medium,
-                            fontSize = 14.sp,
-                            color = SettingsTokens.TextWhite88
-                        )
+                        text = "Enjoying Euthopiar?",
+                        style = EuthopiarGlassTokens.HeaderTitle,
+                        textAlign = TextAlign.Center
                     )
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    Text(
+                        text = "Your contribution keeps the app free & open source.",
+                        style = EuthopiarGlassTokens.HeaderSubtitle,
+                        textAlign = TextAlign.Center
+                    )
+                }
+
+                // Subtle Hairline Divider
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(EuthopiarGlassTokens.HairlineWidth)
+                        .background(EuthopiarGlassTokens.HairlineDivider)
+                )
+
+                // Scrollable Body Content
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(scrollState)
+                        .padding(horizontal = 24.dp, vertical = 20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    // 160dp Rounded QR Card with Hairline
+                    Box(
+                        modifier = Modifier
+                            .size(160.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Color.White)
+                            .border(
+                                width = 0.5.dp,
+                                color = Color.White.copy(alpha = 0.20f),
+                                shape = RoundedCornerShape(16.dp)
+                            )
+                            .padding(8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Image(
+                            painter = painterResource(id = R.drawable.qr_donation),
+                            contentDescription = "Buy Me a Coffee QR Code",
+                            modifier = Modifier.size(144.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(22.dp))
+
+                    // Primary Action: 48dp Solid White Pill
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .clip(CircleShape)
+                            .background(Color.White)
+                            .focusRequester(focusRequester)
+                            .settingsPressable(onClick = openDonationLink)
+                            .tvFocusable(
+                                shape = CircleShape,
+                                focusedBorderColor = Accent,
+                                onClick = openDonationLink
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            Text(
+                                text = "Donate",
+                                style = EuthopiarGlassTokens.PrimaryButtonText
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Icon(
+                                imageVector = Icons.Outlined.OpenInNew,
+                                contentDescription = null,
+                                tint = EuthopiarGlassTokens.TextDark,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Secondary Action: Quiet Text Button
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .settingsPressable(onClick = dismissWithAnim)
+                            .tvFocusable(shape = RoundedCornerShape(8.dp), onClick = dismissWithAnim)
+                            .padding(horizontal = 16.dp, vertical = 6.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "Maybe Later",
+                            style = EuthopiarGlassTokens.SecondaryButtonText
+                        )
+                    }
                 }
             }
         }

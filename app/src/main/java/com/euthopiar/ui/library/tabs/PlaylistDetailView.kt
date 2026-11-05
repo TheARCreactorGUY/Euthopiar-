@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -31,6 +32,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import com.euthopiar.ui.icons.LucideIcons
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.DeleteOutline
@@ -64,7 +66,7 @@ import coil3.compose.AsyncImage
 import com.euthopiar.data.local.PlaybackHistoryEntity
 import com.euthopiar.data.repository.Playlist
 import com.euthopiar.data.repository.PlaylistItem
-import com.euthopiar.ui.components.VelvetAlertDialog
+import com.euthopiar.ui.components.EuthopiarGlassDialog
 import com.euthopiar.ui.library.LibraryColors
 import com.euthopiar.ui.library.LibraryDimens
 import com.euthopiar.ui.library.LibraryTypography
@@ -75,9 +77,12 @@ import com.euthopiar.ui.library.components.LibraryHairlineDivider
 import com.euthopiar.ui.library.components.LibraryProgressBar
 import com.euthopiar.ui.library.components.PlaylistMosaic
 import com.euthopiar.ui.theme.AppFontFamily
+import com.euthopiar.ui.theme.EuthopiarGlassTokens
 import com.euthopiar.ui.theme.LocalReduceMotion
 import com.euthopiar.ui.theme.pressable
 import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.HazeTint
+import dev.chrisbanes.haze.hazeEffect
 import kotlinx.coroutines.delay
 
 @Composable
@@ -100,35 +105,41 @@ fun PlaylistDetailView(
     var showOverflowMenu by remember { mutableStateOf(false) }
 
     if (showDeleteConfirm) {
-        VelvetAlertDialog(
+        EuthopiarGlassDialog(
             onDismissRequest = { showDeleteConfirm = false },
-            title = "Delete playlist?",
+            title = "Delete Playlist?",
             message = "Are you sure you want to delete \"${com.euthopiar.ui.library.sanitizeTitle(playlist.title)}\"? This action cannot be undone.",
             confirmText = "Delete",
             dismissText = "Cancel",
+            icon = Icons.Outlined.DeleteOutline,
             isDestructive = true,
+            hazeState = hazeState,
             onConfirm = {
                 showDeleteConfirm = false
                 onDeletePlaylist?.invoke(playlist.id)
                 onBack()
-            }
+            },
+            onDismiss = { showDeleteConfirm = false }
         )
     }
 
     if (itemToRemove != null) {
         val targetItem = itemToRemove!!
-        VelvetAlertDialog(
+        EuthopiarGlassDialog(
             onDismissRequest = { itemToRemove = null },
-            title = "Remove from playlist?",
+            title = "Remove from Playlist?",
             message = "Remove \"${com.euthopiar.ui.library.sanitizeTitle(targetItem.title)}\" from this playlist?",
             confirmText = "Remove",
             dismissText = "Cancel",
+            icon = Icons.Outlined.DeleteOutline,
             isDestructive = true,
+            hazeState = hazeState,
             onConfirm = {
                 val key = targetItem.uniqueKey
                 itemToRemove = null
                 onRemoveItem?.invoke(key)
-            }
+            },
+            onDismiss = { itemToRemove = null }
         )
     }
 
@@ -254,15 +265,22 @@ fun PlaylistDetailView(
 
                 Spacer(modifier = Modifier.height(18.dp))
 
-                // Action Row: Solid white pill "Resume all", Glass pill "Download all"
+                val allCompleted = remember(playlist.items, historyMap) {
+                    playlist.items.isNotEmpty() && playlist.items.all { item ->
+                        historyMap[item.mediaId]?.isCompleted == true
+                    }
+                }
+                val resumePillLabel = if (allCompleted) "Replay all" else "Resume all"
+
+                // Action Row: Solid white pill "Resume all" / "Replay all", Glass pill "Download all"
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     LibraryGlassPill(
-                        text = "Resume all",
-                        icon = Icons.Default.PlayArrow,
+                        text = resumePillLabel,
+                        icon = LucideIcons.Play,
                         isPrimary = true,
                         onClick = onResumeAll,
                         hazeState = hazeState
@@ -305,15 +323,25 @@ fun PlaylistDetailView(
             modifier = Modifier
                 .fillMaxWidth()
                 .align(Alignment.TopCenter)
-                .background(
-                    if (isAmoled) Color.Black.copy(alpha = topBarBgAlpha)
-                    else Color(0xFF0F101B).copy(alpha = topBarBgAlpha)
+                .then(
+                    if (hazeState != null && isScrolled && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                        Modifier.hazeEffect(state = hazeState) {
+                            blurRadius = EuthopiarGlassTokens.BlurRadius
+                            tints = listOf(HazeTint((if (isAmoled) Color.Black else Color(0xFF0F1219)).copy(alpha = 0.85f)))
+                            fallbackTint = HazeTint(if (isAmoled) Color.Black else Color(0xFF0F1219))
+                        }
+                    } else {
+                        Modifier.background(
+                            if (isAmoled) Color.Black.copy(alpha = topBarBgAlpha)
+                            else Color(0xFF0F1219).copy(alpha = topBarBgAlpha)
+                        )
+                    }
                 )
                 .drawBehind {
                     if (topBarBorderAlpha > 0f) {
                         val stroke = 0.5.dp.toPx()
                         drawLine(
-                            color = Color.White.copy(alpha = topBarBorderAlpha),
+                            color = EuthopiarGlassTokens.HairlineBorder.copy(alpha = topBarBorderAlpha),
                             start = androidx.compose.ui.geometry.Offset(0f, size.height - stroke / 2),
                             end = androidx.compose.ui.geometry.Offset(size.width, size.height - stroke / 2),
                             strokeWidth = stroke
@@ -357,29 +385,15 @@ fun PlaylistDetailView(
                             hazeState = hazeState
                         )
 
-                        val menuBg = if (isAmoled) Color.Black.copy(alpha = 0.88f) else Color(0xFF0F101B).copy(alpha = 0.72f)
-                        val borderBrush = Brush.verticalGradient(
-                            listOf(
-                                Color.White.copy(alpha = 0.35f),
-                                Color.White.copy(alpha = 0.08f)
-                            )
-                        )
+                        val menuBg = if (isAmoled) Color.Black.copy(alpha = 0.94f) else Color(0xFF0F1219).copy(alpha = 0.92f)
 
                         DropdownMenu(
                             expanded = showOverflowMenu,
                             onDismissRequest = { showOverflowMenu = false },
                             modifier = Modifier
-                                .clip(RoundedCornerShape(12.dp))
+                                .clip(RoundedCornerShape(14.dp))
                                 .background(menuBg)
-                                .background(
-                                    Brush.verticalGradient(
-                                        listOf(
-                                            Color.White.copy(alpha = 0.08f),
-                                            Color.Transparent
-                                        )
-                                    )
-                                )
-                                .border(LibraryDimens.hairline, borderBrush, RoundedCornerShape(12.dp))
+                                .border(EuthopiarGlassTokens.HairlineWidth, EuthopiarGlassTokens.HairlineBorder, RoundedCornerShape(14.dp))
                         ) {
                             DropdownMenuItem(
                                 text = {
@@ -436,11 +450,11 @@ private fun StaggeredPlaylistRow(
     val animProgress = remember { Animatable(if (reduceMotion) 1f else 0f) }
 
     LaunchedEffect(Unit) {
-        if (!reduceMotion && index < 8) {
-            delay((index * 35L).coerceAtMost(300L))
+        if (!reduceMotion && index < 6) {
+            delay(index * 16L)
             animProgress.animateTo(
                 targetValue = 1f,
-                animationSpec = tween(durationMillis = 320, easing = FastOutSlowInEasing)
+                animationSpec = tween(durationMillis = 260, easing = LinearOutSlowInEasing)
             )
         } else {
             animProgress.snapTo(1f)
@@ -492,7 +506,7 @@ private fun StaggeredPlaylistRow(
                 .fillMaxWidth()
                 .height(68.dp)
                 .pressable(
-                    scaleDown = 0.98f,
+                    scaleDown = 0.96f,
                     role = Role.Button,
                     onLongClick = onLongClick,
                     onClick = onClick
@@ -505,7 +519,7 @@ private fun StaggeredPlaylistRow(
                 modifier = Modifier
                     .size(width = 40.dp, height = 56.dp)
                     .clip(RoundedCornerShape(10.dp))
-                    .border(LibraryDimens.hairline, LibraryColors.GlassBorder, RoundedCornerShape(10.dp))
+                    .border(EuthopiarGlassTokens.HairlineWidth, EuthopiarGlassTokens.HairlineBorder, RoundedCornerShape(10.dp))
                     .background(LibraryColors.Surface)
             ) {
                 val posterUrl = item.posterUrl ?: item.backdropUrl

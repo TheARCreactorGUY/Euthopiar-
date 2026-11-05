@@ -1,7 +1,6 @@
 package com.euthopiar.core.sync.simkl
 
 import com.euthopiar.core.BuildConfig
-
 import com.euthopiar.core.network.DohDns
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -64,6 +63,90 @@ class SimklClient(
                     Result.success(true)
                 } else {
                     Result.failure(IOException("Simkl scrobble failed: HTTP ${response.code}"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Fetches all items in the user's Simkl watchlist/library for given status:
+     * "plantowatch", "watching", "completed", "hold", "dropped"
+     * Endpoint: GET /sync/all-items/all/{status}
+     */
+    suspend fun getAllItems(token: String, status: String = "plantowatch"): Result<SimklAllItemsResponse> = withContext(Dispatchers.IO) {
+        if (token.isBlank()) return@withContext Result.failure(IllegalArgumentException("No token"))
+        try {
+            val request = Request.Builder()
+                .url("$BASE_URL/sync/all-items/all/$status")
+                .header("Content-Type", "application/json")
+                .header("simkl-api-key", clientId)
+                .header("Authorization", "Bearer $token")
+                .get()
+                .build()
+
+            httpClient.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val raw = response.body?.string() ?: ""
+                    val parsed = json.decodeFromString<SimklAllItemsResponse>(raw)
+                    Result.success(parsed)
+                } else {
+                    Result.failure(IOException("Failed to fetch Simkl items: HTTP ${response.code}"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Adds items to Simkl library/watchlist.
+     * Endpoint: POST /sync/add-to-list
+     */
+    suspend fun addToLibrary(token: String, payload: SimklSyncPayload): Result<Boolean> = withContext(Dispatchers.IO) {
+        if (token.isBlank()) return@withContext Result.failure(IllegalArgumentException("No token"))
+        try {
+            val request = Request.Builder()
+                .url("$BASE_URL/sync/add-to-list")
+                .header("Content-Type", "application/json")
+                .header("simkl-api-key", clientId)
+                .header("Authorization", "Bearer $token")
+                .post(json.encodeToString(payload).toRequestBody(jsonMediaType))
+                .build()
+
+            httpClient.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    Result.success(true)
+                } else {
+                    Result.failure(IOException("Simkl add to list failed: HTTP ${response.code}"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Removes items from Simkl library.
+     * Endpoint: POST /sync/delete
+     */
+    suspend fun removeFromLibrary(token: String, payload: SimklSyncPayload): Result<Boolean> = withContext(Dispatchers.IO) {
+        if (token.isBlank()) return@withContext Result.failure(IllegalArgumentException("No token"))
+        try {
+            val request = Request.Builder()
+                .url("$BASE_URL/sync/delete")
+                .header("Content-Type", "application/json")
+                .header("simkl-api-key", clientId)
+                .header("Authorization", "Bearer $token")
+                .post(json.encodeToString(payload).toRequestBody(jsonMediaType))
+                .build()
+
+            httpClient.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    Result.success(true)
+                } else {
+                    Result.failure(IOException("Simkl remove failed: HTTP ${response.code}"))
                 }
             }
         } catch (e: Exception) {

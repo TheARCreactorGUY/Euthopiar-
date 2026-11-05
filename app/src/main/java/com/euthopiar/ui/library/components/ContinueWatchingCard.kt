@@ -1,6 +1,7 @@
 package com.euthopiar.ui.library.components
 
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -23,6 +24,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import com.euthopiar.ui.icons.LucideIcons
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -43,6 +45,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.euthopiar.data.local.PlaybackHistoryEntity
@@ -124,8 +127,8 @@ fun ContinueWatchingCard(
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val cardScale by animateFloatAsState(
-        targetValue = if (isPressed && !reduceMotion) 0.98f else 1f,
-        animationSpec = tween(120),
+        targetValue = if (isPressed && !reduceMotion) 0.96f else 1f,
+        animationSpec = if (reduceMotion) tween(0) else spring(dampingRatio = 0.75f, stiffness = 550f),
         label = "cardPressScale"
     )
 
@@ -153,14 +156,13 @@ fun ContinueWatchingCard(
     ) {
         // Backdrop image
         val imageUrl = historyItem.backdropUrl ?: historyItem.posterUrl
-        if (!imageUrl.isNullOrBlank()) {
-            AsyncImage(
-                model = imageUrl,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
-        }
+        com.euthopiar.ui.components.AppAsyncImage(
+            model = imageUrl,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            titleForFallback = sanitizeTitle(historyItem.title),
+            modifier = Modifier.fillMaxSize()
+        )
 
         // Dark gradient overlay at bottom for strong readability
         Box(
@@ -183,8 +185,8 @@ fun ContinueWatchingCard(
                 .align(Alignment.TopStart)
                 .padding(start = 14.dp, top = 14.dp)
                 .clip(RoundedCornerShape(10.dp))
-                .background(Color.White.copy(alpha = 0.08f))
-                .border(0.5.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(10.dp))
+                .background(Color(0xFF0F1219).copy(alpha = 0.78f))
+                .border(0.5.dp, Color.White.copy(alpha = 0.20f), RoundedCornerShape(10.dp))
                 .padding(horizontal = 10.dp, vertical = 5.dp)
         ) {
             Text(
@@ -230,7 +232,7 @@ fun ContinueWatchingCard(
                         fontWeight = FontWeight.Medium,
                         fontSize = 26.sp,
                         lineHeight = 28.sp,
-                        letterSpacing = (-0.03).sp,
+                        letterSpacing = (-0.03).em,
                         color = Color.White
                     ),
                     maxLines = 1,
@@ -256,7 +258,7 @@ fun ContinueWatchingCard(
             val isPlayPressed by playInteractionSource.collectIsPressedAsState()
             val playScale by animateFloatAsState(
                 targetValue = if (isPlayPressed && !reduceMotion) 0.92f else 1f,
-                animationSpec = tween(100),
+                animationSpec = if (reduceMotion) tween(0) else spring(dampingRatio = 0.65f, stiffness = 550f),
                 label = "playScale"
             )
 
@@ -279,7 +281,7 @@ fun ContinueWatchingCard(
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    imageVector = Icons.Default.PlayArrow,
+                    imageVector = LucideIcons.Play,
                     contentDescription = null,
                     tint = Color(0xFF0B0B0F),
                     modifier = Modifier.size(24.dp)
@@ -291,7 +293,7 @@ fun ContinueWatchingCard(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(2.dp)
+                .height(2.5.dp)
                 .align(Alignment.BottomStart)
                 .background(Color.White.copy(alpha = 0.14f))
         ) {

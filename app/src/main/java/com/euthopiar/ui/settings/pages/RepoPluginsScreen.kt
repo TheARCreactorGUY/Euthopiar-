@@ -38,6 +38,7 @@ import com.euthopiar.core.model.PluginManifest
 import com.euthopiar.core.model.PluginRepositoryIndex
 import com.euthopiar.ui.settings.PluginManagerViewModel
 import com.euthopiar.ui.settings.plugins.*
+import com.euthopiar.ui.theme.AppFontFamily
 import com.euthopiar.ui.theme.LocalAmoledMode
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
@@ -335,29 +336,36 @@ fun RepoPluginsScreen(
 
                         Box(
                             modifier = Modifier
-                                .height(34.dp)
-                                .clip(RoundedCornerShape(PluginsGlassTokens.RadiusPill))
-                                .background(pillBg)
-                                .then(
-                                    if (!isSelected) Modifier.border(
-                                        PluginsGlassTokens.HairlineWidth,
-                                        PluginsGlassTokens.HairlineBorder,
-                                        RoundedCornerShape(PluginsGlassTokens.RadiusPill)
-                                    ) else Modifier
-                                )
+                                .defaultMinSize(minHeight = 48.dp)
                                 .pluginsPressable(scaleDown = 0.98f) {
                                     try { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) } catch (_: Exception) {}
                                     selectedCategory = cat
-                                }
-                                .padding(horizontal = 16.dp),
+                                },
                             contentAlignment = Alignment.Center
                         ) {
-                            Text(
-                                text = cat,
-                                color = textColor,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Medium
-                            )
+                            Box(
+                                modifier = Modifier
+                                    .height(34.dp)
+                                    .clip(RoundedCornerShape(PluginsGlassTokens.RadiusPill))
+                                    .background(pillBg)
+                                    .then(
+                                        if (!isSelected) Modifier.border(
+                                            PluginsGlassTokens.HairlineWidth,
+                                            PluginsGlassTokens.HairlineBorder,
+                                            RoundedCornerShape(PluginsGlassTokens.RadiusPill)
+                                        ) else Modifier
+                                    )
+                                    .padding(horizontal = 16.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = cat,
+                                    color = textColor,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    fontFamily = AppFontFamily
+                                )
+                            }
                         }
                     }
                     Spacer(modifier = Modifier.width(16.dp))
@@ -462,9 +470,10 @@ fun RepoPluginsScreen(
 
                 else -> {
                     // Hairline-divided scraper rows sitting directly on background
+                    val navBarBottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                        contentPadding = PaddingValues(start = 20.dp, top = 8.dp, end = 20.dp, bottom = 24.dp + navBarBottomInset)
                     ) {
                         items(filteredPlugins.distinctBy { it.id }, key = { it.id }) { plugin ->
                             val isInstalled = isPluginInstalled(plugin)

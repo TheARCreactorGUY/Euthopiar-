@@ -1,9 +1,11 @@
 package com.euthopiar.ui.profile
 
+import android.os.Build
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.keyframes
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -58,8 +60,12 @@ import com.euthopiar.data.profile.UserProfile
 import com.euthopiar.data.profile.hashPin
 import com.euthopiar.ui.components.tvFocusable
 import com.euthopiar.ui.theme.AppFontFamily
+import com.euthopiar.ui.theme.EuthopiarGlassTokens
 import com.euthopiar.ui.theme.LocalAmoledMode
 import com.euthopiar.ui.theme.LocalReduceMotion
+import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.HazeTint
+import dev.chrisbanes.haze.hazeEffect
 import kotlin.math.roundToInt
 
 /**
@@ -244,13 +250,14 @@ private fun KeypadButton(
 
 /**
  * PIN Challenge Dialog shown when switching into a locked profile.
- * Restyled with frosted glass recipe, large 26 sp headline, white text, no red.
+ * Restyled with frosted glass recipe matching UpdateInfoDialog.
  */
 @Composable
 fun PinChallengeDialog(
     profile: UserProfile,
     onDismissRequest: () -> Unit,
-    onSuccess: () -> Unit
+    onSuccess: () -> Unit,
+    hazeState: HazeState? = null
 ) {
     var enteredPin by remember { mutableStateOf("") }
     var isError by remember { mutableStateOf(false) }
@@ -258,7 +265,9 @@ fun PinChallengeDialog(
     val haptic = LocalHapticFeedback.current
     val isAmoled = LocalAmoledMode.current
 
-    val dialogBg = if (isAmoled) ProfileGlassTokens.AmoledBackground else ProfileGlassTokens.BaseDarkBackground
+    val cardShape = RoundedCornerShape(EuthopiarGlassTokens.RadiusDialog)
+    val cardFill = EuthopiarGlassTokens.cardFill(isAmoled)
+    val fallbackColor = EuthopiarGlassTokens.fallbackFill(isAmoled)
 
     val reduceMotion = LocalReduceMotion.current
     val coroutineScope = rememberCoroutineScope()
@@ -267,7 +276,10 @@ fun PinChallengeDialog(
 
     LaunchedEffect(Unit) {
         if (!reduceMotion) {
-            dialogAnim.animateTo(1f, tween(200, easing = FastOutSlowInEasing))
+            dialogAnim.animateTo(
+                targetValue = 1f,
+                animationSpec = spring(dampingRatio = 0.78f, stiffness = 550f)
+            )
         } else {
             dialogAnim.snapTo(1f)
         }
@@ -278,7 +290,7 @@ fun PinChallengeDialog(
         isClosing = true
         coroutineScope.launch {
             if (!reduceMotion) {
-                dialogAnim.animateTo(0f, tween(160, easing = FastOutSlowInEasing))
+                dialogAnim.animateTo(0f, tween(180))
             }
             action()
         }
@@ -328,6 +340,11 @@ fun PinChallengeDialog(
         }
     }
 
+    val animVal = dialogAnim.value
+    val scrimAlpha = if (reduceMotion) EuthopiarGlassTokens.ScrimAlpha else (EuthopiarGlassTokens.ScrimAlpha * animVal).coerceIn(0f, EuthopiarGlassTokens.ScrimAlpha)
+    val cardScale = if (reduceMotion) 1f else 0.94f + 0.06f * animVal
+    val cardTranslationY = if (reduceMotion) 0f else (1f - animVal) * 30f
+
     Dialog(
         onDismissRequest = { animateDismiss(onDismissRequest) },
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -335,7 +352,7 @@ fun PinChallengeDialog(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.72f * dialogAnim.value))
+                .background(Color.Black.copy(alpha = scrimAlpha))
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -347,14 +364,28 @@ fun PinChallengeDialog(
                 modifier = Modifier
                     .fillMaxWidth(0.90f)
                     .graphicsLayer {
-                        alpha = dialogAnim.value
-                        val scale = 0.94f + (0.06f * dialogAnim.value)
-                        scaleX = scale
-                        scaleY = scale
+                        alpha = animVal
+                        scaleX = cardScale
+                        scaleY = cardScale
+                        translationY = cardTranslationY
                     }
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(dialogBg)
-                    .border(ProfileGlassTokens.HairlineWidthDp, ProfileGlassTokens.HairlineBorder, RoundedCornerShape(20.dp))
+                    .clip(cardShape)
+                    .then(
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hazeState != null) {
+                            Modifier.hazeEffect(state = hazeState) {
+                                blurRadius = EuthopiarGlassTokens.BlurRadius
+                                tints = listOf(HazeTint(cardFill))
+                                fallbackTint = HazeTint(fallbackColor)
+                            }
+                        } else {
+                            Modifier.background(fallbackColor)
+                        }
+                    )
+                    .border(
+                        width = EuthopiarGlassTokens.HairlineWidth,
+                        color = EuthopiarGlassTokens.HairlineBorder,
+                        shape = cardShape
+                    )
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
@@ -379,29 +410,17 @@ fun PinChallengeDialog(
 
                     Text(
                         text = profile.name,
-                        style = TextStyle(
-                            fontFamily = AppFontFamily,
-                            fontWeight = FontWeight.Medium,
-                            fontSize = 26.sp,
-                            lineHeight = 28.sp,
-                            color = Color.White
-                        )
+                        style = EuthopiarGlassTokens.HeaderTitle
                     )
 
                     Spacer(modifier = Modifier.height(4.dp))
 
                     Text(
                         text = "Enter 4-digit PIN to switch in",
-                        style = TextStyle(
-                            fontFamily = AppFontFamily,
-                            fontWeight = FontWeight.Normal,
-                            fontSize = 13.sp,
-                            lineHeight = 16.sp,
-                            color = ProfileGlassTokens.TextMuted50
-                        )
+                        style = EuthopiarGlassTokens.HeaderSubtitle
                     )
 
-                    Spacer(modifier = Modifier.height(22.dp))
+                    Spacer(modifier = Modifier.height(20.dp))
 
                     PinDots(
                         pinLength = enteredPin.length,
@@ -433,7 +452,7 @@ fun PinChallengeDialog(
                     ProfileGlassPill(
                         text = "Cancel",
                         onClick = onDismissRequest,
-                        visualHeight = 36.dp,
+                        visualHeight = 40.dp,
                         fontSize = 13
                     )
                 }
@@ -449,12 +468,13 @@ private enum class SetupPinStep {
 
 /**
  * 2-Step PIN Creator Dialog: Enter PIN -> Confirm PIN -> Verified.
- * Restyled with frosted glass recipe, large 26 sp headline, white text, no red.
+ * Restyled with frosted glass recipe matching UpdateInfoDialog.
  */
 @Composable
 fun PinCreatorDialog(
     onDismissRequest: () -> Unit,
-    onPinConfirmed: (String) -> Unit
+    onPinConfirmed: (String) -> Unit,
+    hazeState: HazeState? = null
 ) {
     var step by remember { mutableStateOf(SetupPinStep.ENTER_NEW) }
     var firstPin by remember { mutableStateOf("") }
@@ -464,7 +484,9 @@ fun PinCreatorDialog(
     val haptic = LocalHapticFeedback.current
     val isAmoled = LocalAmoledMode.current
 
-    val dialogBg = if (isAmoled) ProfileGlassTokens.AmoledBackground else ProfileGlassTokens.BaseDarkBackground
+    val cardShape = RoundedCornerShape(EuthopiarGlassTokens.RadiusDialog)
+    val cardFill = EuthopiarGlassTokens.cardFill(isAmoled)
+    val fallbackColor = EuthopiarGlassTokens.fallbackFill(isAmoled)
     val currentEntered = if (step == SetupPinStep.ENTER_NEW) firstPin else confirmPin
 
     val reduceMotion = LocalReduceMotion.current
@@ -474,7 +496,10 @@ fun PinCreatorDialog(
 
     LaunchedEffect(Unit) {
         if (!reduceMotion) {
-            dialogAnim.animateTo(1f, tween(200, easing = FastOutSlowInEasing))
+            dialogAnim.animateTo(
+                targetValue = 1f,
+                animationSpec = spring(dampingRatio = 0.78f, stiffness = 550f)
+            )
         } else {
             dialogAnim.snapTo(1f)
         }
@@ -485,7 +510,7 @@ fun PinCreatorDialog(
         isClosing = true
         coroutineScope.launch {
             if (!reduceMotion) {
-                dialogAnim.animateTo(0f, tween(160, easing = FastOutSlowInEasing))
+                dialogAnim.animateTo(0f, tween(180))
             }
             action()
         }
@@ -544,6 +569,11 @@ fun PinCreatorDialog(
         }
     }
 
+    val animVal = dialogAnim.value
+    val scrimAlpha = if (reduceMotion) EuthopiarGlassTokens.ScrimAlpha else (EuthopiarGlassTokens.ScrimAlpha * animVal).coerceIn(0f, EuthopiarGlassTokens.ScrimAlpha)
+    val cardScale = if (reduceMotion) 1f else 0.94f + 0.06f * animVal
+    val cardTranslationY = if (reduceMotion) 0f else (1f - animVal) * 30f
+
     Dialog(
         onDismissRequest = { animateDismiss(onDismissRequest) },
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -551,7 +581,7 @@ fun PinCreatorDialog(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.72f * dialogAnim.value))
+                .background(Color.Black.copy(alpha = scrimAlpha))
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -563,14 +593,28 @@ fun PinCreatorDialog(
                 modifier = Modifier
                     .fillMaxWidth(0.90f)
                     .graphicsLayer {
-                        alpha = dialogAnim.value
-                        val scale = 0.94f + (0.06f * dialogAnim.value)
-                        scaleX = scale
-                        scaleY = scale
+                        alpha = animVal
+                        scaleX = cardScale
+                        scaleY = cardScale
+                        translationY = cardTranslationY
                     }
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(dialogBg)
-                    .border(ProfileGlassTokens.HairlineWidthDp, ProfileGlassTokens.HairlineBorder, RoundedCornerShape(20.dp))
+                    .clip(cardShape)
+                    .then(
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hazeState != null) {
+                            Modifier.hazeEffect(state = hazeState) {
+                                blurRadius = EuthopiarGlassTokens.BlurRadius
+                                tints = listOf(HazeTint(cardFill))
+                                fallbackTint = HazeTint(fallbackColor)
+                            }
+                        } else {
+                            Modifier.background(fallbackColor)
+                        }
+                    )
+                    .border(
+                        width = EuthopiarGlassTokens.HairlineWidth,
+                        color = EuthopiarGlassTokens.HairlineBorder,
+                        shape = cardShape
+                    )
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
@@ -590,13 +634,7 @@ fun PinCreatorDialog(
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(
                                 text = if (currentStep == SetupPinStep.ENTER_NEW) "Set 4-Digit PIN" else "Confirm PIN",
-                                style = TextStyle(
-                                    fontFamily = AppFontFamily,
-                                    fontWeight = FontWeight.Medium,
-                                    fontSize = 26.sp,
-                                    lineHeight = 28.sp,
-                                    color = Color.White
-                                )
+                                style = EuthopiarGlassTokens.HeaderTitle
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
@@ -605,19 +643,13 @@ fun PinCreatorDialog(
                                 } else {
                                     "Re-enter the 4-digit PIN to confirm"
                                 },
-                                style = TextStyle(
-                                    fontFamily = AppFontFamily,
-                                    fontWeight = FontWeight.Normal,
-                                    fontSize = 13.sp,
-                                    lineHeight = 16.sp,
-                                    color = ProfileGlassTokens.TextMuted50
-                                ),
+                                style = EuthopiarGlassTokens.HeaderSubtitle,
                                 textAlign = TextAlign.Center
                             )
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(22.dp))
+                    Spacer(modifier = Modifier.height(20.dp))
 
                     PinDots(
                         pinLength = currentEntered.length,
@@ -649,7 +681,7 @@ fun PinCreatorDialog(
                     ProfileGlassPill(
                         text = "Cancel",
                         onClick = onDismissRequest,
-                        visualHeight = 36.dp,
+                        visualHeight = 40.dp,
                         fontSize = 13
                     )
                 }

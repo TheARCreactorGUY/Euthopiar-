@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import com.euthopiar.ui.icons.LucideIcons
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.CircularProgressIndicator
@@ -40,6 +41,7 @@ import com.euthopiar.ui.theme.pressable
  * 30dp progress ring with 2dp stroke, 10% white track, crimson arc, round caps.
  * Tap ring to pause/resume/retry.
  */
+@Deprecated("Deprecated in favor of unified Library shared components")
 @Composable
 fun DownloadProgressRing(
     item: DownloadItem,
@@ -104,7 +106,7 @@ fun DownloadProgressRing(
                 )
                 // Resume icon (Play arrow)
                 Icon(
-                    imageVector = Icons.Default.PlayArrow,
+                    imageVector = LucideIcons.Play,
                     contentDescription = "Resume",
                     tint = LibraryColors.TextWhite,
                     modifier = Modifier.size(15.dp)
@@ -122,7 +124,7 @@ fun DownloadProgressRing(
                 )
                 // Explicit Pause icon inside the ring
                 Icon(
-                    imageVector = Icons.Default.Pause,
+                    imageVector = LucideIcons.Pause,
                     contentDescription = "Pause",
                     tint = LibraryColors.Crimson,
                     modifier = Modifier.size(13.dp)

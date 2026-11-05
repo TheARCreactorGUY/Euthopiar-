@@ -225,20 +225,18 @@ fun PlayerSidePanel(
             enter = if (reduceMotion) {
                 fadeIn(tween(PlayerTokens.ReduceMotionFadeInMs))
             } else {
-                val slidePx = with(density) { 40.dp.roundToPx() }
                 slideInHorizontally(
-                    initialOffsetX = { slidePx },
-                    animationSpec = spring(dampingRatio = 0.98f, stiffness = 700f)
-                ) + fadeIn(spring(dampingRatio = 0.98f, stiffness = 700f))
+                    initialOffsetX = { it },
+                    animationSpec = spring(dampingRatio = 0.85f, stiffness = 420f)
+                ) + fadeIn(spring(dampingRatio = 0.85f, stiffness = 420f))
             },
             exit = if (reduceMotion) {
                 fadeOut(tween(PlayerTokens.ReduceMotionFadeOutMs))
             } else {
-                val slidePx = with(density) { 40.dp.roundToPx() }
                 slideOutHorizontally(
-                    targetOffsetX = { slidePx },
-                    animationSpec = spring(dampingRatio = 0.98f, stiffness = 700f)
-                ) + fadeOut(spring(dampingRatio = 0.98f, stiffness = 700f))
+                    targetOffsetX = { it },
+                    animationSpec = spring(dampingRatio = 0.85f, stiffness = 420f)
+                ) + fadeOut(spring(dampingRatio = 0.85f, stiffness = 420f))
             },
             modifier = Modifier.align(Alignment.CenterEnd)
         ) {
@@ -278,8 +276,7 @@ fun PlayerSidePanel(
 
                         Box(
                             modifier = Modifier
-                                .size(34.dp)
-                                .videoOverlayGlass(shape = PlayerTokens.RadiusCircle)
+                                .size(48.dp)
                                 .tvFocusable(shape = PlayerTokens.RadiusCircle)
                                 .playerPressable(
                                     role = Role.Button,
@@ -288,12 +285,19 @@ fun PlayerSidePanel(
                                 ),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(
-                                imageVector = Icons.Outlined.Close,
-                                contentDescription = "Close",
-                                tint = Color.White,
-                                modifier = Modifier.size(18.dp)
-                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .videoOverlayGlass(shape = PlayerTokens.RadiusCircle),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Close,
+                                    contentDescription = "Close",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
                         }
                     }
 

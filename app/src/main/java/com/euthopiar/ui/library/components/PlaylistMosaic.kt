@@ -16,6 +16,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.Dp
@@ -24,19 +25,21 @@ import coil3.compose.AsyncImage
 import com.euthopiar.ui.library.LibraryColors
 
 /**
- * 2x2 mosaic of four posters:
- * - Edge to edge inside the given shape/bounds
- * - Flat translucent #0B0B0F overlay (about 45% - 55%) for legibility
- * - Handles 0, 1, 2, 3, or 4 posters gracefully
+ * Editorial mosaic for playlist covers:
+ * - 0 posters: calm muted video library glyph
+ * - 1 poster: full cover
+ * - 2 posters: 2 horizontal landscape bands (top/bottom) preserving faces & subjects
+ * - 3 posters: 1 dominant left column + 2 stacked right columns (no duplicate 4th card)
+ * - 4+ posters: balanced 2x2 mosaic
  */
 @Composable
 fun PlaylistMosaic(
     posters: List<String?>,
     modifier: Modifier = Modifier,
     cornerRadius: Dp = 0.dp,
-    overlayAlpha: Float = 0.50f
+    overlayAlpha: Float = 0.35f
 ) {
-    val shape: Shape = if (cornerRadius > 0.dp) RoundedCornerShape(cornerRadius) else androidx.compose.ui.graphics.RectangleShape
+    val shape: Shape = if (cornerRadius > 0.dp) RoundedCornerShape(cornerRadius) else RectangleShape
     val validPosters = posters.filter { !it.isNullOrBlank() }
 
     Box(
@@ -66,30 +69,67 @@ fun PlaylistMosaic(
                 modifier = Modifier.fillMaxSize()
             )
         } else if (validPosters.size == 2) {
-            Row(modifier = Modifier.fillMaxSize()) {
+            Column(modifier = Modifier.fillMaxSize()) {
                 AsyncImage(
                     model = validPosters[0],
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
+                        .fillMaxWidth()
                         .weight(1f)
-                        .fillMaxHeight()
                 )
                 AsyncImage(
                     model = validPosters[1],
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
+                        .fillMaxWidth()
                         .weight(1f)
-                        .fillMaxHeight()
                 )
             }
+        } else if (validPosters.size == 3) {
+            Row(modifier = Modifier.fillMaxSize()) {
+                Box(
+                    modifier = Modifier
+                        .weight(1.05f)
+                        .fillMaxHeight()
+                ) {
+                    AsyncImage(
+                        model = validPosters[0],
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+                Column(
+                    modifier = Modifier
+                        .weight(0.95f)
+                        .fillMaxHeight()
+                ) {
+                    Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                        AsyncImage(
+                            model = validPosters[1],
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                    Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                        AsyncImage(
+                            model = validPosters[2],
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                }
+            }
         } else {
-            // 3 or 4 posters -> 2x2 mosaic
+            // 4+ posters -> 2x2 mosaic
             val p0 = validPosters.getOrNull(0)
             val p1 = validPosters.getOrNull(1)
             val p2 = validPosters.getOrNull(2)
-            val p3 = validPosters.getOrNull(3) ?: validPosters.getOrNull(0)
+            val p3 = validPosters.getOrNull(3)
 
             Column(modifier = Modifier.fillMaxSize()) {
                 Row(
@@ -147,12 +187,12 @@ fun PlaylistMosaic(
             }
         }
 
-        // Flat translucent #0B0B0F overlay across the image (no gradients)
+        // Soft translucent overlay across the image
         if (overlayAlpha > 0f) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(LibraryColors.Background.copy(alpha = overlayAlpha))
+                    .background(Color(0xFF0B0B0F).copy(alpha = overlayAlpha))
             )
         }
     }

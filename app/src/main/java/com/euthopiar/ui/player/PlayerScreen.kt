@@ -31,7 +31,7 @@ import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.PlayArrow
+import com.euthopiar.ui.icons.LucideIcons
 import androidx.compose.material.icons.outlined.WifiOff
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
@@ -1283,7 +1283,7 @@ fun UpNextCountdownCard(
                         horizontalArrangement = Arrangement.Center
                     ) {
                         Icon(
-                            imageVector = Icons.Outlined.PlayArrow,
+                            imageVector = LucideIcons.Play,
                             contentDescription = null,
                             tint = PlayerTokens.LabelDark,
                             modifier = Modifier.size(20.dp)

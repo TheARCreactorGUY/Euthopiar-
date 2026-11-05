@@ -38,7 +38,7 @@ import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.FileDownload
 import androidx.compose.material.icons.rounded.Info
-import androidx.compose.material.icons.rounded.PlayArrow
+import com.euthopiar.ui.icons.LucideIcons
 import androidx.compose.material.icons.rounded.Share
 import com.euthopiar.ui.library.sanitizeTitle
 import androidx.compose.material3.CircularProgressIndicator
@@ -306,7 +306,7 @@ fun TrailerCardSheet(
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
-                                imageVector = Icons.Rounded.PlayArrow,
+                                imageVector = LucideIcons.Play,
                                 contentDescription = "Play trailer",
                                 tint = Color.White,
                                 modifier = Modifier.size(28.dp)

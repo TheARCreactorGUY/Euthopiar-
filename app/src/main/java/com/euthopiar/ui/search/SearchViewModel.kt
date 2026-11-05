@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 enum class SearchSortOption(val displayName: String) {
     BEST_MATCH("Best match"),
@@ -131,7 +132,7 @@ class SearchViewModel(
         selectedYearFilter.value = null
         selectedProviderFilter.value = null
         selectedQualityFilter.value = null
-        selectedSort.value = SearchSortOption.BEST_MATCH
+        // Note: Preserves selectedSort so user preference remains intact
     }
 
     fun setProviderFilter(provider: String?) {
@@ -184,8 +185,15 @@ class SearchViewModel(
     fun loadTrending() {
         viewModelScope.launch {
             if (currentQuery.value.isNotBlank() && isResultsActive.value) return@launch
+            val cached = _cachedTrendingItems.value
+            if (cached.isNotEmpty()) {
+                if (currentQuery.value.isBlank() || !isResultsActive.value) {
+                    _uiState.value = SearchUiState.Trending(items = cached, isLoading = false)
+                }
+                return@launch
+            }
             _uiState.value = SearchUiState.Trending(
-                items = (_uiState.value as? SearchUiState.Trending)?.items ?: _cachedTrendingItems.value,
+                items = emptyList(),
                 isLoading = true
             )
             try {
@@ -231,7 +239,9 @@ class SearchViewModel(
                 _uiState.value = SearchUiState.Searching
             }
             try {
-                val results = repository.search(trimmed, isGlobal = true)
+                val results = withTimeoutOrNull(15000L) {
+                    repository.search(trimmed, isGlobal = true)
+                } ?: emptyList()
                 isRefining.value = false
                 if (results.isEmpty()) {
                     _uiState.value = SearchUiState.Empty(trimmed)
@@ -254,39 +264,43 @@ class SearchViewModel(
         currentQuery.value = newQuery
         searchJob?.cancel()
 
-        if (newQuery.isBlank()) {
+        val clean = newQuery.trim()
+        if (clean.isBlank()) {
             isRefining.value = false
-            if (!isResultsActive.value) {
-                loadTrending()
-            } else {
+            if (isResultsActive.value) {
                 _uiState.value = SearchUiState.Results("", emptyList())
+            } else {
+                loadTrending()
             }
             return
         }
 
-        // Live debounce (300ms) only when results screen is active
-        if (isResultsActive.value) {
+        // Live discovery: if query length >= 2, automatically activate Results screen with debounce
+        if (clean.length >= 2) {
+            isResultsActive.value = true
             val hasExistingResults = _uiState.value is SearchUiState.Results
             if (hasExistingResults) {
                 isRefining.value = true
             }
             searchJob = viewModelScope.launch {
-                delay(300)
+                delay(350)
                 if (!hasExistingResults) {
                     _uiState.value = SearchUiState.Searching
                 }
                 try {
-                    val results = repository.search(newQuery.trim(), isGlobal = true)
+                    val results = withTimeoutOrNull(15000L) {
+                        repository.search(clean, isGlobal = true)
+                    } ?: emptyList()
                     isRefining.value = false
                     if (results.isEmpty()) {
-                        _uiState.value = SearchUiState.Empty(newQuery)
+                        _uiState.value = SearchUiState.Empty(clean)
                     } else {
-                        _uiState.value = SearchUiState.Results(newQuery, results)
+                        _uiState.value = SearchUiState.Results(clean, results)
                     }
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) throw e
                     isRefining.value = false
-                    android.util.Log.w("SearchViewModel", "Search failed for query '$newQuery'", e)
+                    android.util.Log.w("SearchViewModel", "Search failed for query '$clean'", e)
                     _uiState.value = SearchUiState.Error(
                         error = e.toUserError(),
                         message = ""
@@ -326,10 +340,10 @@ class SearchViewModel(
         searchJob?.cancel()
         isRefining.value = false
         currentQuery.value = ""
-        if (!isResultsActive.value) {
-            loadTrending()
-        } else {
+        if (isResultsActive.value) {
             _uiState.value = SearchUiState.Results("", emptyList())
+        } else {
+            loadTrending()
         }
     }
 }

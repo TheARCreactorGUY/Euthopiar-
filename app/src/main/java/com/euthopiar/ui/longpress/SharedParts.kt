@@ -31,7 +31,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.PlayArrow
+import com.euthopiar.ui.icons.LucideIcons
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -175,7 +175,7 @@ fun PrimaryPill(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     height: Dp = 48.dp,
-    icon: ImageVector = Icons.Rounded.PlayArrow
+    icon: ImageVector = LucideIcons.Play
 ) {
     Row(
         modifier = modifier

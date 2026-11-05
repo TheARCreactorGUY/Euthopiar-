@@ -264,7 +264,7 @@ object LibraryTypography {
 
 object LibraryDimens {
     val hairline = 0.5.dp
-    val underlineHeight = 1.5.dp
+    val underlineHeight = 2.dp
     val minTouchTarget = 48.dp
     val progressBarHeight = 2.dp
     val toggleWidth = 34.dp
@@ -275,7 +275,7 @@ object LibraryDimens {
     val chipRadius = 10.dp
     val controlRadius = 14.dp
     val iconTileRadius = 14.dp
-    val storageMeterHeight = 3.dp
+    val storageMeterHeight = 4.dp
     val progressRingSize = 30.dp
     val progressRingStroke = 2.dp
     val badgeDiscSize = 22.dp

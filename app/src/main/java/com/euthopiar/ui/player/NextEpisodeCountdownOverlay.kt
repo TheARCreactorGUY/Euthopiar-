@@ -8,7 +8,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.PlayArrow
+import com.euthopiar.ui.icons.LucideIcons
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -119,7 +119,7 @@ fun NextEpisodeCountdownOverlay(
                             horizontalArrangement = Arrangement.Center
                         ) {
                             Icon(
-                                imageVector = Icons.Outlined.PlayArrow,
+                                imageVector = LucideIcons.Play,
                                 contentDescription = null,
                                 tint = PlayerTokens.LabelDark,
                                 modifier = Modifier.size(18.dp)
