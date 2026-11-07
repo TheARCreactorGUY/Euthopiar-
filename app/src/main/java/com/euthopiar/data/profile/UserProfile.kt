@@ -177,9 +177,10 @@ class ProfileManager private constructor(context: Context) {
         } else {
             defaultProfiles()
         }
-        _profiles.value = list
+        val normalizedList = list.map { if (it.id == "primary_profile") it.copy(id = "default_user") else it }
+        _profiles.value = normalizedList
 
-        val activeId = prefs.getString(KEY_ACTIVE_ID, list.firstOrNull()?.id ?: "default_user") ?: "default_user"
+        val activeId = (prefs.getString(KEY_ACTIVE_ID, normalizedList.firstOrNull()?.id ?: "default_user") ?: "default_user").let { if (it == "primary_profile") "default_user" else it }
         _activeProfileId.value = activeId
         _activeProfile.value = list.firstOrNull { it.id == activeId } ?: list.firstOrNull() ?: defaultProfiles().first()
     }
@@ -195,7 +196,8 @@ class ProfileManager private constructor(context: Context) {
 
     private fun saveProfiles(list: List<UserProfile>) {
         prefs.edit().putString(KEY_PROFILES, json.encodeToString(list)).apply()
-        _profiles.value = list
+        val normalizedList = list.map { if (it.id == "primary_profile") it.copy(id = "default_user") else it }
+        _profiles.value = normalizedList
     }
 
     fun switchProfile(profileId: String): Boolean {
@@ -296,33 +298,83 @@ class ProfileManager private constructor(context: Context) {
     }
 
     /**
-     * Sets the user-created profile during Act 2 onboarding as the initial main profile.
+     * Sets the user-created profile during Act 2 onboarding as the initial main profile,
+     * preserving any additional sub-profiles restored from cloud sync.
      */
     fun setInitialPrimaryProfile(
         name: String,
         avatarId: String,
         type: ProfileType,
         isLocked: Boolean,
-        pin: String?
+        pin: String?,
+        pinHash: String? = null
     ): UserProfile {
-        val finalPinHash = if (!pin.isNullOrBlank()) hashPin(pin) else null
+        val existingPrimary = _profiles.value.firstOrNull { it.id == "default_user" }
+        val finalPinHash = when {
+            !pin.isNullOrBlank() -> hashPin(pin)
+            !pinHash.isNullOrBlank() -> pinHash
+            isLocked -> existingPrimary?.pinHash
+            else -> null
+        }
         val mainProfile = UserProfile(
-            id = "primary_profile",
-            name = name.trim().ifEmpty { "Cinephile" },
+            id = "default_user",
+            name = name.trim().ifEmpty { existingPrimary?.name ?: "Cinephile" },
             type = type,
-            isLocked = isLocked,
+            isLocked = isLocked && !finalPinHash.isNullOrBlank(),
             pin = null,
             pinHash = finalPinHash,
             avatarId = avatarId,
             avatarPresetId = avatarId,
             isKids = (type == ProfileType.KIDS)
         )
-        // Store as the singular initial profile
-        saveProfiles(listOf(mainProfile))
+        // Preserve any cloud-restored non-default sub-profiles (excluding the default placeholder "cinema_user" if unedited)
+        val additionalProfiles = _profiles.value.filter { it.id != "default_user" && it.id != "cinema_user" }
+        saveProfiles(listOf(mainProfile) + additionalProfiles)
         _activeProfileId.value = mainProfile.id
         _activeProfile.value = mainProfile
         prefs.edit().putString(KEY_ACTIVE_ID, mainProfile.id).apply()
         return mainProfile
+    }
+
+    /**
+     * Merges remote profiles pulled from Supabase Cloud Sync with local profiles.
+     */
+    fun mergeRemoteProfiles(remoteProfiles: List<com.euthopiar.core.sync.supabase.CloudUserProfile>) {
+        if (remoteProfiles.isEmpty()) return
+        val currentMap = _profiles.value.associateBy { it.id }.toMutableMap()
+        for (remote in remoteProfiles) {
+            val normId = if (remote.profileId == "primary_profile") "default_user" else remote.profileId
+            if (remote.isDeleted) {
+                if (normId != "default_user") {
+                    currentMap.remove(normId)
+                }
+                continue
+            }
+            val existing = currentMap[normId]
+            val role = try {
+                ProfileType.valueOf(remote.profileType.uppercase())
+            } catch (_: Exception) {
+                existing?.type ?: if (normId == "default_user") ProfileType.ADMIN else ProfileType.STANDARD
+            }
+            val resolvedAvatarId = remote.avatarId.ifBlank { existing?.avatarId ?: "avatar_1" }
+            val resolvedPinHash = remote.pinHash?.takeIf { it.isNotBlank() } ?: existing?.pinHash
+            currentMap[normId] = UserProfile(
+                id = normId,
+                name = remote.name.ifBlank { existing?.name ?: "Primary" },
+                type = role,
+                isLocked = !resolvedPinHash.isNullOrBlank(),
+                pin = null,
+                pinHash = resolvedPinHash,
+                avatarId = resolvedAvatarId,
+                avatarPresetId = resolvedAvatarId,
+                avatarColorIndex = existing?.avatarColorIndex ?: 0,
+                isKids = (role == ProfileType.KIDS)
+            )
+        }
+        val finalList = currentMap.values.toList().ifEmpty { defaultProfiles() }
+        saveProfiles(finalList)
+        val currentActiveId = _activeProfileId.value
+        _activeProfile.value = finalList.firstOrNull { it.id == currentActiveId } ?: finalList.first()
     }
 
     /**

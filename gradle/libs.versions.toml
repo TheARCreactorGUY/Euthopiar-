@@ -16,6 +16,8 @@ room = "2.6.1"
 ksp = "2.0.21-1.0.28"
 haze = "1.7.2"
 youtubePlayer = "12.1.1"
+credentials = "1.3.0"
+googleid = "1.1.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -63,6 +65,11 @@ room-compiler = { group = "androidx.room", name = "room-compiler", version.ref =
 
 # YouTube Player
 youtube-player = { group = "com.pierfrancescosoffritti.androidyoutubeplayer", name = "core", version.ref = "youtubePlayer" }
+
+# Google Identity & Credentials
+androidx-credentials = { group = "androidx.credentials", name = "credentials", version.ref = "credentials" }
+androidx-credentials-play-services-auth = { group = "androidx.credentials", name = "credentials-play-services-auth", version.ref = "credentials" }
+google-id = { group = "com.google.android.libraries.identity.googleid", name = "googleid", version.ref = "googleid" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

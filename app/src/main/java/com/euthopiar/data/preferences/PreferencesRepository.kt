@@ -6,10 +6,12 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
 import com.euthopiar.core.model.ContentRegionPreset
+import com.euthopiar.core.sync.supabase.SupabaseSession
 import com.euthopiar.ui.longpress.LongPressSheetStyle
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import java.io.IOException
 
@@ -152,6 +154,26 @@ class PreferencesRepository private constructor(private val context: Context) {
         val LAST_APP_VERSION = stringPreferencesKey("last_app_version")
         val LAST_APP_VERSION_CODE = intPreferencesKey("last_app_version_code")
         val WALKTHROUGH_COMPLETED_VERSION = stringPreferencesKey("walkthrough_completed_version")
+
+        // 1.6 Supabase Cloud Sync
+        val SUPABASE_ACCESS_TOKEN = stringPreferencesKey("supabase_access_token")
+        val SUPABASE_REFRESH_TOKEN = stringPreferencesKey("supabase_refresh_token")
+        val SUPABASE_EXPIRES_IN = longPreferencesKey("supabase_expires_in")
+        val SUPABASE_EXPIRES_AT = longPreferencesKey("supabase_expires_at")
+        val SUPABASE_USER_ID = stringPreferencesKey("supabase_user_id")
+        val SUPABASE_USER_EMAIL = stringPreferencesKey("supabase_user_email")
+        val SUPABASE_USER_DISPLAY_NAME = stringPreferencesKey("supabase_user_display_name")
+        val SUPABASE_USER_AVATAR = stringPreferencesKey("supabase_user_avatar")
+        val SUPABASE_LAST_SYNC_TIMESTAMP = longPreferencesKey("supabase_last_sync_timestamp")
+        val SUPABASE_LAST_SYNCED_USER_ID = stringPreferencesKey("supabase_last_synced_user_id")
+        val SUPABASE_PLAYBACK_WATERMARK = stringPreferencesKey("supabase_playback_watermark")
+        val SUPABASE_WATCHLIST_WATERMARK = stringPreferencesKey("supabase_watchlist_watermark")
+        val SUPABASE_PLAYLISTS_WATERMARK = stringPreferencesKey("supabase_playlists_watermark")
+        val SUPABASE_CLOUD_SYNC_ENABLED = booleanPreferencesKey("supabase_cloud_sync_enabled")
+        val SUPABASE_SYNC_PLAYBACK = booleanPreferencesKey("supabase_sync_playback")
+        val SUPABASE_SYNC_WATCHLIST = booleanPreferencesKey("supabase_sync_watchlist")
+        val SUPABASE_SYNC_PLAYLISTS = booleanPreferencesKey("supabase_sync_playlists")
+        val SUPABASE_SYNC_SETTINGS = booleanPreferencesKey("supabase_sync_settings")
     }
     val dohProvider: Flow<String> = context.preferencesDataStore.data
         .catch { exception ->
@@ -785,6 +807,7 @@ class PreferencesRepository private constructor(private val context: Context) {
             }
             preferences[PreferencesKeys.MEDIA_REACTIONS] = current.entries.joinToString(";") { "${it.key}=${it.value}" }
         }
+        com.euthopiar.data.sync.supabase.SupabaseSyncManager.getInstance(context).scheduleSync()
     }
 
     val reduceMotion: Flow<Boolean> = context.preferencesDataStore.data
@@ -834,6 +857,7 @@ class PreferencesRepository private constructor(private val context: Context) {
             val updated = if (mediaId in current) current - mediaId else current + mediaId
             preferences[PreferencesKeys.FAVORITE_MEDIA_IDS] = updated.joinToString(",")
         }
+        com.euthopiar.data.sync.supabase.SupabaseSyncManager.getInstance(context).scheduleSync()
     }
 
     suspend fun setFavorite(mediaId: String, isFavorite: Boolean) {
@@ -843,6 +867,7 @@ class PreferencesRepository private constructor(private val context: Context) {
             val updated = if (isFavorite) current + mediaId else current - mediaId
             preferences[PreferencesKeys.FAVORITE_MEDIA_IDS] = updated.joinToString(",")
         }
+        com.euthopiar.data.sync.supabase.SupabaseSyncManager.getInstance(context).scheduleSync()
     }
 
     suspend fun setFavoritesBatch(mediaIds: Collection<String>, isFavorite: Boolean) {
@@ -853,6 +878,7 @@ class PreferencesRepository private constructor(private val context: Context) {
             val updated = if (isFavorite) current + mediaIds else current - mediaIds
             preferences[PreferencesKeys.FAVORITE_MEDIA_IDS] = updated.joinToString(",")
         }
+        com.euthopiar.data.sync.supabase.SupabaseSyncManager.getInstance(context).scheduleSync()
     }
 
     val playbackBufferSizeMb: Flow<Int> = context.preferencesDataStore.data
@@ -1077,6 +1103,328 @@ class PreferencesRepository private constructor(private val context: Context) {
     suspend fun setWalkthroughCompletedVersion(version: String) {
         context.preferencesDataStore.edit { preferences ->
             preferences[PreferencesKeys.WALKTHROUGH_COMPLETED_VERSION] = version
+        }
+    }
+
+    val supabaseSession: Flow<SupabaseSession?> = context.preferencesDataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            val token = preferences[PreferencesKeys.SUPABASE_ACCESS_TOKEN]
+            val refresh = preferences[PreferencesKeys.SUPABASE_REFRESH_TOKEN]
+            val userId = preferences[PreferencesKeys.SUPABASE_USER_ID]
+            if (token != null && refresh != null && userId != null) {
+                SupabaseSession(
+                    accessToken = token,
+                    refreshToken = refresh,
+                    expiresIn = preferences[PreferencesKeys.SUPABASE_EXPIRES_IN] ?: 3600L,
+                    expiresAtMs = preferences[PreferencesKeys.SUPABASE_EXPIRES_AT] ?: (System.currentTimeMillis() + 3600_000L),
+                    userId = userId,
+                    email = preferences[PreferencesKeys.SUPABASE_USER_EMAIL],
+                    displayName = preferences[PreferencesKeys.SUPABASE_USER_DISPLAY_NAME],
+                    avatarUrl = preferences[PreferencesKeys.SUPABASE_USER_AVATAR]
+                )
+            } else null
+        }
+        .distinctUntilChanged()
+
+    suspend fun setSupabaseSession(session: SupabaseSession?) {
+        context.preferencesDataStore.edit { preferences ->
+            if (session != null) {
+                preferences[PreferencesKeys.SUPABASE_ACCESS_TOKEN] = session.accessToken
+                preferences[PreferencesKeys.SUPABASE_REFRESH_TOKEN] = session.refreshToken
+                preferences[PreferencesKeys.SUPABASE_EXPIRES_IN] = session.expiresIn
+                preferences[PreferencesKeys.SUPABASE_EXPIRES_AT] = session.expiresAtMs
+                preferences[PreferencesKeys.SUPABASE_USER_ID] = session.userId
+                val email = session.email
+                if (email != null) preferences[PreferencesKeys.SUPABASE_USER_EMAIL] = email else preferences.remove(PreferencesKeys.SUPABASE_USER_EMAIL)
+                val displayName = session.displayName
+                if (displayName != null) preferences[PreferencesKeys.SUPABASE_USER_DISPLAY_NAME] = displayName else preferences.remove(PreferencesKeys.SUPABASE_USER_DISPLAY_NAME)
+                val avatarUrl = session.avatarUrl
+                if (avatarUrl != null) preferences[PreferencesKeys.SUPABASE_USER_AVATAR] = avatarUrl else preferences.remove(PreferencesKeys.SUPABASE_USER_AVATAR)
+                preferences[PreferencesKeys.SUPABASE_LAST_SYNCED_USER_ID] = session.userId
+            } else {
+                preferences.remove(PreferencesKeys.SUPABASE_ACCESS_TOKEN)
+                preferences.remove(PreferencesKeys.SUPABASE_REFRESH_TOKEN)
+                preferences.remove(PreferencesKeys.SUPABASE_EXPIRES_IN)
+                preferences.remove(PreferencesKeys.SUPABASE_EXPIRES_AT)
+                preferences.remove(PreferencesKeys.SUPABASE_USER_ID)
+                preferences.remove(PreferencesKeys.SUPABASE_USER_EMAIL)
+                preferences.remove(PreferencesKeys.SUPABASE_USER_DISPLAY_NAME)
+                preferences.remove(PreferencesKeys.SUPABASE_USER_AVATAR)
+            }
+        }
+    }
+
+    suspend fun clearSupabaseSession() {
+        setSupabaseSession(null)
+    }
+
+    val supabaseLastSyncTimestamp: Flow<Long> = context.preferencesDataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            preferences[PreferencesKeys.SUPABASE_LAST_SYNC_TIMESTAMP] ?: 0L
+        }
+        .distinctUntilChanged()
+
+    suspend fun setSupabaseLastSyncTimestamp(timestamp: Long) {
+        context.preferencesDataStore.edit { preferences ->
+            preferences[PreferencesKeys.SUPABASE_LAST_SYNC_TIMESTAMP] = timestamp
+        }
+    }
+
+    val supabaseCloudSyncEnabled: Flow<Boolean> = context.preferencesDataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            preferences[PreferencesKeys.SUPABASE_CLOUD_SYNC_ENABLED] ?: true
+        }
+        .distinctUntilChanged()
+
+    suspend fun setSupabaseCloudSyncEnabled(enabled: Boolean) {
+        context.preferencesDataStore.edit { preferences ->
+            preferences[PreferencesKeys.SUPABASE_CLOUD_SYNC_ENABLED] = enabled
+        }
+    }
+
+    val supabaseLastSyncedUserId: Flow<String?> = context.preferencesDataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            preferences[PreferencesKeys.SUPABASE_LAST_SYNCED_USER_ID]
+        }
+        .distinctUntilChanged()
+
+    suspend fun setSupabaseLastSyncedUserId(userId: String?) {
+        context.preferencesDataStore.edit { preferences ->
+            if (userId != null) preferences[PreferencesKeys.SUPABASE_LAST_SYNCED_USER_ID] = userId else preferences.remove(PreferencesKeys.SUPABASE_LAST_SYNCED_USER_ID)
+        }
+    }
+
+    val supabasePlaybackWatermark: Flow<String?> = context.preferencesDataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            preferences[PreferencesKeys.SUPABASE_PLAYBACK_WATERMARK]
+        }
+        .distinctUntilChanged()
+
+    suspend fun setSupabasePlaybackWatermark(watermark: String?) {
+        context.preferencesDataStore.edit { preferences ->
+            if (watermark != null) preferences[PreferencesKeys.SUPABASE_PLAYBACK_WATERMARK] = watermark else preferences.remove(PreferencesKeys.SUPABASE_PLAYBACK_WATERMARK)
+        }
+    }
+
+    val supabaseWatchlistWatermark: Flow<String?> = context.preferencesDataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            preferences[PreferencesKeys.SUPABASE_WATCHLIST_WATERMARK]
+        }
+        .distinctUntilChanged()
+
+    suspend fun setSupabaseWatchlistWatermark(watermark: String?) {
+        context.preferencesDataStore.edit { preferences ->
+            if (watermark != null) preferences[PreferencesKeys.SUPABASE_WATCHLIST_WATERMARK] = watermark else preferences.remove(PreferencesKeys.SUPABASE_WATCHLIST_WATERMARK)
+        }
+    }
+
+    val supabasePlaylistsWatermark: Flow<String?> = context.preferencesDataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            preferences[PreferencesKeys.SUPABASE_PLAYLISTS_WATERMARK]
+        }
+        .distinctUntilChanged()
+
+    suspend fun setSupabasePlaylistsWatermark(watermark: String?) {
+        context.preferencesDataStore.edit { preferences ->
+            if (watermark != null) preferences[PreferencesKeys.SUPABASE_PLAYLISTS_WATERMARK] = watermark else preferences.remove(PreferencesKeys.SUPABASE_PLAYLISTS_WATERMARK)
+        }
+    }
+
+    val supabaseSyncPlayback: Flow<Boolean> = context.preferencesDataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            preferences[PreferencesKeys.SUPABASE_SYNC_PLAYBACK] ?: true
+        }
+        .distinctUntilChanged()
+
+    suspend fun setSupabaseSyncPlayback(enabled: Boolean) {
+        context.preferencesDataStore.edit { preferences ->
+            preferences[PreferencesKeys.SUPABASE_SYNC_PLAYBACK] = enabled
+        }
+    }
+
+    val supabaseSyncWatchlist: Flow<Boolean> = context.preferencesDataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            preferences[PreferencesKeys.SUPABASE_SYNC_WATCHLIST] ?: true
+        }
+        .distinctUntilChanged()
+
+    suspend fun setSupabaseSyncWatchlist(enabled: Boolean) {
+        context.preferencesDataStore.edit { preferences ->
+            preferences[PreferencesKeys.SUPABASE_SYNC_WATCHLIST] = enabled
+        }
+    }
+
+    val supabaseSyncPlaylists: Flow<Boolean> = context.preferencesDataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            preferences[PreferencesKeys.SUPABASE_SYNC_PLAYLISTS] ?: true
+        }
+        .distinctUntilChanged()
+
+    suspend fun setSupabaseSyncPlaylists(enabled: Boolean) {
+        context.preferencesDataStore.edit { preferences ->
+            preferences[PreferencesKeys.SUPABASE_SYNC_PLAYLISTS] = enabled
+        }
+    }
+
+    val supabaseSyncSettings: Flow<Boolean> = context.preferencesDataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            preferences[PreferencesKeys.SUPABASE_SYNC_SETTINGS] ?: true
+        }
+        .distinctUntilChanged()
+
+    suspend fun setSupabaseSyncSettings(enabled: Boolean) {
+        context.preferencesDataStore.edit { preferences ->
+            preferences[PreferencesKeys.SUPABASE_SYNC_SETTINGS] = enabled
+        }
+    }
+
+    suspend fun getAllSyncableSettings(): Map<String, String> {
+        val prefs = context.preferencesDataStore.data.first()
+        val result = mutableMapOf<String, String>()
+        prefs[PreferencesKeys.CARD_SCALE_MODE]?.let { result["card_scale_mode"] = it }
+        prefs[PreferencesKeys.NAVBAR_STYLE]?.let { result["navbar_style"] = it }
+        prefs[PreferencesKeys.TOP_10_STYLE]?.let { result["top_10_style"] = it }
+        prefs[PreferencesKeys.SECTION_LABEL_STYLE]?.let { result["section_label_style"] = it }
+        prefs[PreferencesKeys.LONG_PRESS_STYLE]?.let { result["long_press_style"] = it }
+        prefs[PreferencesKeys.CONTENT_REGION_PRESET]?.let { result["content_region_preset"] = it }
+        prefs[PreferencesKeys.AMOLED_MODE]?.let { result["amoled_mode"] = it.toString() }
+        prefs[PreferencesKeys.DEFAULT_QUALITY]?.let { result["default_quality"] = it }
+        prefs[PreferencesKeys.AUTO_PLAY_NEXT_EPISODE]?.let { result["auto_play_next_episode"] = it.toString() }
+        prefs[PreferencesKeys.SEEK_INTERVAL_SECONDS]?.let { result["seek_interval_seconds"] = it.toString() }
+        prefs[PreferencesKeys.AUTO_SKIP_INTRO]?.let { result["auto_skip_intro"] = it.toString() }
+        prefs[PreferencesKeys.SKIP_INTRO_DURATION_SECONDS]?.let { result["skip_intro_duration_seconds"] = it.toString() }
+        prefs[PreferencesKeys.SKIP_OUTRO_DURATION_SECONDS]?.let { result["skip_outro_duration_seconds"] = it.toString() }
+        prefs[PreferencesKeys.COUNTDOWN_NEXT_EPISODE_SECONDS]?.let { result["countdown_next_episode_seconds"] = it.toString() }
+        prefs[PreferencesKeys.SUBTITLE_SIZE_SP]?.let { result["subtitle_size_sp"] = it.toString() }
+        prefs[PreferencesKeys.SUBTITLE_COLOR]?.let { result["subtitle_color"] = it }
+        prefs[PreferencesKeys.SUBTITLE_OUTLINE]?.let { result["subtitle_outline"] = it.toString() }
+        prefs[PreferencesKeys.SUBTITLE_BACKGROUND_ENABLED]?.let { result["subtitle_background_enabled"] = it.toString() }
+        prefs[PreferencesKeys.EXTERNAL_SUBTITLES_ENABLED]?.let { result["external_subtitles_enabled"] = it.toString() }
+        prefs[PreferencesKeys.HARDWARE_ACCELERATION_ENABLED]?.let { result["hardware_acceleration_enabled"] = it.toString() }
+        prefs[PreferencesKeys.SMART_FAILOVER_ENABLED]?.let { result["smart_failover_enabled"] = it.toString() }
+        prefs[PreferencesKeys.AUDIO_PASSTHROUGH_ENABLED]?.let { result["audio_passthrough_enabled"] = it.toString() }
+        prefs[PreferencesKeys.WIFI_ONLY_DOWNLOADS]?.let { result["wifi_only_downloads"] = it.toString() }
+        prefs[PreferencesKeys.EXTRA_CONTENT_ENABLED]?.let { result["extra_content_enabled"] = it.toString() }
+        prefs[PreferencesKeys.REDUCE_MOTION]?.let { result["reduce_motion"] = it.toString() }
+        prefs[PreferencesKeys.FAVORITE_MEDIA_IDS]?.let { if (it.isNotBlank()) result["favorite_media_ids"] = it }
+        prefs[PreferencesKeys.MEDIA_REACTIONS]?.let { if (it.isNotBlank()) result["media_reactions"] = it }
+        prefs[PreferencesKeys.ACTIVE_PROVIDER]?.let { if (it.isNotBlank()) result["active_provider"] = it }
+        prefs[PreferencesKeys.REPOSITORY_URLS]?.let { urls ->
+            if (urls.isNotEmpty()) result["repository_urls"] = urls.joinToString(",")
+        }
+        prefs[PreferencesKeys.DISABLED_PLUGINS]?.let { disabled ->
+            if (disabled.isNotEmpty()) result["disabled_plugins"] = disabled.joinToString(",")
+        }
+        return result
+    }
+
+    suspend fun applySyncableSettings(settings: Map<String, String>) {
+        context.preferencesDataStore.edit { prefs ->
+            settings["card_scale_mode"]?.let { prefs[PreferencesKeys.CARD_SCALE_MODE] = it }
+            settings["navbar_style"]?.let { prefs[PreferencesKeys.NAVBAR_STYLE] = it }
+            settings["top_10_style"]?.let { prefs[PreferencesKeys.TOP_10_STYLE] = it }
+            settings["section_label_style"]?.let { prefs[PreferencesKeys.SECTION_LABEL_STYLE] = it }
+            settings["long_press_style"]?.let { prefs[PreferencesKeys.LONG_PRESS_STYLE] = it }
+            settings["content_region_preset"]?.let { presetId ->
+                prefs[PreferencesKeys.CONTENT_REGION_PRESET] = presetId
+                com.euthopiar.core.util.TmdbBridge.activeRegionPreset = ContentRegionPreset.fromId(presetId)
+            }
+            settings["amoled_mode"]?.toBooleanStrictOrNull()?.let { prefs[PreferencesKeys.AMOLED_MODE] = it }
+            settings["default_quality"]?.let { prefs[PreferencesKeys.DEFAULT_QUALITY] = it }
+            settings["auto_play_next_episode"]?.toBooleanStrictOrNull()?.let { prefs[PreferencesKeys.AUTO_PLAY_NEXT_EPISODE] = it }
+            settings["seek_interval_seconds"]?.toIntOrNull()?.let { prefs[PreferencesKeys.SEEK_INTERVAL_SECONDS] = it }
+            settings["auto_skip_intro"]?.toBooleanStrictOrNull()?.let { prefs[PreferencesKeys.AUTO_SKIP_INTRO] = it }
+            settings["skip_intro_duration_seconds"]?.toIntOrNull()?.let { prefs[PreferencesKeys.SKIP_INTRO_DURATION_SECONDS] = it }
+            settings["skip_outro_duration_seconds"]?.toIntOrNull()?.let { prefs[PreferencesKeys.SKIP_OUTRO_DURATION_SECONDS] = it }
+            settings["countdown_next_episode_seconds"]?.toIntOrNull()?.let { prefs[PreferencesKeys.COUNTDOWN_NEXT_EPISODE_SECONDS] = it }
+            settings["subtitle_size_sp"]?.toIntOrNull()?.let { prefs[PreferencesKeys.SUBTITLE_SIZE_SP] = it }
+            settings["subtitle_color"]?.let { prefs[PreferencesKeys.SUBTITLE_COLOR] = it }
+            settings["subtitle_outline"]?.toBooleanStrictOrNull()?.let { prefs[PreferencesKeys.SUBTITLE_OUTLINE] = it }
+            settings["subtitle_background_enabled"]?.toBooleanStrictOrNull()?.let { prefs[PreferencesKeys.SUBTITLE_BACKGROUND_ENABLED] = it }
+            settings["external_subtitles_enabled"]?.toBooleanStrictOrNull()?.let { prefs[PreferencesKeys.EXTERNAL_SUBTITLES_ENABLED] = it }
+            settings["hardware_acceleration_enabled"]?.toBooleanStrictOrNull()?.let { prefs[PreferencesKeys.HARDWARE_ACCELERATION_ENABLED] = it }
+            settings["smart_failover_enabled"]?.toBooleanStrictOrNull()?.let { prefs[PreferencesKeys.SMART_FAILOVER_ENABLED] = it }
+            settings["audio_passthrough_enabled"]?.toBooleanStrictOrNull()?.let { prefs[PreferencesKeys.AUDIO_PASSTHROUGH_ENABLED] = it }
+            settings["wifi_only_downloads"]?.toBooleanStrictOrNull()?.let { prefs[PreferencesKeys.WIFI_ONLY_DOWNLOADS] = it }
+            settings["extra_content_enabled"]?.toBooleanStrictOrNull()?.let { prefs[PreferencesKeys.EXTRA_CONTENT_ENABLED] = it }
+            settings["reduce_motion"]?.toBooleanStrictOrNull()?.let { prefs[PreferencesKeys.REDUCE_MOTION] = it }
+
+            // Merge favorite_media_ids (union of local + remote so favorites are never lost)
+            settings["favorite_media_ids"]?.let { remoteFavsRaw ->
+                val localFavsRaw = prefs[PreferencesKeys.FAVORITE_MEDIA_IDS] ?: ""
+                val mergedFavs = (localFavsRaw.split(",") + remoteFavsRaw.split(","))
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                    .toSet()
+                if (mergedFavs.isNotEmpty()) {
+                    prefs[PreferencesKeys.FAVORITE_MEDIA_IDS] = mergedFavs.joinToString(",")
+                }
+            }
+
+            // Merge media_reactions
+            settings["media_reactions"]?.let { remoteReactions ->
+                if (remoteReactions.isNotBlank()) {
+                    val localRaw = prefs[PreferencesKeys.MEDIA_REACTIONS] ?: ""
+                    val mergedMap = mutableMapOf<String, String>()
+                    localRaw.split(";").forEach { entry ->
+                        val parts = entry.split("=")
+                        if (parts.size == 2 && parts[0].isNotBlank()) mergedMap[parts[0]] = parts[1]
+                    }
+                    remoteReactions.split(";").forEach { entry ->
+                        val parts = entry.split("=")
+                        if (parts.size == 2 && parts[0].isNotBlank()) mergedMap[parts[0]] = parts[1]
+                    }
+                    prefs[PreferencesKeys.MEDIA_REACTIONS] = mergedMap.entries.joinToString(";") { "${it.key}=${it.value}" }
+                }
+            }
+
+            settings["active_provider"]?.let { if (it.isNotBlank()) prefs[PreferencesKeys.ACTIVE_PROVIDER] = it }
+
+            settings["repository_urls"]?.let { remoteUrlsCsv ->
+                val remoteUrls = remoteUrlsCsv.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+                if (remoteUrls.isNotEmpty()) {
+                    val currentUrls = prefs[PreferencesKeys.REPOSITORY_URLS] ?: emptySet()
+                    prefs[PreferencesKeys.REPOSITORY_URLS] = currentUrls + remoteUrls
+                }
+            }
+
+            settings["disabled_plugins"]?.let { remoteDisabledCsv ->
+                val remoteDisabled = remoteDisabledCsv.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+                prefs[PreferencesKeys.DISABLED_PLUGINS] = remoteDisabled
+            }
         }
     }
 

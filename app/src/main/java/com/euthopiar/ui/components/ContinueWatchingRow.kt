@@ -1,20 +1,28 @@
 package com.euthopiar.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Movie
+import androidx.compose.material.icons.outlined.Tv
+import androidx.compose.material.icons.outlined.VisibilityOff
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -24,43 +32,28 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
-import coil3.request.ImageRequest
-import coil3.request.crossfade
-import com.euthopiar.data.local.PlaybackHistoryEntity
-import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Movie
-import androidx.compose.material.icons.outlined.Tv
-import androidx.compose.material.icons.outlined.VisibilityOff
-import androidx.compose.material3.Icon
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
-import com.euthopiar.ui.theme.Accent
+import com.euthopiar.data.local.PlaybackHistoryEntity
 import com.euthopiar.ui.theme.AppFontFamily
-import com.euthopiar.ui.theme.AppTypography
 import com.euthopiar.ui.theme.Dimens
 import com.euthopiar.ui.theme.ShapeM
-import com.euthopiar.ui.theme.SurfaceHigh
 import com.euthopiar.ui.theme.SurfaceLow
 import com.euthopiar.ui.theme.TextPrimary
-import com.euthopiar.ui.theme.TextSecondary
 import com.euthopiar.ui.theme.pressable
 import com.euthopiar.ui.theme.rememberWindowDimensions
 
 /**
  * Modern Netflix / Apple TV style Continue Watching Row.
  * Uses 16:9 widescreen thumbnails with a crisp Accent red bottom progress line,
- * single clean title/episode label below, and zero duplicate badges.
+ * single clean title/episode label below, and dynamic scale-aware spacing across 3 card sizes.
  */
 @Composable
 fun ContinueWatchingRow(
@@ -76,6 +69,10 @@ fun ContinueWatchingRow(
     var itemToDelete by remember { mutableStateOf<PlaybackHistoryEntity?>(null) }
     var showClearAllDialog by remember { mutableStateOf(false) }
     val windowDimensions = rememberWindowDimensions()
+    val scaleMode = LocalCardScaleMode.current
+    val horizontalGap = CardDimensions.horizontalCardGap(scaleMode)
+    val bottomPadding = CardDimensions.railBottomSpacing(scaleMode)
+
     val continueWatchingState = androidx.compose.runtime.saveable.rememberSaveable(
         "continue_watching_row",
         saver = androidx.compose.foundation.lazy.LazyListState.Saver
@@ -86,7 +83,7 @@ fun ContinueWatchingRow(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = Dimens.spacing8)
+            .padding(bottom = bottomPadding)
     ) {
         SectionHeader(
             title = "Continue Watching",
@@ -98,7 +95,7 @@ fun ContinueWatchingRow(
         LazyRow(
             state = continueWatchingState,
             contentPadding = PaddingValues(horizontal = windowDimensions.horizontalMargin),
-            horizontalArrangement = Arrangement.spacedBy(Dimens.spacing12),
+            horizontalArrangement = Arrangement.spacedBy(horizontalGap),
             modifier = Modifier.fillMaxWidth()
         ) {
             items(
@@ -170,7 +167,9 @@ fun ContinueWatchingCard(
 ) {
     val scaleMode = LocalCardScaleMode.current
     val cardWidth = CardDimensions.horizontalWidth(scaleMode)
-    val context = LocalContext.current
+    val titleTopGap = CardDimensions.titleTopSpacing(scaleMode)
+    val titleFontSize = CardDimensions.titleFontSize(scaleMode)
+    val titleLineHeight = CardDimensions.titleLineHeight(scaleMode)
 
     val progress = if (item.durationMs > 0) {
         (item.currentPositionMs.toFloat() / item.durationMs.toFloat()).coerceIn(0f, 1f)
@@ -261,14 +260,20 @@ fun ContinueWatchingCard(
             }
         }
 
-        Spacer(modifier = Modifier.height(Dimens.spacing4))
+        Spacer(modifier = Modifier.height(titleTopGap))
 
-        // Single clean text line below: Title
+        // Dynamic single clean text line below: Title
         Text(
             text = item.title,
-            style = AppTypography.labelMedium,
-            fontWeight = FontWeight.Medium,
-            color = TextPrimary,
+            style = TextStyle(
+                fontFamily = AppFontFamily,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = titleFontSize,
+                lineHeight = titleLineHeight,
+                letterSpacing = (-0.01).em,
+                color = TextPrimary,
+                platformStyle = PlatformTextStyle(includeFontPadding = false)
+            ),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )

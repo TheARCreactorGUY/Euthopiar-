@@ -2,7 +2,6 @@ package com.euthopiar.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -12,34 +11,26 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.material3.Text
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
-import coil3.request.ImageRequest
 import com.euthopiar.ui.library.sanitizeTitle
-import com.euthopiar.ui.theme.Accent
-import com.euthopiar.ui.theme.AppTypography
 import com.euthopiar.ui.theme.Dimens
-import com.euthopiar.ui.theme.ShapeS
-import com.euthopiar.ui.theme.SurfaceHigh
 import com.euthopiar.ui.theme.SurfaceLow
-import com.euthopiar.ui.theme.TextPrimary
 import com.euthopiar.ui.theme.pressable
 
 /**
  * Modern artwork-first 2:3 poster card inspired by Apple TV and Netflix.
- * High-performance, clean geometry with 8dp rounded corners and no heavy chrome.
+ * High-performance, clean geometry with dynamic corner radius and optional inline IMDb rating.
  */
 @Composable
 fun PosterCard(
@@ -49,6 +40,7 @@ fun PosterCard(
     modifier: Modifier = Modifier,
     width: Dp = Dimens.posterWidthCompact,
     showTitleBelow: Boolean = true,
+    rating: String? = null,
     progress: Float? = null,
     year: Int? = null,
     type: String? = null,
@@ -57,13 +49,17 @@ fun PosterCard(
     releaseDate: String? = null,
     onLongClick: (() -> Unit)? = null
 ) {
-    val context = LocalContext.current
+    val scaleMode = LocalCardScaleMode.current
+    val cardShape = RoundedCornerShape(CardDimensions.posterCornerRadius(scaleMode))
+    val titleTopGap = CardDimensions.titleTopSpacing(scaleMode)
 
     val widthModifier = if (width != Dp.Unspecified) Modifier.width(width) else Modifier.fillMaxWidth()
 
-    val cleanTitle = androidx.compose.runtime.remember(title) { sanitizeTitle(title) }
+    val cleanTitle = remember(title) { sanitizeTitle(title) }
+    val formattedScore = remember(rating) { formatImdbScoreValue(rating) }
     val a11yDescription = buildString {
         append(cleanTitle)
+        if (formattedScore != null) append(", IMDb $formattedScore out of 10")
         if (year != null) append(", $year")
         if (!type.isNullOrBlank()) append(", $type")
         if (progress != null && progress in 0f..1f) {
@@ -79,15 +75,15 @@ fun PosterCard(
                 contentDescription = a11yDescription
             }
             .pressable(onClick = onClick, onLongClick = onLongClick)
-            .tvFocusable(shape = ShapeS)
+            .tvFocusable(shape = cardShape)
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(Dimens.posterAspectRatio)
-                .clip(ShapeS)
+                .clip(cardShape)
                 .background(SurfaceLow)
-                .border(0.5.dp, Color.White.copy(alpha = 0.03f), ShapeS)
+                .border(0.5.dp, Color.White.copy(alpha = 0.08f), cardShape)
         ) {
             AppAsyncImage(
                 model = posterUrl,
@@ -115,14 +111,11 @@ fun PosterCard(
         }
 
         if (showTitleBelow) {
-            Spacer(modifier = Modifier.height(Dimens.spacing4))
-            Text(
-                text = cleanTitle,
-                style = AppTypography.labelMedium,
-                fontWeight = FontWeight.Medium,
-                color = TextPrimary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+            Spacer(modifier = Modifier.height(titleTopGap))
+            MediaCardTitleAndRatingRow(
+                title = cleanTitle,
+                rawRating = rating,
+                scaleMode = scaleMode
             )
         }
     }

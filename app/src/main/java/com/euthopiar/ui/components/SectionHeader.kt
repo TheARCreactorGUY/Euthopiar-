@@ -34,7 +34,6 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.rotate
@@ -43,7 +42,6 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
@@ -68,7 +66,8 @@ private val SectionTitleGradient = Brush.verticalGradient(
 
 /**
  * Modern Multi-Style Section Header supporting AccentBar, Eyebrow, and RuleLine styles.
- * Guarantees zero layout shift across styles via identical padding and structure.
+ * Dynamically adapts its vertical rhythm (generous top separation from the previous rail,
+ * tight proximity to its own cards below) and typography across all 3 CardScaleMode sizes.
  */
 @Composable
 fun SectionHeader(
@@ -81,12 +80,20 @@ fun SectionHeader(
     actionLabel: String = "See all"
 ) {
     val windowDimensions = rememberWindowDimensions()
+    val scaleMode = LocalCardScaleMode.current
+
+    val topSpacing = CardDimensions.railTopSpacing(scaleMode)
+    val bottomSpacing = CardDimensions.headerToCardsSpacing(scaleMode)
+    val titleFontSize = CardDimensions.sectionTitleFontSize(scaleMode)
+    val subtitleFontSize = CardDimensions.sectionSubtitleFontSize(scaleMode)
+    val hasSubtitle = !subtitle.isNullOrBlank()
+    val accentBarHeight = CardDimensions.sectionAccentBarHeight(scaleMode, hasSubtitle)
 
     Row(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = windowDimensions.horizontalMargin)
-            .padding(top = Dimens.spacing12, bottom = Dimens.spacing8),
+            .padding(top = topSpacing, bottom = bottomSpacing),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -96,30 +103,34 @@ fun SectionHeader(
                     modifier = Modifier.weight(1f, fill = false),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Vertical accent bar on the left (width 3dp, rounded, height matches text block)
+                    // Vertical accent bar on the left (width 3.5dp, rounded, height matches text block)
                     Box(
                         modifier = Modifier
-                            .width(3.dp)
-                            .height(if (!subtitle.isNullOrBlank()) 38.dp else 22.dp)
-                            .clip(RoundedCornerShape(1.5.dp))
+                            .width(3.5.dp)
+                            .height(accentBarHeight)
+                            .clip(RoundedCornerShape(1.75.dp))
                             .background(Accent)
                     )
-                    Spacer(modifier = Modifier.width(10.dp))
+                    Spacer(modifier = Modifier.width(11.dp))
                     Column(verticalArrangement = Arrangement.Center) {
                         Text(
                             text = title,
-                            style = AppTypography.titleLarge.copy(fontSize = 20.sp, fontWeight = FontWeight.Medium),
+                            style = AppTypography.titleLarge.copy(
+                                fontSize = titleFontSize,
+                                fontWeight = FontWeight.SemiBold,
+                                letterSpacing = (-0.015).em
+                            ),
                             color = TextPrimary,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.semantics { heading() }
                         )
-                        if (!subtitle.isNullOrBlank()) {
+                        if (hasSubtitle) {
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = subtitle,
-                                style = AppTypography.bodySmall.copy(fontSize = 12.sp),
-                                color = TextPrimary.copy(alpha = 0.70f),
+                                text = subtitle.orEmpty(),
+                                style = AppTypography.bodySmall.copy(fontSize = subtitleFontSize),
+                                color = TextPrimary.copy(alpha = 0.68f),
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -148,22 +159,26 @@ fun SectionHeader(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
-                        Spacer(modifier = Modifier.height(2.dp))
+                        Spacer(modifier = Modifier.height(3.dp))
                     }
                     Text(
                         text = title,
-                        style = AppTypography.titleLarge.copy(fontSize = 20.sp, fontWeight = FontWeight.Medium),
+                        style = AppTypography.titleLarge.copy(
+                            fontSize = titleFontSize,
+                            fontWeight = FontWeight.SemiBold,
+                            letterSpacing = (-0.015).em
+                        ),
                         color = TextPrimary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.semantics { heading() }
                     )
-                    if (!subtitle.isNullOrBlank()) {
+                    if (hasSubtitle) {
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = subtitle,
-                            style = AppTypography.bodySmall.copy(fontSize = 12.sp),
-                            color = TextPrimary.copy(alpha = 0.70f),
+                            text = subtitle.orEmpty(),
+                            style = AppTypography.bodySmall.copy(fontSize = subtitleFontSize),
+                            color = TextPrimary.copy(alpha = 0.68f),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -185,7 +200,11 @@ fun SectionHeader(
                     ) {
                         Text(
                             text = title,
-                            style = AppTypography.titleLarge.copy(fontSize = 20.sp, fontWeight = FontWeight.Medium),
+                            style = AppTypography.titleLarge.copy(
+                                fontSize = titleFontSize,
+                                fontWeight = FontWeight.SemiBold,
+                                letterSpacing = (-0.015).em
+                            ),
                             color = TextPrimary,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -204,12 +223,12 @@ fun SectionHeader(
                             SectionHeaderSeeAllButton(actionLabel = actionLabel, title = title, onSeeAll = onSeeAll)
                         }
                     }
-                    if (!subtitle.isNullOrBlank()) {
+                    if (hasSubtitle) {
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = subtitle,
-                            style = AppTypography.bodySmall.copy(fontSize = 12.sp),
-                            color = TextPrimary.copy(alpha = 0.70f),
+                            text = subtitle.orEmpty(),
+                            style = AppTypography.bodySmall.copy(fontSize = subtitleFontSize),
+                            color = TextPrimary.copy(alpha = 0.68f),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -525,4 +544,3 @@ private fun DrawScope.drawSunrayShine(
         blendMode = BlendMode.Screen
     )
 }
-

@@ -132,9 +132,10 @@ class MainActivity : ComponentActivity() {
             com.euthopiar.ui.splash.AppLaunchCoordinator.reset()
         }
 
-        // Automatic background reconciliation for Trakt & Simkl
+        // Automatic background reconciliation for Trakt, Simkl & Supabase Cloud
         lifecycleScope.launch(Dispatchers.IO) {
             com.euthopiar.data.sync.MediaSyncManager.getInstance(applicationContext).syncAll()
+            com.euthopiar.data.sync.supabase.SupabaseSyncManager.getInstance(applicationContext).syncAll()
         }
         setContent {
             EuthopiarTheme {
@@ -163,6 +164,9 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         PipController.onRequestPip = { enterPipMode() }
+        lifecycleScope.launch(Dispatchers.IO) {
+            com.euthopiar.data.sync.supabase.SupabaseSyncManager.getInstance(applicationContext).syncAll()
+        }
     }
 
     fun enterPipMode() {

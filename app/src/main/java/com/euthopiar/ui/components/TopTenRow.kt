@@ -186,6 +186,9 @@ fun TopTenRow(
     if (items.isEmpty()) return
     val topItems = items.take(10)
     val windowDimensions = rememberWindowDimensions()
+    val scaleMode = LocalCardScaleMode.current
+    val horizontalGap = CardDimensions.topTenCardGap(scaleMode)
+    val bottomPadding = CardDimensions.railBottomSpacing(scaleMode)
     val topTenRowState = androidx.compose.runtime.saveable.rememberSaveable(
         "top_10_row_$title",
         saver = androidx.compose.foundation.lazy.LazyListState.Saver
@@ -196,7 +199,7 @@ fun TopTenRow(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = Dimens.spacing8)
+            .padding(bottom = bottomPadding)
     ) {
         SectionHeader(
             title = title,
@@ -208,7 +211,7 @@ fun TopTenRow(
         LazyRow(
             state = topTenRowState,
             contentPadding = PaddingValues(horizontal = windowDimensions.horizontalMargin),
-            horizontalArrangement = Arrangement.spacedBy(Dimens.spacing16),
+            horizontalArrangement = Arrangement.spacedBy(horizontalGap),
             modifier = Modifier.fillMaxWidth()
         ) {
             itemsIndexed(

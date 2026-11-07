@@ -400,15 +400,16 @@ fun AppNavHost(
             val lastVer = lastSavedVersion ?: return@LaunchedEffect
             val completedVer = walkthroughCompletedVersion ?: return@LaunchedEffect
 
-            if (completedVer == currentAppVersion) return@LaunchedEffect
+            if (completedVer.isNotBlank()) return@LaunchedEffect
 
             val coordinator = WalkthroughCoordinator.instance
             if (!coordinator.isActive) {
                 val isFreshInstall = lastVer.isBlank()
-                val isAppUpdate = lastVer.isNotBlank() && lastVer != currentAppVersion
-
-                if (isFreshInstall || isAppUpdate) {
-                    coordinator.start(isFreshInstall = isFreshInstall)
+                if (isFreshInstall) {
+                    coordinator.start(isFreshInstall = true)
+                } else {
+                    // Existing installation updated to a newer version: do not show the walkthrough
+                    preferencesRepository.setWalkthroughCompletedVersion(currentAppVersion)
                 }
             }
         }

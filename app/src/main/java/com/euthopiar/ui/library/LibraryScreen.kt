@@ -153,14 +153,6 @@ fun LibraryScreen(
     val selectedFilter by viewModel.selectedFilter.collectAsState()
     val persistedLastTab by viewModel.libraryLastTab.collectAsState(initial = 1)
 
-    // Hide floating navbar in selection mode to swap cleanly with action pill
-    androidx.compose.runtime.DisposableEffect(isSelectionMode) {
-        navbarVisible.value = !isSelectionMode
-        onDispose {
-            navbarVisible.value = true
-        }
-    }
-
     val storageStats by produceState<StorageStats?>(initialValue = null, downloads) {
         value = viewModel.getStorageStats()
     }
@@ -209,13 +201,6 @@ fun LibraryScreen(
     val savedGridState = rememberLazyGridState()
     val playlistsGridState = rememberLazyGridState()
 
-    // Navbar scroll observation
-    when (pagerState.currentPage) {
-        0 -> com.euthopiar.ui.navigation.ObserveScrollForNavbar(downloadsListState)
-        1 -> com.euthopiar.ui.navigation.ObserveScrollForNavbar(savedGridState)
-        2 -> com.euthopiar.ui.navigation.ObserveScrollForNavbar(playlistsGridState)
-    }
-
     // Active download indicator (subtle 5dp white dot next to Downloads tab)
     val hasActiveDownloads = remember(downloads) {
         downloads.any { it.state == DownloadState.DOWNLOADING || it.state == DownloadState.QUEUED }
@@ -225,6 +210,29 @@ fun LibraryScreen(
     var selectedPlaylistForDetail by remember { mutableStateOf<Playlist?>(null) }
     var showCreatePlaylistDialog by remember { mutableStateOf(false) }
     var showConfirmDeleteDialog by remember { mutableStateOf(false) }
+
+    // Keep navbar hidden during selection mode (including Select All), inside a playlist detail view,
+    // or while the New Playlist sheet / Delete confirmation dialog is open.
+    val shouldHideNavbar = isSelectionMode ||
+        selectedPlaylistForDetail != null ||
+        showCreatePlaylistDialog ||
+        showConfirmDeleteDialog
+
+    androidx.compose.runtime.DisposableEffect(shouldHideNavbar) {
+        navbarVisible.value = !shouldHideNavbar
+        onDispose {
+            navbarVisible.value = true
+        }
+    }
+
+    // Navbar scroll observation (paused while any navbar-hiding task is active so layout shifts cannot unhide it)
+    if (!shouldHideNavbar) {
+        when (pagerState.currentPage) {
+            0 -> com.euthopiar.ui.navigation.ObserveScrollForNavbar(downloadsListState)
+            1 -> com.euthopiar.ui.navigation.ObserveScrollForNavbar(savedGridState)
+            2 -> com.euthopiar.ui.navigation.ObserveScrollForNavbar(playlistsGridState)
+        }
+    }
 
     // First in-progress item for Continue Card
     val continueWatchingItem = remember(continueWatchingList) {

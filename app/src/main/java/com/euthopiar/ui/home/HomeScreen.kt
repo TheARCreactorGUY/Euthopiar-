@@ -228,7 +228,22 @@ fun HomeScreen(
         }
     }
     val lazyListState = rememberLazyListState()
-    ObserveScrollForNavbar(lazyListState)
+    val navbarVisible = com.euthopiar.ui.navigation.LocalNavbarVisible.current
+    val shouldHideHomeNavbar = showUpdateDialog ||
+        quickActionItem != null ||
+        addToPlaylistMedia != null ||
+        watchlistSheetMedia != null
+
+    androidx.compose.runtime.DisposableEffect(shouldHideHomeNavbar) {
+        navbarVisible.value = !shouldHideHomeNavbar
+        onDispose {
+            navbarVisible.value = true
+        }
+    }
+
+    if (!shouldHideHomeNavbar) {
+        ObserveScrollForNavbar(lazyListState)
+    }
     val windowDimensions = rememberWindowDimensions()
     val heroPlayFocusRequester = remember { androidx.compose.ui.focus.FocusRequester() }
 

@@ -266,6 +266,7 @@ class PlayerViewModel(
     application: Application
 ) : AndroidViewModel(application) {
 
+    private val playbackSyncCoordinator by lazy { com.euthopiar.data.sync.supabase.PlaybackSyncCoordinator(getApplication()) }
     private val repository: ProviderRepository = ProviderRepository.Default
     private val downloadRepository: com.euthopiar.download.DownloadRepository =
         com.euthopiar.download.DownloadRepository.getInstance(application)
@@ -958,6 +959,7 @@ class PlayerViewModel(
                     }
                     Player.STATE_ENDED -> {
                         _uiState.update { it.copy(isBuffering = false, isPlaying = false) }
+                        playbackSyncCoordinator.onPlaybackEndedOrExited()
                         if (_uiState.value.selectedSleepTimer == SleepTimerOption.END_OF_EPISODE) {
                             _uiState.update { it.copy(selectedSleepTimer = SleepTimerOption.OFF) }
                             showToast("Bedtime sleep timer: paused at end of episode")
@@ -985,8 +987,20 @@ class PlayerViewModel(
                     resetAutoHideTimer()
                     applyDialogueBoost()
                     applyNightModeDrc()
+                    playbackSyncCoordinator.onPlaybackResumed()
                 } else {
                     savePlaybackProgress()
+                    playbackSyncCoordinator.onPlaybackPaused()
+                }
+            }
+
+            override fun onPositionDiscontinuity(
+                oldPosition: Player.PositionInfo,
+                newPosition: Player.PositionInfo,
+                reason: Int
+            ) {
+                if (reason == Player.DISCONTINUITY_REASON_SEEK) {
+                    playbackSyncCoordinator.onPlaybackSeeked()
                 }
             }
 
@@ -5785,13 +5799,13 @@ class PlayerViewModel(
         } catch (_: Exception) {}
     }
 
-    fun savePlaybackProgress() {
-        if (isCurrentLiveStream || currentType == MediaType.LIVE_TV || _uiState.value.isLiveStream) return
-        val mediaId = currentMediaId ?: return
-        if (pendingDeferredSeekMs != null) return
+    fun savePlaybackProgress(): Job? {
+        if (isCurrentLiveStream || currentType == MediaType.LIVE_TV || _uiState.value.isLiveStream) return null
+        val mediaId = currentMediaId ?: return null
+        if (pendingDeferredSeekMs != null) return null
         val pos = exoPlayer?.currentPosition ?: _uiState.value.currentPositionMs
         val duration = exoPlayer?.duration?.takeIf { it > 0L } ?: _uiState.value.durationMs
-        if (pos <= 0L) return
+        if (pos <= 0L) return null
 
         val isTv = currentType == MediaType.TV_SERIES ||
             (currentType == MediaType.ANIME && (_uiState.value.seasonNumber != null || _uiState.value.episodeNumber != null || _uiState.value.availableEpisodes.isNotEmpty()))
@@ -5799,7 +5813,7 @@ class PlayerViewModel(
         val e = if (isTv) _uiState.value.episodeNumber else null
         val epTitle = if (isTv) _uiState.value.episodeTitle else null
 
-        persistenceScope.launch {
+        return persistenceScope.launch {
             libraryRepository.updatePlaybackProgress(
                 mediaId = mediaId,
                 title = _uiState.value.mediaTitle,
@@ -5833,7 +5847,8 @@ class PlayerViewModel(
     }
 
     fun onExitPlayer() {
-        savePlaybackProgress()
+        val saveJob = savePlaybackProgress()
+        playbackSyncCoordinator.onPlaybackEndedOrExited(saveJob)
         seekDebounceJob?.cancel()
         pendingSeekTargetMs = null
         pendingDeferredSeekMs = null

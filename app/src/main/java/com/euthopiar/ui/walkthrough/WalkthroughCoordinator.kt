@@ -32,11 +32,10 @@ data class WalkthroughHighlight(
 )
 
 /**
- * Global coordinator for the interactive onboarding/update walkthrough.
+ * Global coordinator for the interactive first-install onboarding walkthrough.
  *
  * Responsibilities:
- * - Manages step state progression (Profile -> Plugins -> Add Repository).
- * - Enforces skippability (non-skippable on fresh install, skippable on app update).
+ * - Manages step state progression (Profile -> Plugins -> Add Repository) on new installations only.
  * - Directly links highlight clicks to navigation destinations.
  * - Handles back gestures safely to prevent app closures or broken navigation state.
  */
@@ -64,7 +63,7 @@ class WalkthroughCoordinator private constructor() {
     val isActive: Boolean
         get() = _currentStep.value != WalkthroughStep.NONE
 
-    fun start(isFreshInstall: Boolean) {
+    fun start(isFreshInstall: Boolean = true) {
         _isSkippable.value = !isFreshInstall
         _targetHighlight.value = null
         _targetBounds.value = null

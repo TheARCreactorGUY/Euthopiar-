@@ -1,19 +1,13 @@
 package com.euthopiar.ui.components
 
 import android.os.Build
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -30,53 +24,49 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.painter.Painter
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.Placeable
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.euthopiar.R
 import com.euthopiar.core.model.MediaType
 import com.euthopiar.ui.theme.AppFontFamily
-import com.euthopiar.ui.theme.HairlineWidth
-import com.euthopiar.ui.theme.ImdbGold
 import com.euthopiar.ui.theme.LocalAmoledMode
-import com.euthopiar.ui.theme.LocalReduceMotion
 import com.euthopiar.ui.theme.RottenTomatoesFresh
 import com.euthopiar.ui.theme.RottenTomatoesRotten
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeTint
 import dev.chrisbanes.haze.hazeEffect
 
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.geometry.RoundRect
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Outline
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.RectangleShape
-import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.layout.Layout
-import androidx.compose.ui.layout.Placeable
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.Density
-import androidx.compose.ui.unit.LayoutDirection
-
 private data class HeroChipData(
     val iconRes: Int,
     val text: String,
     val contentDescription: String?,
     val iconTint: Color = Color.White.copy(alpha = 0.90f),
-    val textWeight: FontWeight = FontWeight.Medium
+    val textWeight: FontWeight = FontWeight.Medium,
+    val isFullColorBadge: Boolean = false
 )
 
 /**
@@ -131,22 +121,7 @@ fun HeroMetadataChips(
         )
     }
 
-    // 3. Quality (4K, UHD, HD)
-    if (!quality.isNullOrBlank()) {
-        val is4k = quality.contains("4k", ignoreCase = true) || quality.contains("uhd", ignoreCase = true)
-        val qualityIconRes = if (is4k) R.drawable.ic_quality_4k else R.drawable.ic_quality_hd
-        val qualityLabel = if (is4k) "4K" else "HD"
-        items.add(
-            HeroChipData(
-                iconRes = qualityIconRes,
-                text = qualityLabel,
-                contentDescription = "$qualityLabel Quality",
-                textWeight = FontWeight.SemiBold
-            )
-        )
-    }
-
-    // 4. Age / Content Rating (e.g. TV-14, PG-13, R) - only show when real data is present
+    // 3. Age / Content Rating (e.g. TV-14, PG-13, R) - only show when real data is present
     if (!contentRating.isNullOrBlank()) {
         items.add(
             HeroChipData(
@@ -158,21 +133,21 @@ fun HeroMetadataChips(
         )
     }
 
-    // 5. IMDb Rating Score - only show when real data is present
-    if (!imdbRating.isNullOrBlank() && imdbRating != "0" && imdbRating != "0.0") {
-        val formattedImdb = imdbRating.trim().take(3)
+    // 4. IMDb Rating Score ("x.x/10" with official IMDb badge) - only show when real data is present
+    val formattedImdbScore = formatImdbScoreValue(imdbRating)
+    if (formattedImdbScore != null) {
         items.add(
             HeroChipData(
-                iconRes = R.drawable.ic_rating_star_imdb,
-                text = formattedImdb,
-                contentDescription = "IMDb rating $formattedImdb",
-                iconTint = ImdbGold,
-                textWeight = FontWeight.SemiBold
+                iconRes = R.drawable.ic_imdb_logo_badge,
+                text = "$formattedImdbScore/10",
+                contentDescription = "IMDb rating $formattedImdbScore out of 10",
+                textWeight = FontWeight.SemiBold,
+                isFullColorBadge = true
             )
         )
     }
 
-    // 6. Critic Score (Rotten Tomatoes) - only show when real data is present
+    // 5. Critic Score (Rotten Tomatoes) - only show when real data is present
     if (!rottenTomatoesRating.isNullOrBlank()) {
         val trimmedRt = rottenTomatoesRating.trim()
         val cleanRt = if (trimmedRt.endsWith("%")) trimmedRt else "$trimmedRt%"
@@ -273,6 +248,7 @@ private fun HeroMetadataChipsLayout(
                         contentDescription = chip.contentDescription,
                         iconTint = chip.iconTint,
                         textWeight = chip.textWeight,
+                        isFullColorBadge = chip.isFullColorBadge,
                         isUsingUnifiedHaze = isUsingHaze && chipRects.isNotEmpty(),
                         anchorColor = anchorColor,
                         fallbackColor = fallbackColor,
@@ -340,6 +316,7 @@ private fun HeroGlassChip(
     contentDescription: String? = null,
     iconTint: Color = Color.White.copy(alpha = 0.90f),
     textWeight: FontWeight = FontWeight.Medium,
+    isFullColorBadge: Boolean = false,
     isUsingUnifiedHaze: Boolean = false,
     anchorColor: Color = Color.Black,
     fallbackColor: Color = Color(0xFF14151F).copy(alpha = 0.94f),
@@ -347,7 +324,6 @@ private fun HeroGlassChip(
     whiteLiftAlpha: Float = 0.06f,
     modifier: Modifier = Modifier
 ) {
-    val reduceMotion = LocalReduceMotion.current
     val chipShape = RoundedCornerShape(7.dp)
 
     val specularBorderBrush = remember {
@@ -398,12 +374,24 @@ private fun HeroGlassChip(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(5.dp)
         ) {
-            Icon(
-                painter = icon,
-                contentDescription = null,
-                tint = iconTint,
-                modifier = Modifier.size(13.dp)
-            )
+            if (isFullColorBadge) {
+                Image(
+                    painter = icon,
+                    contentDescription = null,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .height(13.dp)
+                        .aspectRatio(256f / 129f)
+                        .clip(RoundedCornerShape(2.dp))
+                )
+            } else {
+                Icon(
+                    painter = icon,
+                    contentDescription = null,
+                    tint = iconTint,
+                    modifier = Modifier.size(13.dp)
+                )
+            }
             Text(
                 text = text,
                 fontFamily = AppFontFamily,

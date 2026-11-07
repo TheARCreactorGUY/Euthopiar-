@@ -22,5 +22,8 @@ data class WatchlistEntity(
     val rating: Double?,
     val year: Int?,
     val status: String = "TO_BE_WATCHED", // TO_BE_WATCHED, WATCHING, COMPLETED
-    val addedTimestamp: Long = System.currentTimeMillis()
+    val addedTimestamp: Long = System.currentTimeMillis(),
+    val isDirty: Boolean = true,
+    val isDeleted: Boolean = false,
+    val clientUpdatedAtMs: Long = System.currentTimeMillis()
 )

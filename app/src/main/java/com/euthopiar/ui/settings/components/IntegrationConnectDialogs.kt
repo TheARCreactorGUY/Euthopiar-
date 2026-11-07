@@ -35,28 +35,38 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.foundation.Image
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
+import com.euthopiar.R
 import com.euthopiar.ui.settings.plugins.pluginsPressable
 import com.euthopiar.ui.theme.AppFontFamily
 import com.euthopiar.ui.theme.EuthopiarGlassTokens
@@ -803,45 +813,57 @@ fun SimklConnectDialog(
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    // Header Row with Tile, Titles and Close Action
+                    // Header Row with Simkl Wordmark Badge, Titles and Close Action
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // 44x44dp Glass Icon Tile
+                        // Simkl Blue-White Gradient Wordmark Glass Tile
                         Box(
                             modifier = Modifier
-                                .size(44.dp)
+                                .height(44.dp)
                                 .clip(RoundedCornerShape(13.dp))
-                                .background(Color.White.copy(alpha = 0.07f))
+                                .background(
+                                    Brush.linearGradient(
+                                        colors = listOf(
+                                            Color(0xFF38BDF8).copy(alpha = 0.14f),
+                                            Color.White.copy(alpha = 0.05f)
+                                        ),
+                                        start = Offset(0f, 0f),
+                                        end = Offset(160f, 120f)
+                                    )
+                                )
                                 .border(
                                     EuthopiarGlassTokens.HairlineWidth,
-                                    EuthopiarGlassTokens.HairlineBorder,
+                                    Brush.linearGradient(
+                                        colors = listOf(
+                                            Color(0xFF7DD3FC).copy(alpha = 0.42f),
+                                            Color.White.copy(alpha = 0.14f)
+                                        )
+                                    ),
                                     RoundedCornerShape(13.dp)
-                                ),
+                                )
+                                .padding(horizontal = 12.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(
-                                imageVector = Icons.Outlined.Key,
-                                contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.size(22.dp)
-                            )
+                            SimklGradientWordmark(height = 15.dp)
                         }
 
                         Spacer(modifier = Modifier.width(14.dp))
 
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Connect Simkl",
+                                text = "Link Simkl",
                                 style = EuthopiarGlassTokens.HeaderTitle,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "Personal API Access Token",
-                                style = EuthopiarGlassTokens.HeaderSubtitle
+                                text = "OAuth 2.0 PKCE or personal token",
+                                style = EuthopiarGlassTokens.HeaderSubtitle.copy(
+                                    color = Color(0xFFD8F3FF).copy(alpha = 0.62f)
+                                )
                             )
                         }
 
@@ -884,9 +906,9 @@ fun SimklConnectDialog(
                             .background(EuthopiarGlassTokens.HairlineDivider)
                     )
 
-                    // Explanatory Body Copy
+                    // Explanatory Body Copy (Unslopped: direct, factual, human)
                     Text(
-                        text = "Authorize Euthopiar with Simkl to synchronize your Plan to Watch list, Watching progress, and completed anime/TV/movie history across all your devices.",
+                        text = "Sign in with Simkl in your browser to link automatically, or paste a redirect URL or token below if your browser does not hand back to the app.",
                         style = EuthopiarGlassTokens.BodyText
                     )
 
@@ -901,10 +923,22 @@ fun SimklConnectDialog(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(16.dp))
-                                .background(Color.White.copy(alpha = 0.06f))
+                                .background(
+                                    Brush.linearGradient(
+                                        colors = listOf(
+                                            Color(0xFF38BDF8).copy(alpha = 0.11f),
+                                            Color.White.copy(alpha = 0.05f)
+                                        )
+                                    )
+                                )
                                 .border(
                                     EuthopiarGlassTokens.HairlineWidth,
-                                    EuthopiarGlassTokens.HairlineBorder,
+                                    Brush.linearGradient(
+                                        colors = listOf(
+                                            Color(0xFF7DD3FC).copy(alpha = 0.34f),
+                                            EuthopiarGlassTokens.HairlineBorder
+                                        )
+                                    ),
                                     RoundedCornerShape(16.dp)
                                 )
                                 .pluginsPressable(
@@ -945,19 +979,19 @@ fun SimklConnectDialog(
                                     )
                                     Spacer(modifier = Modifier.height(2.dp))
                                     Text(
-                                        text = "Sign in & tap 'Authorize' to link automatically",
+                                        text = "Approve access on simkl.com to return to Euthopiar",
                                         style = TextStyle(
                                             fontFamily = AppFontFamily,
                                             fontWeight = FontWeight.Normal,
                                             fontSize = 12.sp,
-                                            color = Color.White.copy(alpha = 0.54f)
+                                            color = Color(0xFFD8F3FF).copy(alpha = 0.64f)
                                         )
                                     )
                                 }
                                 Icon(
                                     imageVector = Icons.Outlined.OpenInNew,
                                     contentDescription = null,
-                                    tint = Color.White.copy(alpha = 0.85f),
+                                    tint = Color(0xFF7DD3FC),
                                     modifier = Modifier.size(19.dp)
                                 )
                             }
@@ -1202,14 +1236,24 @@ fun SimklConnectDialog(
                             )
                         }
 
-                        // Solid White Connect Pill
+                        // Blue-and-White Gradient Connect Pill
                         val canConnect = simklTokenInput.isNotBlank() && !isSimklValidating
+                        val connectBrush = Brush.horizontalGradient(
+                            colors = if (canConnect) {
+                                listOf(Color.White, Color(0xFFD8F3FF), Color(0xFF7DD3FC))
+                            } else {
+                                listOf(
+                                    Color.White.copy(alpha = 0.35f),
+                                    Color(0xFFBAE6FD).copy(alpha = 0.28f)
+                                )
+                            }
+                        )
                         Box(
                             modifier = Modifier
                                 .weight(1f)
                                 .height(48.dp)
                                 .clip(CircleShape)
-                                .background(if (canConnect) Color.White else Color.White.copy(alpha = 0.35f))
+                                .background(connectBrush, CircleShape)
                                 .pluginsPressable(
                                     enabled = canConnect,
                                     scaleDown = 0.97f,
@@ -1243,6 +1287,42 @@ fun SimklConnectDialog(
             }
         }
     }
+}
+
+/**
+ * Renders the Simkl wordmark (`SIMKL™`) extracted from the brand mark with a crisp
+ * white-to-electric-blue linear gradient (`#FFFFFF` -> `#D8F3FF` -> `#38BDF8`) using
+ * offscreen alpha compositing (`BlendMode.SrcIn`) so it stays razor-sharp on dark/AMOLED glass.
+ */
+@Composable
+fun SimklGradientWordmark(
+    height: Dp = 20.dp,
+    modifier: Modifier = Modifier
+) {
+    Image(
+        painter = painterResource(id = R.drawable.ic_simkl_wordmark),
+        contentDescription = "Simkl",
+        contentScale = ContentScale.Fit,
+        modifier = modifier
+            .height(height)
+            .aspectRatio(720f / 176f)
+            .graphicsLayer {
+                compositingStrategy = CompositingStrategy.Offscreen
+            }
+            .drawWithCache {
+                val gradientBrush = Brush.linearGradient(
+                    0.00f to Color.White,
+                    0.48f to Color(0xFFD8F3FF),
+                    1.00f to Color(0xFF38BDF8),
+                    start = Offset(0f, 0f),
+                    end = Offset(size.width, size.height * 0.85f)
+                )
+                onDrawWithContent {
+                    drawContent()
+                    drawRect(brush = gradientBrush, blendMode = BlendMode.SrcIn)
+                }
+            }
+    )
 }
 
 /**

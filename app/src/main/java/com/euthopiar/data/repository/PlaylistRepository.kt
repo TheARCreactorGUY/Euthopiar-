@@ -56,7 +56,9 @@ data class Playlist(
     val items: List<PlaylistItem> = emptyList(),
     val createdAt: Long = System.currentTimeMillis(),
     val lastPlayedAt: Long = 0L,
-    val isSystem: Boolean = false
+    val isSystem: Boolean = false,
+    val isDeleted: Boolean = false,
+    val clientUpdatedAtMs: Long = System.currentTimeMillis()
 )
 
 class PlaylistRepository private constructor(private val context: Context) {
@@ -122,7 +124,7 @@ class PlaylistRepository private constructor(private val context: Context) {
         val result = mutableListOf<Playlist>()
 
         // 1. User playlists first if any exist
-        result.addAll(userLists)
+        result.addAll(userLists.filterNot { it.isDeleted })
 
         // 2. Watchlist playlist (if items exist)
         if (watchlists.isNotEmpty()) {
@@ -214,11 +216,13 @@ class PlaylistRepository private constructor(private val context: Context) {
         val cleanedInitialItems = initialItems.map {
             it.copy(title = it.title.replace('+', ' ').trim(), episodeTitle = it.episodeTitle?.replace('+', ' ')?.trim())
         }
+        val now = System.currentTimeMillis()
         val newPlaylist = Playlist(
             id = UUID.randomUUID().toString(),
             title = cleanTitle,
             items = cleanedInitialItems,
-            createdAt = System.currentTimeMillis()
+            createdAt = now,
+            clientUpdatedAtMs = now
         )
         _userPlaylists.update { current ->
             if (current.any { it.id == newPlaylist.id }) current else listOf(newPlaylist) + current
@@ -231,25 +235,29 @@ class PlaylistRepository private constructor(private val context: Context) {
                 if (syncToRemote) {
                     com.euthopiar.data.sync.MediaSyncManager.getInstance(context).notifyPlaylistsChanged()
                 }
+                com.euthopiar.data.sync.supabase.SupabaseSyncManager.getInstance(context).scheduleSync()
             } catch (_: Exception) {}
         }
         return newPlaylist
     }
 
     fun deletePlaylist(playlistId: String) {
+        val now = System.currentTimeMillis()
         _userPlaylists.update { current ->
-            current.filterNot { it.id == playlistId }
+            current.map { if (it.id == playlistId) it.copy(isDeleted = true, clientUpdatedAtMs = now) else it }
         }
         scope.launch {
             try {
                 jsonStore.update { diskList ->
-                    diskList.filterNot { it.id == playlistId }
+                    diskList.map { if (it.id == playlistId) it.copy(isDeleted = true, clientUpdatedAtMs = now) else it }
                 }
+                com.euthopiar.data.sync.supabase.SupabaseSyncManager.getInstance(context).scheduleSync()
             } catch (_: Exception) {}
         }
     }
 
     fun addItemToPlaylist(playlistId: String, item: PlaylistItem, syncToRemote: Boolean = true) {
+        val now = System.currentTimeMillis()
         val cleanItem = item.copy(
             title = item.title.replace('+', ' ').trim(),
             episodeTitle = item.episodeTitle?.replace('+', ' ')?.trim()
@@ -265,7 +273,7 @@ class PlaylistRepository private constructor(private val context: Context) {
                         )
                     } else cleanItem
                     val filtered = pl.items.filterNot { it.uniqueKey == cleanItem.uniqueKey }
-                    pl.copy(items = listOf(mergedItem) + filtered)
+                    pl.copy(items = listOf(mergedItem) + filtered, isDeleted = false, clientUpdatedAtMs = now)
                 } else pl
             }
         }
@@ -282,23 +290,28 @@ class PlaylistRepository private constructor(private val context: Context) {
                                 )
                             } else cleanItem
                             val filtered = pl.items.filterNot { it.uniqueKey == cleanItem.uniqueKey }
-                            pl.copy(items = listOf(mergedItem) + filtered)
+                            pl.copy(items = listOf(mergedItem) + filtered, isDeleted = false, clientUpdatedAtMs = now)
                         } else pl
                     }
                 }
                 if (syncToRemote) {
                     com.euthopiar.data.sync.MediaSyncManager.getInstance(context).notifyPlaylistsChanged()
                 }
+                com.euthopiar.data.sync.supabase.SupabaseSyncManager.getInstance(context).scheduleSync()
             } catch (_: Exception) {}
         }
     }
 
     fun removeItemFromPlaylist(playlistId: String, itemKey: String) {
+        val now = System.currentTimeMillis()
         val cleanKey = itemKey.trim()
         _userPlaylists.update { list ->
             list.map { pl ->
                 if (pl.id == playlistId) {
-                    pl.copy(items = pl.items.filterNot { it.uniqueKey == cleanKey || it.mediaId == cleanKey })
+                    pl.copy(
+                        items = pl.items.filterNot { it.uniqueKey == cleanKey || it.mediaId == cleanKey },
+                        clientUpdatedAtMs = now
+                    )
                 } else pl
             }
         }
@@ -307,10 +320,15 @@ class PlaylistRepository private constructor(private val context: Context) {
                 jsonStore.update { diskList ->
                     diskList.map { pl ->
                         if (pl.id == playlistId) {
-                            pl.copy(items = pl.items.filterNot { it.uniqueKey == cleanKey || it.mediaId == cleanKey })
+                            pl.copy(
+                                items = pl.items.filterNot { it.uniqueKey == cleanKey || it.mediaId == cleanKey },
+                                clientUpdatedAtMs = now
+                            )
                         } else pl
                     }
                 }
+                com.euthopiar.data.sync.MediaSyncManager.getInstance(context).notifyPlaylistsChanged()
+                com.euthopiar.data.sync.supabase.SupabaseSyncManager.getInstance(context).scheduleSync()
             } catch (_: Exception) {}
         }
     }
@@ -318,13 +336,14 @@ class PlaylistRepository private constructor(private val context: Context) {
     fun updateLastPlayed(playlistId: String) {
         val now = System.currentTimeMillis()
         _userPlaylists.update { list ->
-            list.map { if (it.id == playlistId) it.copy(lastPlayedAt = now) else it }
+            list.map { if (it.id == playlistId) it.copy(lastPlayedAt = now, clientUpdatedAtMs = now) else it }
         }
         scope.launch {
             try {
                 jsonStore.update { diskList ->
-                    diskList.map { if (it.id == playlistId) it.copy(lastPlayedAt = now) else it }
+                    diskList.map { if (it.id == playlistId) it.copy(lastPlayedAt = now, clientUpdatedAtMs = now) else it }
                 }
+                com.euthopiar.data.sync.supabase.SupabaseSyncManager.getInstance(context).scheduleSync()
             } catch (_: Exception) {}
         }
     }
@@ -332,7 +351,45 @@ class PlaylistRepository private constructor(private val context: Context) {
     /**
      * Returns all user-created custom playlists.
      */
-    fun getUserPlaylists(): List<Playlist> = _userPlaylists.value
+    fun getUserPlaylists(): List<Playlist> = _userPlaylists.value.filterNot { it.isDeleted }
+
+    suspend fun getAllPlaylistsIncludingDeleted(): List<Playlist> {
+        awaitLoaded()
+        return _userPlaylists.value
+    }
+
+    suspend fun mergeRemotePlaylists(remotePlaylists: List<com.euthopiar.core.sync.supabase.CloudPlaylist>) {
+        if (remotePlaylists.isEmpty()) return
+        awaitLoaded()
+        val jsonParser = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        _userPlaylists.update { localList ->
+            val localMap = localList.associateBy { it.id }.toMutableMap()
+            for (remote in remotePlaylists) {
+                val existing = localMap[remote.playlistId]
+                if (existing == null || remote.clientUpdatedAtMs >= existing.clientUpdatedAtMs) {
+                    val parsedItems = try {
+                        jsonParser.decodeFromString<List<PlaylistItem>>(remote.itemsJson)
+                    } catch (_: Exception) {
+                        emptyList()
+                    }
+                    localMap[remote.playlistId] = Playlist(
+                        id = remote.playlistId,
+                        title = remote.title,
+                        items = parsedItems,
+                        createdAt = remote.createdAtMs,
+                        lastPlayedAt = remote.lastPlayedAtMs,
+                        isSystem = remote.isSystem,
+                        isDeleted = remote.isDeleted,
+                        clientUpdatedAtMs = remote.clientUpdatedAtMs
+                    )
+                }
+            }
+            localMap.values.toList()
+        }
+        try {
+            jsonStore.write(_userPlaylists.value)
+        } catch (_: Exception) {}
+    }
 
     /**
      * Backfills missing poster/backdrop artwork across all user playlists for items matching [mediaId] or [title].
@@ -391,21 +448,29 @@ class PlaylistRepository private constructor(private val context: Context) {
     }
 
     /**
-     * Restores playlists from a configuration snapshot, preserving existing unique entries.
+     * Restores playlists from a configuration snapshot, preserving existing unique entries or updating older ones.
      */
     suspend fun restorePlaylists(playlists: List<Playlist>) {
         if (playlists.isEmpty()) return
+        awaitLoaded()
+        val now = System.currentTimeMillis()
         _userPlaylists.update { current ->
-            val currentIds = current.map { it.id }.toSet()
-            val newItems = playlists.filterNot { it.id in currentIds }
-            current + newItems
+            val localMap = current.associateBy { it.id }.toMutableMap()
+            for (incoming in playlists) {
+                val existing = localMap[incoming.id]
+                val updatedIncoming = incoming.copy(
+                    isDeleted = false,
+                    clientUpdatedAtMs = if (incoming.clientUpdatedAtMs > 0L) maxOf(incoming.clientUpdatedAtMs, now) else now
+                )
+                if (existing == null || updatedIncoming.clientUpdatedAtMs >= existing.clientUpdatedAtMs) {
+                    localMap[incoming.id] = updatedIncoming
+                }
+            }
+            localMap.values.toList()
         }
         try {
-            jsonStore.update { diskList ->
-                val diskIds = diskList.map { it.id }.toSet()
-                val newItems = playlists.filterNot { it.id in diskIds }
-                diskList + newItems
-            }
+            jsonStore.write(_userPlaylists.value)
+            com.euthopiar.data.sync.supabase.SupabaseSyncManager.getInstance(context).scheduleSync()
         } catch (_: Exception) {}
     }
 

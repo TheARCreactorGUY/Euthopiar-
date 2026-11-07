@@ -1,6 +1,10 @@
 package com.euthopiar.ui.onboarding
 
+import android.app.Activity
 import android.content.Context
+import android.widget.Toast
+import com.euthopiar.data.sync.supabase.SupabaseSyncManager
+import com.euthopiar.R
 import android.graphics.Bitmap
 import android.net.Uri
 import androidx.activity.compose.BackHandler
@@ -174,6 +178,8 @@ fun OnboardingScreen(
     // Current page: 0 = Welcome, 1 = Profile, 2 = Customize
     var currentPage by remember { mutableIntStateOf(0) }
     var previousPage by remember { mutableIntStateOf(0) }
+    val syncManager = remember { SupabaseSyncManager.getInstance(context) }
+    var isSigningInWithGoogle by remember { mutableStateOf(false) }
 
     // Page 2: Profile Creation State
     var profileName by remember { mutableStateOf("") }
@@ -210,13 +216,14 @@ fun OnboardingScreen(
         if (isSubmitting) return
         isSubmitting = true
         coroutineScope.launch {
-            // 1. Commit created profile as the primary profile
+            // 1. Commit created profile as the primary profile (preserving any PIN hash or restored sub-profiles)
             profileManager.setInitialPrimaryProfile(
                 name = profileName.trim().ifEmpty { "Cinephile" },
                 avatarId = profileAvatarId,
                 type = if (isKidsProfile) ProfileType.KIDS else profileRole,
                 isLocked = !profilePinHash.isNullOrBlank() || !profilePlainPin.isNullOrBlank(),
                 pin = profilePlainPin,
+                pinHash = profilePinHash
             )
 
             // 2. Persist chosen layout settings (Navbar style silently defaults to Floating)
@@ -226,18 +233,19 @@ fun OnboardingScreen(
             preferencesRepository.setContentRegionPreset(selectedRegionPreset)
             TmdbBridge.activeRegionPreset = selectedRegionPreset
 
-            // 3. Mark first run completed in DataStore
+            // 3. Replicate final onboarding profile & settings to cloud if signed in
+            syncManager.scheduleSync(500L)
+
+            // 4. Mark first run completed in DataStore
             onComplete(); kotlinx.coroutines.delay(260L); preferencesRepository.setFirstRunCompleted(true)
 
-            // 4. Synchronous backup commit in SharedPreferences
+            // 5. Synchronous backup commit in SharedPreferences
             withContext(Dispatchers.IO) {
                 context.getSharedPreferences("euthopiar_settings", Context.MODE_PRIVATE)
                     .edit()
                     .putBoolean("first_run_completed", true)
                     .commit()
             }
-
-
         }
     }
 
@@ -348,6 +356,37 @@ fun OnboardingScreen(
                         topRowPosters = postersState.topRowPosters,
                         bottomRowPosters = postersState.bottomRowPosters,
                         isLoading = postersState.isLoading,
+                        isSigningIn = isSigningInWithGoogle,
+                        onGoogleSignIn = {
+                            val act = context as? Activity
+                            if (act != null) {
+                                isSigningInWithGoogle = true
+                                coroutineScope.launch {
+                                    val res = syncManager.signInWithGoogle(act)
+                                    isSigningInWithGoogle = false
+                                    if (res.isSuccess) {
+                                        val session = res.getOrThrow()
+                                        val restoredPrimary = profileManager.profiles.value.firstOrNull { it.id == "default_user" }
+                                        val restoredName = restoredPrimary?.name?.takeIf { it.isNotBlank() && it != "Primary" }
+                                            ?: session.displayName
+                                            ?: session.email?.substringBefore("@")
+                                            ?: "Primary"
+                                        profileName = restoredName
+                                        if (restoredPrimary != null) {
+                                            profileAvatarId = restoredPrimary.avatarId
+                                            profileRole = restoredPrimary.type
+                                            isKidsProfile = restoredPrimary.isKidsProfile
+                                            profilePinHash = restoredPrimary.pinHash
+                                        }
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        navigateToPage(1)
+                                    } else {
+                                        val err = res.exceptionOrNull()?.message ?: "Google Sign-In failed"
+                                        Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                        },
                         onGetStarted = {
                             executeDebounced {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -420,6 +459,8 @@ private fun OnboardingPage1Welcome(
     topRowPosters: List<ShowcasePosterItem> = ShowcaseRowTop,
     bottomRowPosters: List<ShowcasePosterItem> = ShowcaseRowBottom,
     isLoading: Boolean = false,
+    isSigningIn: Boolean = false,
+    onGoogleSignIn: () -> Unit = {},
     onGetStarted: () -> Unit,
 ) {
     Column(
@@ -498,9 +539,18 @@ private fun OnboardingPage1Welcome(
 
                 Spacer(modifier = Modifier.height(26.dp))
 
-                // Primary White Pill: 52 dp tall with outline right-arrow icon
+                // Google Sign-In Button (Frosted Obsidian Glass with Google Logo)
+                OnboardingGoogleSignInButton(
+                    isLoading = isSigningIn,
+                    onClick = onGoogleSignIn,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Guest Fallback Button
                 OnboardingWhitePillButton(
-                    text = "Get started",
+                    text = "Continue as Guest",
                     onClick = onGetStarted,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -2170,6 +2220,78 @@ private fun OnboardingLivePreviewCard(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+
+@Composable
+fun OnboardingGoogleSignInButton(
+    isLoading: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val haptic = LocalHapticFeedback.current
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val pressScale by animateFloatAsState(
+        targetValue = if (isPressed) 0.97f else 1f,
+        animationSpec = androidx.compose.animation.core.spring(dampingRatio = 0.8f, stiffness = 600f),
+        label = "googleBtnScale"
+    )
+
+    Box(
+        modifier = modifier
+            .height(52.dp)
+            .graphicsLayer {
+                scaleX = pressScale
+                scaleY = pressScale
+            }
+            .clip(CircleShape)
+            .background(Color.White.copy(alpha = 0.08f))
+            .border(
+                width = 0.5.dp,
+                color = Color.White.copy(alpha = 0.16f),
+                shape = CircleShape
+            )
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                enabled = !isLoading,
+                role = Role.Button
+            ) {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                onClick()
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        if (isLoading) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(20.dp),
+                color = Color.White,
+                strokeWidth = 2.dp
+            )
+        } else {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Image(
+                    painter = painterResource(id = R.drawable.ic_google_logo),
+                    contentDescription = "Google",
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = "Sign in with Google",
+                    style = TextStyle(
+                        fontFamily = AppFontFamily,
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 15.sp,
+                        color = Color.White
+                    )
+                )
             }
         }
     }

@@ -36,6 +36,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -63,6 +64,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.euthopiar.data.repository.Playlist
+import com.euthopiar.ui.navigation.LocalNavbarVisible
 import com.euthopiar.ui.theme.AppFontFamily
 import com.euthopiar.ui.theme.EuthopiarGlassTokens
 import com.euthopiar.ui.theme.LocalAmoledMode
@@ -100,6 +102,14 @@ fun CreatePlaylistDialog(
     val density = LocalDensity.current
     val haptic = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
+    val navbarVisible = LocalNavbarVisible.current
+
+    DisposableEffect(Unit) {
+        navbarVisible.value = false
+        onDispose {
+            navbarVisible.value = true
+        }
+    }
 
     val sheetProgress = remember { Animatable(0f) }
     var dragOffsetY by remember { mutableFloatStateOf(0f) }

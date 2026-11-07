@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Euthopiar - Trakt Authorization</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #141414;
+            color: #ffffff;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            text-align: center;
+        }
+        .container {
+            max-width: 400px;
+            padding: 32px 24px;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+        }
+        .logo {
+            font-size: 28px;
+            font-weight: 800;
+            letter-spacing: 2px;
+            color: #E50914;
+            margin-bottom: 16px;
+        }
+        h2 {
+            font-size: 20px;
+            margin: 0 0 12px 0;
+        }
+        p {
+            font-size: 14px;
+            color: #999999;
+            margin: 0 0 24px 0;
+            line-height: 1.5;
+        }
+        .btn {
+            display: inline-block;
+            background-color: #E50914;
+            color: #ffffff;
+            font-weight: 600;
+            font-size: 14px;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            transition: background 0.2s ease;
+        }
+        .btn:hover {
+            background-color: #b80710;
+        }
+        .spinner {
+            width: 32px;
+            height: 32px;
+            border: 3px solid rgba(229, 9, 20, 0.2);
+            border-top-color: #E50914;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px auto;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="spinner"></div>
+        <div class="logo">EUTHOPIAR</div>
+        <h2>Authorizing Trakt.tv...</h2>
+        <p>Connecting your account to Euthopiar. If the app does not open automatically, tap the button below.</p>
+        <a href="#" id="open-app-btn" class="btn">Open Euthopiar</a>
+    </div>
+
+    <script>
+        // Forward query parameters (code, state) to Euthopiar custom deep link scheme
+        const searchParams = window.location.search;
+        const appDeepLink = "Euthopiar://auth/trakt" + searchParams;
+        document.getElementById("open-app-btn").href = appDeepLink;
+
+        // Auto-redirect to app
+        if (searchParams && searchParams.includes("code=")) {
+            window.location.href = appDeepLink;
+        }
+    </script>
+</body>
+</html>

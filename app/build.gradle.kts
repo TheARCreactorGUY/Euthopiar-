@@ -14,8 +14,8 @@ android {
         applicationId = "com.euthopiar"
         minSdk = 26
         targetSdk = 35
-        versionCode = 9
-        versionName = "1.0.8-Stable"
+        versionCode = 10
+        versionName = "1.0.9-Stable"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -133,6 +133,11 @@ dependencies {
 
     // Android YouTube Player
     implementation(libs.youtube.player)
+
+    // Google Identity & Credentials
+    implementation(libs.androidx.credentials)
+    implementation(libs.androidx.credentials.play.services.auth)
+    implementation(libs.google.id)
 
     // Testing
     testImplementation("junit:junit:4.13.2")

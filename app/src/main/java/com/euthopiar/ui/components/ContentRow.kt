@@ -11,11 +11,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import com.euthopiar.core.model.CatalogRow
 import com.euthopiar.core.model.MediaItem
-import com.euthopiar.ui.theme.Dimens
 import com.euthopiar.ui.theme.rememberWindowDimensions
 
 /**
- * Modern Netflix-style Content Row with tight 8dp poster gaps and SectionHeader.
+ * Modern Apple TV / Netflix-style Content Row with scale-aware poster gaps and rail rhythm.
  */
 @Composable
 fun ContentRow(
@@ -29,6 +28,10 @@ fun ContentRow(
     if (row.items.isEmpty()) return
 
     val windowDimensions = rememberWindowDimensions()
+    val scaleMode = LocalCardScaleMode.current
+    val horizontalGap = CardDimensions.posterGap(scaleMode)
+    val bottomPadding = CardDimensions.railBottomSpacing(scaleMode)
+
     val rowListState = androidx.compose.runtime.saveable.rememberSaveable(
         row.title,
         saver = androidx.compose.foundation.lazy.LazyListState.Saver
@@ -39,7 +42,7 @@ fun ContentRow(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = Dimens.spacing8)
+            .padding(bottom = bottomPadding)
     ) {
         SectionHeader(
             title = row.title,
@@ -52,7 +55,7 @@ fun ContentRow(
         LazyRow(
             state = rowListState,
             contentPadding = PaddingValues(horizontal = windowDimensions.horizontalMargin),
-            horizontalArrangement = Arrangement.spacedBy(Dimens.posterGap),
+            horizontalArrangement = Arrangement.spacedBy(horizontalGap),
             modifier = Modifier.fillMaxWidth()
         ) {
             itemsIndexed(

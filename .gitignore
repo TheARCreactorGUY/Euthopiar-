@@ -19,6 +19,7 @@ local.properties
 *.jpeg
 !app/src/main/res/**
 !app/src/main/assets/**
+!app/src/main/ic_launcher-playstore.png
 !screenshots/**
 !App logo/**
 cinemaos_line_*.json
@@ -38,8 +39,16 @@ test_eups_repo/
 scrapers_dump.json
 androidx/
 euthopiar_icons/
+custom_icons/
 svg icons user inspection/
 build_server/
 backups/
+__pycache__/
+*.py[cod]
+
+Refrence Nuviou/
+Refrence Nuviou/**
+Refrence Nuviou/NuvioMobile/
+Refrence Nuviou/NuvioMobile
 AI_RULES.md
 .agents/skills/euthopiar-pipeline/

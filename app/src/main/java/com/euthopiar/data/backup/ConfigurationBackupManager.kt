@@ -139,7 +139,14 @@ class ConfigurationBackupManager(private val context: Context) {
 
         fun isSensitiveKey(key: String): Boolean {
             val lower = key.lowercase()
-            return lower.contains("token") || lower.contains("secret")
+            if (lower.startsWith("supabase_sync_") || lower == "supabase_cloud_sync_enabled") {
+                return false
+            }
+            return lower.contains("token") ||
+                lower.contains("secret") ||
+                lower.contains("api_key") ||
+                lower.contains("code_verifier") ||
+                lower.startsWith("supabase_")
         }
     }
 
@@ -213,6 +220,7 @@ class ConfigurationBackupManager(private val context: Context) {
 
             // 4. Gather Playlists
             val playlistRepo = PlaylistRepository.getInstance(context)
+            playlistRepo.awaitLoaded()
             val userPlaylists = playlistRepo.getUserPlaylists()
             val playlistsJsonString = json.encodeToString(userPlaylists)
             val jsonPlaylistsArray = JSONArray(playlistsJsonString)
@@ -546,7 +554,9 @@ class ConfigurationBackupManager(private val context: Context) {
             // 6. Restore Saved Content (Watchlist) to Room Database
             if (savedContentArr != null && savedContentArr.length() > 0) {
                 try {
-                    val items = json.decodeFromString<List<WatchlistEntity>>(savedContentArr.toString())
+                    val rawItems = json.decodeFromString<List<WatchlistEntity>>(savedContentArr.toString())
+                    val now = System.currentTimeMillis()
+                    val items = rawItems.map { it.copy(isDirty = true, clientUpdatedAtMs = if (it.clientUpdatedAtMs > 0L) it.clientUpdatedAtMs else now) }
                     AppDatabase.getInstance(context).watchlistDao().insertBatch(items)
                 } catch (e: Exception) {
                     android.util.Log.e("ConfigBackupManager", "Failed to restore watchlist: ${e.message}", e)
@@ -556,7 +566,9 @@ class ConfigurationBackupManager(private val context: Context) {
             // 7. Restore Playback History & Continue Watching to Room Database
             if (historyArr != null && historyArr.length() > 0) {
                 try {
-                    val historyItems = json.decodeFromString<List<PlaybackHistoryEntity>>(historyArr.toString())
+                    val rawHistory = json.decodeFromString<List<PlaybackHistoryEntity>>(historyArr.toString())
+                    val now = System.currentTimeMillis()
+                    val historyItems = rawHistory.map { it.copy(isDirty = true, clientUpdatedAtMs = if (it.clientUpdatedAtMs > 0L) it.clientUpdatedAtMs else now) }
                     AppDatabase.getInstance(context).playbackHistoryDao().upsertBatch(historyItems)
                 } catch (e: Exception) {
                     android.util.Log.e("ConfigBackupManager", "Failed to restore playback history: ${e.message}", e)
@@ -604,6 +616,11 @@ class ConfigurationBackupManager(private val context: Context) {
                 TmdbBridge.activeRegionPreset = preset
                 TmdbBridge.clearHomeCatalogCache()
             }
+
+            // 11. Trigger Supabase Safe Sync Replication if authenticated
+            try {
+                com.euthopiar.data.sync.supabase.SupabaseSyncManager.getInstance(context).syncAll(forceFull = true)
+            } catch (_: Exception) {}
 
             Result.success(Unit)
         } catch (e: Exception) {

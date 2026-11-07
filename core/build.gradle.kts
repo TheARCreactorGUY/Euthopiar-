@@ -31,6 +31,9 @@ android {
         buildConfigField("String", "SIMKL_CLIENT_ID", "\"${localProperties.getProperty("SIMKL_CLIENT_ID", "")}\"")
         buildConfigField("String", "TMDB_API_KEY", "\"${localProperties.getProperty("TMDB_API_KEY", "")}\"")
         buildConfigField("String", "FREEKZ_KEY_TOKEN", "\"${localProperties.getProperty("FREEKZ_KEY_TOKEN", "")}\"")
+        buildConfigField("String", "SUPABASE_URL", "\"${localProperties.getProperty("SUPABASE_URL", "")}\"")
+        buildConfigField("String", "SUPABASE_ANON_KEY", "\"${localProperties.getProperty("SUPABASE_ANON_KEY", "")}\"")
+        buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"${localProperties.getProperty("GOOGLE_WEB_CLIENT_ID", "")}\"")
     }
 
     buildFeatures {

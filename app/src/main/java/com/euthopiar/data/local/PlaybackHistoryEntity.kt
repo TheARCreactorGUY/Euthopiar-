@@ -30,7 +30,10 @@ data class PlaybackHistoryEntity(
     val mediaType: String? = null,
     val episodeData: String? = null,
     val isDismissedFromContinueWatching: Boolean = false,
-    val profileId: String = "default_user"
+    val profileId: String = "default_user",
+    val isDirty: Boolean = true,
+    val isDeleted: Boolean = false,
+    val clientUpdatedAtMs: Long = System.currentTimeMillis()
 ) {
     companion object {
         fun buildId(

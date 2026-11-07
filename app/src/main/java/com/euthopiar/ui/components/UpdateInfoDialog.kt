@@ -24,6 +24,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -51,6 +52,7 @@ import com.euthopiar.data.update.ApkDownloadState
 import com.euthopiar.data.update.AppUpdateManager
 import com.euthopiar.data.update.ReleaseInfo
 import com.euthopiar.data.update.isRemoteVersionNewer
+import com.euthopiar.ui.navigation.LocalNavbarVisible
 import com.euthopiar.ui.settings.components.SettingsTokens
 import com.euthopiar.ui.settings.components.settingsPressable
 import com.euthopiar.ui.theme.AppFontFamily
@@ -330,6 +332,14 @@ fun UpdateInfoDialog(
     val coroutineScope = rememberCoroutineScope()
     val reduceMotion = LocalReduceMotion.current
     val isAmoled = LocalAmoledMode.current
+    val navbarVisible = LocalNavbarVisible.current
+
+    DisposableEffect(Unit) {
+        navbarVisible.value = false
+        onDispose {
+            navbarVisible.value = true
+        }
+    }
 
     val dialogProgress = remember { Animatable(0f) }
     var isDismissing by remember { mutableStateOf(false) }

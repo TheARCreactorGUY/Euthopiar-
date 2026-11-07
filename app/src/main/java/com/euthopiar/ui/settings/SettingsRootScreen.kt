@@ -394,8 +394,15 @@ fun SettingsRootScreen(
                                 )
                             }
 
-                            Spacer(modifier = Modifier.height(26.dp))
+                            Spacer(modifier = Modifier.height(20.dp))
                         }
+                    }
+                }
+
+                // 3b. Google Cloud Sync Card
+                item(key = "google_cloud_sync_card") {
+                    Box(modifier = Modifier.padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
+                        com.euthopiar.ui.settings.components.GoogleCloudAccountCard()
                     }
                 }
 
