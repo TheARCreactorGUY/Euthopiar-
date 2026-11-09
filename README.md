@@ -4,30 +4,30 @@
 
 <img src="screenshots/logo.jpg" width="150" alt="Euthopiar logo" style="border-radius:32px"/>
 
-<a href="https://github.com/TheARCreactorGUY/Euthopiar-/releases/latest">
+<a href="https://github.com/TheARCreactorGUY/Euthopiar/releases/latest">
   <img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=600&size=22&duration=2800&pause=900&color=E50914&center=true&vCenter=true&width=640&lines=Stream+smarter.+Binge+harder.;Netflix-style+UI.+Zero+clutter.;Movies.+Series.+Anime.+One+app.;Plugin+powered+via+Nuvio." alt="Typing animation"/>
 </a>
 
 <br/>
 
-[![Latest Release](https://img.shields.io/badge/Release-v1.0.9--Stable-E50914?style=for-the-badge&logo=github&logoColor=white)](https://github.com/TheARCreactorGUY/Euthopiar-/releases/latest)
-[![Platform](https://img.shields.io/badge/Android-Available-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/TheARCreactorGUY/Euthopiar-/releases/latest)
+[![Latest Release](https://img.shields.io/badge/Release-v1.1.0--Stable-E50914?style=for-the-badge&logo=github&logoColor=white)](https://github.com/TheARCreactorGUY/Euthopiar/releases/latest)
+[![Platform](https://img.shields.io/badge/Android-Available-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/TheARCreactorGUY/Euthopiar/releases/latest)
 [![Android TV](https://img.shields.io/badge/Android%20TV-Coming%20Soon-F5A623?style=for-the-badge&logo=android&logoColor=white)](#-roadmap)
 [![Kotlin](https://img.shields.io/badge/Kotlin-100%25-7F52FF?style=for-the-badge&logo=kotlin&logoColor=white)](https://kotlinlang.org/)
-[![Open Source](https://img.shields.io/badge/Open%20Source-Yes-brightgreen?style=for-the-badge&logo=opensourceinitiative&logoColor=white)](https://github.com/TheARCreactorGUY/Euthopiar-)
+[![Open Source](https://img.shields.io/badge/Open%20Source-Yes-brightgreen?style=for-the-badge&logo=opensourceinitiative&logoColor=white)](https://github.com/TheARCreactorGUY/Euthopiar)
 
 <br/>
 
-![Stars](https://img.shields.io/github/stars/TheARCreactorGUY/Euthopiar-?style=flat-square&logo=github&color=E50914&labelColor=141414)
-![Forks](https://img.shields.io/github/forks/TheARCreactorGUY/Euthopiar-?style=flat-square&logo=github&color=E50914&labelColor=141414)
-![Downloads](https://img.shields.io/github/downloads/TheARCreactorGUY/Euthopiar-/total?style=flat-square&color=E50914&labelColor=141414)
-![Issues](https://img.shields.io/github/issues/TheARCreactorGUY/Euthopiar-?style=flat-square&color=E50914&labelColor=141414)
-![Last Commit](https://img.shields.io/github/last-commit/TheARCreactorGUY/Euthopiar-?style=flat-square&color=E50914&labelColor=141414)
+![Stars](https://img.shields.io/github/stars/TheARCreactorGUY/Euthopiar?style=flat-square&logo=github&color=E50914&labelColor=141414)
+![Forks](https://img.shields.io/github/forks/TheARCreactorGUY/Euthopiar?style=flat-square&logo=github&color=E50914&labelColor=141414)
+![Downloads](https://img.shields.io/github/downloads/TheARCreactorGUY/Euthopiar/total?style=flat-square&color=E50914&labelColor=141414)
+![Issues](https://img.shields.io/github/issues/TheARCreactorGUY/Euthopiar?style=flat-square&color=E50914&labelColor=141414)
+![Last Commit](https://img.shields.io/github/last-commit/TheARCreactorGUY/Euthopiar?style=flat-square&color=E50914&labelColor=141414)
 
 <br/>
 
-[![Download APK](https://img.shields.io/badge/⬇%20%20DOWNLOAD%20APK-E50914?style=for-the-badge&logoColor=white&labelColor=141414)](https://github.com/TheARCreactorGUY/Euthopiar-/releases/latest)
-[![All Releases](https://img.shields.io/badge/📦%20%20ALL%20RELEASES-141414?style=for-the-badge&logoColor=white&labelColor=E50914)](https://github.com/TheARCreactorGUY/Euthopiar-/releases)
+[![Download APK](https://img.shields.io/badge/⬇%20%20DOWNLOAD%20APK-E50914?style=for-the-badge&logoColor=white&labelColor=141414)](https://github.com/TheARCreactorGUY/Euthopiar/releases/latest)
+[![All Releases](https://img.shields.io/badge/📦%20%20ALL%20RELEASES-141414?style=for-the-badge&logoColor=white&labelColor=E50914)](https://github.com/TheARCreactorGUY/Euthopiar/releases)
 [![Support](https://img.shields.io/badge/☕%20%20SUPPORT-FFDD00?style=for-the-badge&logoColor=black&labelColor=000000)](https://buymeacoffee.com/TheARCreactorGUY)
 
 </div>
@@ -159,7 +159,7 @@ flowchart LR
 
 <table>
 <tr>
-<td align="center" width="20%"><h2>1️⃣</h2><sub>Open the <b><a href="https://github.com/TheARCreactorGUY/Euthopiar-/releases/latest">Latest Release</a></b></sub></td>
+<td align="center" width="20%"><h2>1️⃣</h2><sub>Open the <b><a href="https://github.com/TheARCreactorGUY/Euthopiar/releases/latest">Latest Release</a></b></sub></td>
 <td align="center" width="20%"><h2>2️⃣</h2><sub>Download the <b>.apk</b></sub></td>
 <td align="center" width="20%"><h2>3️⃣</h2><sub>Open it & allow <i>“Install from unknown sources”</i></sub></td>
 <td align="center" width="20%"><h2>4️⃣</h2><sub>Launch Euthopiar 🍿</sub></td>
@@ -169,7 +169,7 @@ flowchart LR
 
 <div align="center">
 
-[![Download Latest](https://img.shields.io/badge/⬇%20%20GET%20v1.0.9--Stable-E50914?style=for-the-badge)](https://github.com/TheARCreactorGUY/Euthopiar-/releases/latest)
+[![Download Latest](https://img.shields.io/badge/⬇%20%20GET%20v1.1.0--Stable-E50914?style=for-the-badge)](https://github.com/TheARCreactorGUY/Euthopiar/releases/latest)
 
 </div>
 
@@ -179,7 +179,7 @@ flowchart LR
 
 | Platform | Status |
 |---|---|
-| 📱 **Android Smartphone App** | ✅ **Available now**, [Download](https://github.com/TheARCreactorGUY/Euthopiar-/releases/latest) |
+| 📱 **Android Smartphone App** | ✅ **Available now**, [Download](https://github.com/TheARCreactorGUY/Euthopiar/releases/latest) |
 | 📺 **Android TV App** | 🚧 **Coming soon**, stay tuned! |
 
 <br/>
@@ -187,8 +187,8 @@ flowchart LR
 ## 🛠️ Build From Source
 
 ```bash
-git clone https://github.com/TheARCreactorGUY/Euthopiar-.git
-cd Euthopiar-
+git clone https://github.com/TheARCreactorGUY/Euthopiar.git
+cd Euthopiar
 ./gradlew assembleDebug
 ```
 
@@ -225,7 +225,7 @@ cd Euthopiar-
 - [x] 📐 Dynamic 3-tier card scaling & inline IMDb rating badges
 - [ ] 📺 **Android TV app**
 - [ ] 🎨 More themes & customization
-- [ ] 💡 Your idea here, [open an issue](https://github.com/TheARCreactorGUY/Euthopiar-/issues)!
+- [ ] 💡 Your idea here, [open an issue](https://github.com/TheARCreactorGUY/Euthopiar/issues)!
 
 <br/>
 
@@ -263,7 +263,7 @@ Not right now. Android is live, and **Android TV** is next on the list.
 
 <br/>
 
-[Open an issue](https://github.com/TheARCreactorGUY/Euthopiar-/issues). Bug reports and feature requests are very welcome.
+[Open an issue](https://github.com/TheARCreactorGUY/Euthopiar/issues). Bug reports and feature requests are very welcome.
 
 </details>
 
@@ -297,8 +297,8 @@ Can't donate? A **star ⭐** is free and helps a ton!
 
 <div align="center">
 
-<a href="https://star-history.com/#TheARCreactorGUY/Euthopiar-&Date">
-  <img src="https://api.star-history.com/svg?repos=TheARCreactorGUY/Euthopiar-&type=Date&theme=dark" width="520" alt="Star History Chart"/>
+<a href="https://star-history.com/#TheARCreactorGUY/Euthopiar&Date">
+  <img src="https://api.star-history.com/svg?repos=TheARCreactorGUY/Euthopiar&type=Date&theme=dark" width="520" alt="Star History Chart"/>
 </a>
 
 </div>

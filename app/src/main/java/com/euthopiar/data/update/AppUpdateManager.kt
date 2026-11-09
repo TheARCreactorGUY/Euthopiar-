@@ -30,11 +30,14 @@ import java.util.Locale
 
 object AppUpdateConfig {
     const val GITHUB_OWNER = "TheARCreactorGUY"
-    const val GITHUB_REPO = "Euthopiar-"
+    const val GITHUB_REPO = "Euthopiar"
+    const val GITHUB_REPO_FALLBACK = "Euthopiar-"
     const val GITHUB_REPO_URL = "https://github.com/$GITHUB_OWNER/$GITHUB_REPO"
     const val GITHUB_RELEASES_URL = "$GITHUB_REPO_URL/releases"
     const val GITHUB_LATEST_API_URL = "https://api.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO/releases/latest"
     const val GITHUB_ALL_RELEASES_API_URL = "https://api.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO/releases"
+    const val GITHUB_LATEST_FALLBACK_API_URL = "https://api.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO_FALLBACK/releases/latest"
+    const val GITHUB_ALL_FALLBACK_API_URL = "https://api.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO_FALLBACK/releases"
 }
 
 @Immutable
@@ -142,6 +145,21 @@ class AppUpdateManager private constructor(private val context: Context) {
                             if (!body.isNullOrBlank()) {
                                 releaseJson = JSONObject(body)
                             }
+                        } else if (response.code == 404) {
+                            // Fallback to legacy repo if rename hasn't fully propagated
+                            val fallbackReq = Request.Builder()
+                                .url(AppUpdateConfig.GITHUB_LATEST_FALLBACK_API_URL)
+                                .header("Accept", "application/vnd.github+json")
+                                .header("User-Agent", "Euthopiar-App")
+                                .build()
+                            client.newCall(fallbackReq).execute().use { fbResponse ->
+                                if (fbResponse.isSuccessful) {
+                                    val fbBody = fbResponse.body?.string()
+                                    if (!fbBody.isNullOrBlank()) {
+                                        releaseJson = JSONObject(fbBody)
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -166,6 +184,29 @@ class AppUpdateManager private constructor(private val context: Context) {
                                     if (includePrereleases || !isPre) {
                                         releaseJson = obj
                                         break
+                                    }
+                                }
+                            }
+                        } else if (response.code == 404) {
+                            val fallbackReq = Request.Builder()
+                                .url(AppUpdateConfig.GITHUB_ALL_FALLBACK_API_URL)
+                                .header("Accept", "application/vnd.github+json")
+                                .header("User-Agent", "Euthopiar-App")
+                                .build()
+                            client.newCall(fallbackReq).execute().use { fbResponse ->
+                                if (fbResponse.isSuccessful) {
+                                    val fbBody = fbResponse.body?.string()
+                                    if (!fbBody.isNullOrBlank()) {
+                                        val array = JSONArray(fbBody)
+                                        for (i in 0 until array.length()) {
+                                            val obj = array.getJSONObject(i)
+                                            if (obj.optBoolean("draft", false)) continue
+                                            val isPre = obj.optBoolean("prerelease", false)
+                                            if (includePrereleases || !isPre) {
+                                                releaseJson = obj
+                                                break
+                                            }
+                                        }
                                     }
                                 }
                             }

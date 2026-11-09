@@ -56,6 +56,7 @@ class SupabaseSyncManager private constructor(
     private var scheduledSyncJob: Job? = null
     private val syncMutex = Mutex()
     private val isInitialRestoreInProgress = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val lastInitialRestoreTimestamp = java.util.concurrent.atomic.AtomicLong(0L)
 
     val tokenAuthenticator = SupabaseTokenAuthenticator(
         authClient = authClient,
@@ -106,7 +107,8 @@ class SupabaseSyncManager private constructor(
     fun scheduleSync(delayMs: Long = 1000L) {
         scheduledSyncJob?.cancel()
         scheduledSyncJob = scope.launch {
-            delay(delayMs)
+            val jitter = if (delayMs > 0L) (0L..2000L).random() else 0L
+            delay(delayMs + jitter)
             // Wait if an initial sign-in restore is currently pulling cloud backup
             while (isInitialRestoreInProgress.get()) {
                 delay(250L)
@@ -184,7 +186,13 @@ class SupabaseSyncManager private constructor(
                 preferencesRepository.setSupabasePlaybackWatermark(null)
                 preferencesRepository.setSupabaseWatchlistWatermark(null)
                 preferencesRepository.setSupabasePlaylistsWatermark(null)
+                preferencesRepository.setSupabaseAddonsWatermark(null)
                 preferencesRepository.setSupabaseLastSyncedUserId(session.userId)
+                // Clear any stale pending deletion tombstones so they don't clobber incoming cloud addons
+                val staleDeletions = preferencesRepository.supabasePendingDeletedAddonUrls.first()
+                if (staleDeletions.isNotEmpty()) {
+                    preferencesRepository.clearPendingDeletedAddonUrls(staleDeletions)
+                }
 
                 val account = CloudUserAccount(
                     userId = session.userId,
@@ -264,6 +272,7 @@ class SupabaseSyncManager private constructor(
 
             // Execute full sync with restoreFirst=true so all cloud data is pulled BEFORE local dirty items are pushed
             syncAll(forceFull = true, isInitialSignInRestore = true)
+            lastInitialRestoreTimestamp.set(System.currentTimeMillis())
         } catch (e: Exception) {
             Log.e(TAG, "Safe merge failed", e)
         }
@@ -279,6 +288,8 @@ class SupabaseSyncManager private constructor(
 
         try {
             val dirtyRows = playbackHistoryDao.getDirtyRows()
+                .sortedByDescending { it.clientUpdatedAtMs.takeIf { ts -> ts > 0L } ?: it.lastWatchedTimestamp }
+                .take(50)
             if (dirtyRows.isEmpty()) return@withContext Result.success(Unit)
 
             // Ensure profiles exist in cloud before pushing foreign-keyed playback rows
@@ -297,8 +308,8 @@ class SupabaseSyncManager private constructor(
                     episodeTitle = entity.episodeTitle,
                     seasonNumber = entity.seasonNumber,
                     episodeNumber = entity.episodeNumber,
-                    posterUrl = entity.posterUrl,
-                    backdropUrl = entity.backdropUrl,
+                    posterUrl = sanitizeCloudUrl(entity.posterUrl),
+                    backdropUrl = sanitizeCloudUrl(entity.backdropUrl),
                     currentPositionMs = entity.currentPositionMs,
                     durationMs = entity.durationMs,
                     isCompleted = entity.isCompleted,
@@ -399,6 +410,7 @@ class SupabaseSyncManager private constructor(
                 val syncWatchlist = preferencesRepository.supabaseSyncWatchlist.first()
                 val syncPlaylists = preferencesRepository.supabaseSyncPlaylists.first()
                 val syncSettings = preferencesRepository.supabaseSyncSettings.first()
+                val syncAddons = preferencesRepository.supabaseSyncAddons.first()
 
                 // =========================================================================
                 // PHASE 1: PROFILE SYNCHRONIZATION (Prevents HTTP 409 Foreign Key Errors)
@@ -409,6 +421,11 @@ class SupabaseSyncManager private constructor(
                 // =========================================================================
                 // PHASE 2: DOWNSTREAM PULL FIRST (Guarantees Cloud Backups Are Never Clobbered)
                 // =========================================================================
+
+                // 0. Pull Plugins & Stremio Add-ons Delta
+                if (syncAddons) {
+                    syncAddonsDownstream(userId, forceFull)
+                }
 
                 // 1. Pull Playback History Delta
                 if (syncPlayback) {
@@ -579,9 +596,11 @@ class SupabaseSyncManager private constructor(
                 // PHASE 3: UPSTREAM PUSH (Pushes Remaining Dirty Local Changes to Cloud)
                 // =========================================================================
 
-                // 5. Push Dirty Playback History
+                // 5. Push Dirty Playback History (Capped to latest 50 to protect Free Tier DB storage)
                 if (syncPlayback) {
                     val dirtyPlayback = playbackHistoryDao.getDirtyRows()
+                        .sortedByDescending { it.clientUpdatedAtMs.takeIf { ts -> ts > 0L } ?: it.lastWatchedTimestamp }
+                        .take(50)
                     if (dirtyPlayback.isNotEmpty()) {
                         val cloudPlayback = dirtyPlayback.map { entity ->
                             val cleanProvider = (entity.provider?.trim()?.ifBlank { null } ?: "default").lowercase()
@@ -595,8 +614,8 @@ class SupabaseSyncManager private constructor(
                                 episodeTitle = entity.episodeTitle,
                                 seasonNumber = entity.seasonNumber,
                                 episodeNumber = entity.episodeNumber,
-                                posterUrl = entity.posterUrl,
-                                backdropUrl = entity.backdropUrl,
+                                posterUrl = sanitizeCloudUrl(entity.posterUrl),
+                                backdropUrl = sanitizeCloudUrl(entity.backdropUrl),
                                 currentPositionMs = entity.currentPositionMs,
                                 durationMs = entity.durationMs,
                                 isCompleted = entity.isCompleted,
@@ -617,9 +636,11 @@ class SupabaseSyncManager private constructor(
                     }
                 }
 
-                // 6. Push Dirty Watchlist (Grouped by profileId so all profiles are marked clean)
+                // 6. Push Dirty Watchlist (Capped to latest 100 to protect Free Tier DB storage)
                 if (syncWatchlist) {
                     val dirtyWatchlist = watchlistDao.getDirtyRows()
+                        .sortedByDescending { it.clientUpdatedAtMs }
+                        .take(100)
                     if (dirtyWatchlist.isNotEmpty()) {
                         val cloudWatchlist = dirtyWatchlist.map { entity ->
                             CloudWatchlistItem(
@@ -627,8 +648,8 @@ class SupabaseSyncManager private constructor(
                                 profileId = entity.profileId,
                                 mediaId = entity.mediaId,
                                 title = entity.title,
-                                posterUrl = entity.posterUrl,
-                                backdropUrl = entity.backdropUrl,
+                                posterUrl = sanitizeCloudUrl(entity.posterUrl),
+                                backdropUrl = sanitizeCloudUrl(entity.backdropUrl),
                                 mediaType = entity.mediaType,
                                 rating = entity.rating,
                                 releaseYear = entity.year,
@@ -651,9 +672,11 @@ class SupabaseSyncManager private constructor(
                     }
                 }
 
-                // 7. Push User Playlists (After awaiting disk load & merging remote)
+                // 7. Push User Playlists (Capped to 10 playlists to protect Free Tier DB storage)
                 if (syncPlaylists) {
                     val localPlaylists = playlistRepository.getAllPlaylistsIncludingDeleted()
+                        .sortedByDescending { it.clientUpdatedAtMs }
+                        .take(10)
                     if (localPlaylists.isNotEmpty()) {
                         val cloudPlaylists = localPlaylists.map { pl ->
                             CloudPlaylist(
@@ -671,6 +694,11 @@ class SupabaseSyncManager private constructor(
                         }
                         restClient.upsertPlaylistsBatch(cloudPlaylists)
                     }
+                }
+
+                // 8. Push Installed Plugins & Stremio Add-ons Upstream (Suppressed during initial restore)
+                if (syncAddons && !isInitialSignInRestore) {
+                    syncAddonsUpstream(session)
                 }
 
                 preferencesRepository.setSupabaseLastSyncTimestamp(System.currentTimeMillis())
@@ -749,6 +777,148 @@ class SupabaseSyncManager private constructor(
         return hash.joinToString("") { "%02x".format(it) }
     }
 
+
+    private suspend fun syncAddonsDownstream(userId: String, forceFull: Boolean) {
+        try {
+            val watermark = if (forceFull) null else preferencesRepository.supabaseAddonsWatermark.first()
+            val pullRes = restClient.pullAddonsDelta(userId, watermark)
+            if (pullRes.isSuccess) {
+                val remoteAddons = pullRes.getOrThrow()
+                Log.i(TAG, "Pulled ${remoteAddons.size} addons/repos from cloud (watermark: $watermark)")
+                var maxWatermark = watermark
+
+                val addonRepository = com.euthopiar.core.addons.AddonRepository.getInstance(context)
+                val pluginService = PluginRepositoryService(context)
+                val currentRepoUrls = preferencesRepository.repositoryUrls.first()
+                val currentInstalledAddons = addonRepository.uiState.value.addons.map { it.manifestUrl }.toSet()
+
+                for (item in remoteAddons) {
+                    val url = item.manifestUrl.trim()
+                    if (url.isBlank()) continue
+
+                    if (item.isDeleted) {
+                        if (item.addonType == "stremio") {
+                            addonRepository.removeAddon(url)
+                        } else if (item.addonType == "js_repo") {
+                            pluginService.removeRepository(url)
+                        }
+                    } else {
+                        if (item.addonType == "stremio") {
+                            val norm = com.euthopiar.core.addons.AddonRepository.normalizeAddonUrl(url)
+                            if (!currentInstalledAddons.contains(url) && !currentInstalledAddons.contains(norm)) {
+                                runCatching { addonRepository.installAddon(url) }
+                            }
+                        } else if (item.addonType == "js_repo") {
+                            if (!currentRepoUrls.contains(url)) {
+                                preferencesRepository.addRepositoryUrl(url)
+                                runCatching { pluginService.installAllFromRepo(url) }
+                            }
+                        }
+                    }
+
+                    val serverUpdatedAt = item.updatedAt
+                    if (serverUpdatedAt != null) {
+                        if (maxWatermark == null || serverUpdatedAt > maxWatermark) {
+                            maxWatermark = serverUpdatedAt
+                        }
+                    }
+                }
+
+                if (maxWatermark != null) {
+                    preferencesRepository.setSupabaseAddonsWatermark(maxWatermark)
+                }
+            } else {
+                Log.w(TAG, "Failed to pull addons delta: ${pullRes.exceptionOrNull()?.message}")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error syncing addons downstream", e)
+        }
+    }
+
+    private suspend fun syncAddonsUpstream(session: SupabaseSession) {
+        try {
+            val addonRepository = com.euthopiar.core.addons.AddonRepository.getInstance(context)
+            val installedAddons = addonRepository.uiState.value.addons
+            val installedRepoUrls = preferencesRepository.repositoryUrls.first()
+            val pendingDeleted = preferencesRepository.supabasePendingDeletedAddonUrls.first()
+            val now = System.currentTimeMillis()
+            val isUnderRestoreCooldown = (now - lastInitialRestoreTimestamp.get()) < 45_000L
+            val activePendingDeletions = if (isUnderRestoreCooldown) emptySet() else pendingDeleted
+
+            val itemsToPush = mutableListOf<CloudUserAddon>()
+
+            // Active Stremio Addons
+            for (addon in installedAddons) {
+                val url = addon.manifestUrl.trim()
+                if (url.isBlank()) continue
+                itemsToPush.add(
+                    CloudUserAddon(
+                        userId = session.userId,
+                        manifestUrl = url,
+                        addonType = "stremio",
+                        name = addon.userSetName ?: addon.manifest?.name,
+                        isDeleted = false,
+                        clientUpdatedAtMs = now
+                    )
+                )
+            }
+
+            // Active JS Repositories
+            for (repoUrl in installedRepoUrls) {
+                val url = repoUrl.trim()
+                if (url.isBlank()) continue
+                itemsToPush.add(
+                    CloudUserAddon(
+                        userId = session.userId,
+                        manifestUrl = url,
+                        addonType = "js_repo",
+                        name = null,
+                        isDeleted = false,
+                        clientUpdatedAtMs = now
+                    )
+                )
+            }
+
+            // Pending Deletions (Tombstones) - Protected by 45s restore cooldown
+            for (delUrl in activePendingDeletions) {
+                val url = delUrl.trim()
+                if (url.isBlank()) continue
+                itemsToPush.add(
+                    CloudUserAddon(
+                        userId = session.userId,
+                        manifestUrl = url,
+                        addonType = if (url.endsWith(".json") || url.contains("/manifest")) "stremio" else "js_repo",
+                        name = null,
+                        isDeleted = true,
+                        clientUpdatedAtMs = now
+                    )
+                )
+            }
+
+            if (itemsToPush.isNotEmpty()) {
+                val pushRes = restClient.upsertAddonsBatch(itemsToPush)
+                if (pushRes.isSuccess) {
+                    Log.i(TAG, "Successfully synced ${itemsToPush.size} addons & repos to cloud")
+                    if (activePendingDeletions.isNotEmpty()) {
+                        preferencesRepository.clearPendingDeletedAddonUrls(activePendingDeletions)
+                    }
+                } else {
+                    Log.e(TAG, "Failed to push addons batch: ${pushRes.exceptionOrNull()?.message}")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error syncing addons upstream", e)
+        }
+    }
+
+    private fun sanitizeCloudUrl(url: String?): String? {
+        if (url.isNullOrBlank()) return null
+        val trimmed = url.trim()
+        if (trimmed.startsWith("data:", ignoreCase = true) || trimmed.length > 500) {
+            return null
+        }
+        return trimmed
+    }
     companion object {
         @Volatile
         private var instance: SupabaseSyncManager? = null

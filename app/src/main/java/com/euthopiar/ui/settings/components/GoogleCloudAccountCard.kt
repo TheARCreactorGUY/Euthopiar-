@@ -74,6 +74,7 @@ fun GoogleCloudAccountCard(
     val syncWatchlist by prefs.supabaseSyncWatchlist.collectAsState(initial = true)
     val syncPlaylists by prefs.supabaseSyncPlaylists.collectAsState(initial = true)
     val syncSettings by prefs.supabaseSyncSettings.collectAsState(initial = true)
+    val syncAddons by prefs.supabaseSyncAddons.collectAsState(initial = true)
 
     var isConnecting by remember { mutableStateOf(false) }
     var isExpanded by remember { mutableStateOf(false) }
@@ -569,6 +570,21 @@ fun GoogleCloudAccountCard(
                             onCheckedChange = { checked ->
                                 scope.launch {
                                     prefs.setSupabaseSyncSettings(checked)
+                                    if (checked) syncManager.scheduleSync(300L)
+                                }
+                            }
+                        )
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // 5. Plugins & Stremio Add-ons Toggle
+                        SyncPreferenceRow(
+                            title = "Plugins & Add-ons",
+                            subtitle = "Sync installed provider scrapers, repos & Stremio add-ons",
+                            checked = syncAddons,
+                            onCheckedChange = { checked ->
+                                scope.launch {
+                                    prefs.setSupabaseSyncAddons(checked)
                                     if (checked) syncManager.scheduleSync(300L)
                                 }
                             }

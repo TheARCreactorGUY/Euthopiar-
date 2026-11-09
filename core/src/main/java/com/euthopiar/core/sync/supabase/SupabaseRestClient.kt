@@ -269,10 +269,11 @@ class SupabaseRestClient(
             val pageSize = 500
             var pageCount = 0
             val encodedUserId = URLEncoder.encode(userId, Charsets.UTF_8.name())
+            val selectProjection = "user_id,profile_id,provider,media_id,title,episode_title,season_number,episode_number,poster_url,backdrop_url,current_position_ms,duration_ms,is_completed,is_dismissed,is_deleted,media_type,episode_data,last_watched_timestamp,updated_at"
 
             while (pageCount < 10) {
                 pageCount++
-                var url = "$supabaseUrl/rest/v1/playback_history?user_id=eq.$encodedUserId"
+                var url = "$supabaseUrl/rest/v1/playback_history?user_id=eq.$encodedUserId&select=$selectProjection"
                 if (!currentWatermark.isNullOrBlank()) {
                     val encodedWatermark = URLEncoder.encode(currentWatermark, Charsets.UTF_8.name())
                     url += "&updated_at=gt.$encodedWatermark"
@@ -351,10 +352,11 @@ class SupabaseRestClient(
             val pageSize = 500
             var pageCount = 0
             val encodedUserId = URLEncoder.encode(userId, Charsets.UTF_8.name())
+            val selectProjection = "user_id,profile_id,media_id,title,poster_url,backdrop_url,media_type,rating,release_year,status,is_deleted,added_timestamp,client_updated_at_ms,updated_at"
 
             while (pageCount < 10) {
                 pageCount++
-                var url = "$supabaseUrl/rest/v1/watchlist?user_id=eq.$encodedUserId"
+                var url = "$supabaseUrl/rest/v1/watchlist?user_id=eq.$encodedUserId&select=$selectProjection"
                 if (!currentWatermark.isNullOrBlank()) {
                     val encodedWatermark = URLEncoder.encode(currentWatermark, Charsets.UTF_8.name())
                     url += "&updated_at=gt.$encodedWatermark"
@@ -431,10 +433,11 @@ class SupabaseRestClient(
             val pageSize = 200
             var pageCount = 0
             val encodedUserId = URLEncoder.encode(userId, Charsets.UTF_8.name())
+            val selectProjection = "user_id,profile_id,playlist_id,title,is_system,items_json,created_at_ms,last_played_at_ms,is_deleted,client_updated_at_ms,updated_at"
 
             while (pageCount < 10) {
                 pageCount++
-                var url = "$supabaseUrl/rest/v1/user_playlists?user_id=eq.$encodedUserId"
+                var url = "$supabaseUrl/rest/v1/user_playlists?user_id=eq.$encodedUserId&select=$selectProjection"
                 if (!currentWatermark.isNullOrBlank()) {
                     val encodedWatermark = URLEncoder.encode(currentWatermark, Charsets.UTF_8.name())
                     url += "&updated_at=gt.$encodedWatermark"
@@ -464,6 +467,108 @@ class SupabaseRestClient(
 
             Result.success(allResults)
         } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun upsertAddonsBatch(items: List<CloudUserAddon>): Result<Unit> = withContext(Dispatchers.IO) {
+        if (items.isEmpty()) return@withContext Result.success(Unit)
+        try {
+            val deduped = items
+                .groupBy { "${it.userId}::${it.manifestUrl}" }
+                .mapValues { (_, group) ->
+                    group.maxByOrNull { it.clientUpdatedAtMs }!!
+                }
+                .values
+                .toList()
+
+            // First try conflict-safe server RPC (enforces 60-second cooldown & deletion protection)
+            val rpcPayload = buildJsonObject {
+                put("p_rows", json.encodeToJsonElement(deduped))
+            }
+            val rpcRequest = buildAuthorizedRequest(
+                Request.Builder()
+                    .url("$supabaseUrl/rest/v1/rpc/upsert_user_addons_batch")
+                    .header("Content-Type", "application/json")
+                    .post(rpcPayload.toString().toRequestBody(jsonMediaType))
+            ).build()
+
+            httpClient.newCall(rpcRequest).execute().use { rpcResponse ->
+                if (rpcResponse.isSuccessful) {
+                    return@withContext Result.success(Unit)
+                }
+            }
+
+            // Fallback to direct REST upsert if RPC is unavailable
+            val body = json.encodeToString(deduped)
+            val request = buildAuthorizedRequest(
+                Request.Builder()
+                    .url("$supabaseUrl/rest/v1/user_addons?on_conflict=user_id,manifest_url")
+                    .header("Content-Type", "application/json")
+                    .header("Prefer", "resolution=merge-duplicates")
+                    .post(body.toRequestBody(jsonMediaType))
+            ).build()
+
+            httpClient.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    val err = response.body?.string() ?: ""
+                    android.util.Log.e("SupabaseRestClient", "Upsert addons batch failed [${response.code}]: $err")
+                    return@withContext Result.failure(IOException("Upsert addons batch failed [${response.code}]: $err"))
+                }
+                Result.success(Unit)
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("SupabaseRestClient", "Upsert addons batch exception", e)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun pullAddonsDelta(
+        userId: String,
+        sinceWatermark: String? = null
+    ): Result<List<CloudUserAddon>> = withContext(Dispatchers.IO) {
+        try {
+            val allResults = mutableListOf<CloudUserAddon>()
+            var currentWatermark = sinceWatermark
+            val pageSize = 100
+            var pageCount = 0
+            val encodedUserId = URLEncoder.encode(userId, Charsets.UTF_8.name())
+            val selectProjection = "user_id,manifest_url,addon_type,name,is_deleted,client_updated_at_ms,updated_at"
+
+            while (pageCount < 10) {
+                pageCount++
+                var url = "$supabaseUrl/rest/v1/user_addons?user_id=eq.$encodedUserId&select=$selectProjection"
+                if (!currentWatermark.isNullOrBlank()) {
+                    val encodedWatermark = URLEncoder.encode(currentWatermark, Charsets.UTF_8.name())
+                    url += "&updated_at=gt.$encodedWatermark"
+                }
+                url += "&order=updated_at.asc&limit=$pageSize"
+
+                val request = buildAuthorizedRequest(
+                    Request.Builder().url(url).get()
+                ).build()
+
+                val pageList = httpClient.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        val err = response.body?.string() ?: ""
+                        android.util.Log.e("SupabaseRestClient", "Pull addons failed [${response.code}]: $err")
+                        return@withContext Result.failure(IOException("Pull addons failed [${response.code}]: $err"))
+                    }
+                    val raw = response.body?.string() ?: "[]"
+                    json.decodeFromString<List<CloudUserAddon>>(raw)
+                }
+
+                allResults.addAll(pageList)
+                val nextWatermark = pageList.lastOrNull()?.updatedAt
+                if (pageList.size < pageSize || nextWatermark.isNullOrBlank() || nextWatermark == currentWatermark) {
+                    break
+                }
+                currentWatermark = nextWatermark
+            }
+
+            Result.success(allResults)
+        } catch (e: Exception) {
+            android.util.Log.e("SupabaseRestClient", "Pull addons exception", e)
             Result.failure(e)
         }
     }

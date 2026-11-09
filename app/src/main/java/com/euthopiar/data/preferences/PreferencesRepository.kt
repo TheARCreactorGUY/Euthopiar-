@@ -169,6 +169,9 @@ class PreferencesRepository private constructor(private val context: Context) {
         val SUPABASE_PLAYBACK_WATERMARK = stringPreferencesKey("supabase_playback_watermark")
         val SUPABASE_WATCHLIST_WATERMARK = stringPreferencesKey("supabase_watchlist_watermark")
         val SUPABASE_PLAYLISTS_WATERMARK = stringPreferencesKey("supabase_playlists_watermark")
+        val SUPABASE_ADDONS_WATERMARK = stringPreferencesKey("supabase_addons_watermark")
+        val SUPABASE_SYNC_ADDONS = booleanPreferencesKey("supabase_sync_addons")
+        val SUPABASE_PENDING_DELETED_ADDON_URLS = stringSetPreferencesKey("supabase_pending_deleted_addon_urls")
         val SUPABASE_CLOUD_SYNC_ENABLED = booleanPreferencesKey("supabase_cloud_sync_enabled")
         val SUPABASE_SYNC_PLAYBACK = booleanPreferencesKey("supabase_sync_playback")
         val SUPABASE_SYNC_WATCHLIST = booleanPreferencesKey("supabase_sync_watchlist")
@@ -1308,6 +1311,61 @@ class PreferencesRepository private constructor(private val context: Context) {
     suspend fun setSupabaseSyncSettings(enabled: Boolean) {
         context.preferencesDataStore.edit { preferences ->
             preferences[PreferencesKeys.SUPABASE_SYNC_SETTINGS] = enabled
+        }
+    }
+
+    val supabaseAddonsWatermark: Flow<String?> = context.preferencesDataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            preferences[PreferencesKeys.SUPABASE_ADDONS_WATERMARK]
+        }
+        .distinctUntilChanged()
+
+    suspend fun setSupabaseAddonsWatermark(watermark: String?) {
+        context.preferencesDataStore.edit { preferences ->
+            if (watermark != null) preferences[PreferencesKeys.SUPABASE_ADDONS_WATERMARK] = watermark else preferences.remove(PreferencesKeys.SUPABASE_ADDONS_WATERMARK)
+        }
+    }
+
+    val supabaseSyncAddons: Flow<Boolean> = context.preferencesDataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            preferences[PreferencesKeys.SUPABASE_SYNC_ADDONS] ?: true
+        }
+        .distinctUntilChanged()
+
+    suspend fun setSupabaseSyncAddons(enabled: Boolean) {
+        context.preferencesDataStore.edit { preferences ->
+            preferences[PreferencesKeys.SUPABASE_SYNC_ADDONS] = enabled
+        }
+    }
+
+    val supabasePendingDeletedAddonUrls: Flow<Set<String>> = context.preferencesDataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            preferences[PreferencesKeys.SUPABASE_PENDING_DELETED_ADDON_URLS] ?: emptySet()
+        }
+        .distinctUntilChanged()
+
+    suspend fun addPendingDeletedAddonUrl(url: String) {
+        if (url.isBlank()) return
+        context.preferencesDataStore.edit { preferences ->
+            val current = preferences[PreferencesKeys.SUPABASE_PENDING_DELETED_ADDON_URLS] ?: emptySet()
+            preferences[PreferencesKeys.SUPABASE_PENDING_DELETED_ADDON_URLS] = current + url
+        }
+    }
+
+    suspend fun clearPendingDeletedAddonUrls(urls: Set<String>) {
+        if (urls.isEmpty()) return
+        context.preferencesDataStore.edit { preferences ->
+            val current = preferences[PreferencesKeys.SUPABASE_PENDING_DELETED_ADDON_URLS] ?: emptySet()
+            preferences[PreferencesKeys.SUPABASE_PENDING_DELETED_ADDON_URLS] = current - urls
         }
     }
 

@@ -70,8 +70,8 @@ android {
 
 dependencies {
     api(files("libs/quickjs-kt.jar"))
-    compileOnly(files("libs/lib-nuvio-engine-android-0.1.4.aar"))
-    testImplementation(files("libs/lib-nuvio-engine-android-0.1.4.aar"))
+    compileOnly(files("libs/lib-nuvio-engine-android-0.1.6.aar"))
+    testImplementation(files("libs/lib-nuvio-engine-android-0.1.6.aar"))
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.okhttp)

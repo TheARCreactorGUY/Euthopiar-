@@ -7,6 +7,8 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
+import okhttp3.Request
+import okhttp3.Response
 import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.UnknownHostException
@@ -112,7 +114,7 @@ object PlayerPlaybackNetworking {
         val cookie: String?
     )
 
-    private fun isLoopbackHost(host: String): Boolean = when (host.lowercase()) {
+    fun isLoopbackHost(host: String): Boolean = when (host.lowercase()) {
         "127.0.0.1", "localhost", "::1" -> true
         else -> false
     }
@@ -152,12 +154,51 @@ object PlayerPlaybackNetworking {
     const val NATIVE_PLAYER_USER_AGENT = "libmpv"
     private val nativeUaPreferredHosts = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
+    @androidx.annotation.VisibleForTesting
+    fun resetPreferredHostsForTesting() {
+        nativeUaPreferredHosts.clear()
+    }
+
     fun requiresNativePlayerUserAgent(host: String): Boolean {
         val h = host.lowercase()
         return h in nativeUaPreferredHosts ||
             h.contains("hakunaymatata.com") ||
             h.contains("aoneroom.com") ||
             h.contains("inmoviebox.com")
+    }
+
+    /**
+     * Determines the next request in the adaptive fallback chain, or null if no further retry applies.
+     * Pure function ensuring monotonic request transformation (accumulates fixes without clobbering).
+     */
+    fun nextFallbackRequest(request: Request, response: Response): Request? {
+        val isUaBlocked = (response.code == 428 || response.code == 403)
+        val hasBrowserUa = (request.header("User-Agent") ?: "").startsWith("Mozilla/5.0")
+        if (isUaBlocked && hasBrowserUa) {
+            return request.newBuilder()
+                .header("User-Agent", NATIVE_PLAYER_USER_AGENT)
+                .removeHeader("Referer")
+                .removeHeader("Origin")
+                .build()
+        }
+
+        if (response.code == 403) {
+            val isPreSigned = isPreSignedStorageUrl(request.url)
+            val hasReferer = !request.header("Referer").isNullOrBlank()
+            val hasOrigin = !request.header("Origin").isNullOrBlank()
+            val hasAuth = !request.header("Authorization").isNullOrBlank()
+            val hasCookie = !request.header("Cookie").isNullOrBlank()
+            if (isPreSigned && (hasReferer || hasOrigin || hasAuth || hasCookie)) {
+                return request.newBuilder()
+                    .removeHeader("Referer")
+                    .removeHeader("Origin")
+                    .removeHeader("Authorization")
+                    .removeHeader("Cookie")
+                    .build()
+            }
+        }
+
+        return null
     }
 
     /**
@@ -177,8 +218,8 @@ object PlayerPlaybackNetworking {
             .retryOnConnectionFailure(true)
             .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
             .addInterceptor { chain ->
-                val request = chain.request()
-                val isLoopback = isLoopbackHost(request.url.host)
+                val originalRequest = chain.request()
+                val isLoopback = isLoopbackHost(originalRequest.url.host)
                 val requestChain = if (isLoopback) {
                     chain.withConnectTimeout(65, TimeUnit.SECONDS)
                         .withReadTimeout(65, TimeUnit.SECONDS)
@@ -187,65 +228,59 @@ object PlayerPlaybackNetworking {
                     chain
                 }
 
-                val taggedRequest = if (request.tag(OriginRequestMetadata::class.java) == null) {
-                    request.newBuilder().tag(
+                val baseRequest = if (originalRequest.tag(OriginRequestMetadata::class.java) == null) {
+                    originalRequest.newBuilder().tag(
                         OriginRequestMetadata::class.java,
                         OriginRequestMetadata(
-                            originalHost = request.url.host,
-                            referer = request.header("Referer"),
-                            origin = request.header("Origin"),
-                            authorization = request.header("Authorization"),
-                            cookie = request.header("Cookie")
+                            originalHost = originalRequest.url.host,
+                            referer = originalRequest.header("Referer"),
+                            origin = originalRequest.header("Origin"),
+                            authorization = originalRequest.header("Authorization"),
+                            cookie = originalRequest.header("Cookie")
                         )
                     ).build()
                 } else {
-                    request
+                    originalRequest
                 }
 
-                var resp = requestChain.proceed(taggedRequest)
-
-                if ((resp.code == 428 || resp.code == 403) && (taggedRequest.header("User-Agent") ?: "").startsWith("Mozilla/5.0")) {
-                    val targetHost = resp.request.url.host.lowercase()
-                    val wasPreKnown = requiresNativePlayerUserAgent(targetHost)
-                    nativeUaPreferredHosts.add(targetHost)
-                    val retryReq = taggedRequest.newBuilder()
-                        .header("User-Agent", NATIVE_PLAYER_USER_AGENT)
-                        .removeHeader("Referer")
-                        .removeHeader("Origin")
-                        .build()
-                    val retryResp = requestChain.proceed(retryReq)
-                    if (retryResp.isSuccessful || retryResp.code == 206) {
-                        resp.close()
-                        return@addInterceptor retryResp
-                    } else {
-                        retryResp.close()
-                        if (!wasPreKnown) {
-                            nativeUaPreferredHosts.remove(targetHost)
-                        }
-                    }
-                }
-
-                // If an S3/R2/GCS presigned URL returned 403, retry once with stripped Referer/Origin headers
-                if (resp.code == 403) {
-                    val isPreSigned = isPreSignedStorageUrl(taggedRequest.url)
-                    val hasReferer = !taggedRequest.header("Referer").isNullOrBlank()
-                    val hasOrigin = !taggedRequest.header("Origin").isNullOrBlank()
-                    if (isPreSigned && (hasReferer || hasOrigin)) {
-                        val strippedReq = taggedRequest.newBuilder()
+                // Pre-request normalization: if the target host is known to require native player UA, apply upfront
+                val targetHost = baseRequest.url.host.lowercase()
+                var currentRequest = if (requiresNativePlayerUserAgent(targetHost)) {
+                    val currentUa = baseRequest.header("User-Agent")
+                    if (currentUa != null && currentUa.startsWith("Mozilla/5.0")) {
+                        baseRequest.newBuilder()
+                            .header("User-Agent", NATIVE_PLAYER_USER_AGENT)
                             .removeHeader("Referer")
                             .removeHeader("Origin")
-                            .removeHeader("Authorization")
-                            .removeHeader("Cookie")
                             .build()
-                        val retryResp = requestChain.proceed(strippedReq)
-                        if (retryResp.isSuccessful || retryResp.code == 206) {
-                            resp.close()
-                            return@addInterceptor retryResp
-                        } else {
-                            retryResp.close()
+                    } else {
+                        baseRequest
+                    }
+                } else {
+                    baseRequest
+                }
+
+                var resp = requestChain.proceed(currentRequest)
+                var attempts = 0
+                val maxAttempts = 2
+
+                while (attempts < maxAttempts && !requestChain.call().isCanceled()) {
+                    val nextRequest = nextFallbackRequest(currentRequest, resp) ?: break
+                    resp.close()
+                    currentRequest = nextRequest
+                    resp = requestChain.proceed(currentRequest)
+                    attempts++
+
+                    // Commit host to verified cache ONLY after verified success
+                    if (resp.isSuccessful) {
+                        val successfulHost = resp.request.url.host.lowercase()
+                        val usedNativeUa = (currentRequest.header("User-Agent") == NATIVE_PLAYER_USER_AGENT)
+                        if (usedNativeUa && !isLoopbackHost(successfulHost)) {
+                            nativeUaPreferredHosts.add(successfulHost)
                         }
                     }
                 }
+
                 resp
             }
             .addNetworkInterceptor { chain ->
@@ -274,15 +309,13 @@ object PlayerPlaybackNetworking {
                         builder.removeHeader("Cookie")
                         modified = true
                     }
-                    if (!isSameHost) {
-                        if (request.header("Referer") != null) {
-                            builder.removeHeader("Referer")
-                            modified = true
-                        }
-                        if (request.header("Origin") != null) {
-                            builder.removeHeader("Origin")
-                            modified = true
-                        }
+                    if (request.header("Referer") != null) {
+                        builder.removeHeader("Referer")
+                        modified = true
+                    }
+                    if (request.header("Origin") != null) {
+                        builder.removeHeader("Origin")
+                        modified = true
                     }
                 } else if (isSameHost) {
                     if (request.header("Authorization") == null && meta.authorization != null) {
@@ -389,5 +422,22 @@ object PlayerPlaybackNetworking {
             builder.cookieJar(cookieJar)
         }
         return builder.build()
+    }
+
+    /**
+     * Forcefully cancels all active and queued in-flight calls to loopback hosts (127.0.0.1, localhost).
+     * This immediately aborts the active ExoPlayer streaming socket via TCP RST/FIN without touching
+     * any external network calls (such as TMDB, Simkl/Trakt, SubDL subtitles, or poster image loading).
+     * The local native P2P HTTP daemon detects EOF/RST in <5ms, unblocking stream route teardown instantly.
+     */
+    fun cancelLoopbackPlaybackCalls() {
+        try {
+            baseClient.dispatcher.runningCalls()
+                .filter { isLoopbackHost(it.request().url.host) }
+                .forEach { runCatching { it.cancel() } }
+            baseClient.dispatcher.queuedCalls()
+                .filter { isLoopbackHost(it.request().url.host) }
+                .forEach { runCatching { it.cancel() } }
+        } catch (_: Throwable) {}
     }
 }

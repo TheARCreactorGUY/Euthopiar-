@@ -63,6 +63,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.euthopiar.download.DownloadItem
+import com.euthopiar.download.DownloadRepository
 import com.euthopiar.download.DownloadState
 import com.euthopiar.download.StorageStats
 import com.euthopiar.ui.library.LibraryColors
@@ -118,7 +119,12 @@ fun DownloadsLedgerTab(
     // Storage computations
     val completedBytes = readyDownloads.sumOf { it.bytesDownloaded.coerceAtLeast(it.totalBytes) }
     val activeBytes = activeDownloads.sumOf { it.bytesDownloaded }
-    val totalAppBytes = maxOf(completedBytes, storageStats?.appUsedBytes ?: 0L)
+    val completedBaseBytes = if (readyDownloads.isNotEmpty()) {
+        maxOf(completedBytes, storageStats?.appUsedBytes ?: 0L)
+    } else {
+        0L
+    }
+    val totalAppBytes = completedBaseBytes + activeBytes
     val hasReliableStorage = storageStats != null && storageStats.totalBytes > 0L
     val freeBytes = if (hasReliableStorage) storageStats!!.freeBytes else 0L
     val totalDeviceBytes = if (hasReliableStorage) storageStats!!.totalBytes else 0L
@@ -600,7 +606,12 @@ private fun StaggeredDownloadingRow(
             val pct = item.progressPercentage.toInt()
             val quality = item.qualityLabel.substringBefore(" ").ifBlank { "1080p" }
             val speedPart = if (!item.speed.isNullOrBlank()) " · ${item.speed}" else ""
-            "Downloading · $pct% · $quality$speedPart"
+            val sizePart = if (item.bytesDownloaded > 0L) {
+                val dlStr = DownloadRepository.formatBytes(item.bytesDownloaded)
+                val totalStr = if (item.totalBytes > 0L) " / ${DownloadRepository.formatBytes(item.totalBytes)}" else ""
+                " · $dlStr$totalStr"
+            } else ""
+            "Downloading · $pct%$sizePart · $quality$speedPart"
         }
         DownloadState.QUEUED -> {
             val pct = item.progressPercentage.toInt()
@@ -608,8 +619,13 @@ private fun StaggeredDownloadingRow(
         }
         DownloadState.PAUSED -> {
             val pct = item.progressPercentage.toInt()
+            val sizePart = if (item.bytesDownloaded > 0L) {
+                val dlStr = DownloadRepository.formatBytes(item.bytesDownloaded)
+                val totalStr = if (item.totalBytes > 0L) " / ${DownloadRepository.formatBytes(item.totalBytes)}" else ""
+                " · $dlStr$totalStr"
+            } else ""
             val reason = item.failureReason?.takeIf { it.isNotBlank() } ?: "Paused"
-            "$reason · $pct%"
+            "$reason · $pct%$sizePart"
         }
         DownloadState.FAILED -> "Failed · Tap to retry"
         else -> "Ready"

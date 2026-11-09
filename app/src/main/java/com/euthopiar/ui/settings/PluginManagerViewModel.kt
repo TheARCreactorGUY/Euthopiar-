@@ -13,6 +13,7 @@ import com.euthopiar.core.js.network.httpRequestRaw
 import com.euthopiar.core.model.PluginManifest
 import com.euthopiar.core.registry.PluginRegistry
 import com.euthopiar.data.preferences.PreferencesRepository
+import com.euthopiar.data.sync.supabase.SupabaseSyncManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -335,6 +336,7 @@ class PluginManagerViewModel(
                 if (count >= 0) {
                     preferencesRepository.addRepositoryUrl(trimmed)
                     loadPlugins()
+                    SupabaseSyncManager.getInstance(getApplication()).scheduleSync()
                     withContext(Dispatchers.Main) {
                         onResult(true, "Installed $count plugins from repository")
                     }
@@ -375,13 +377,18 @@ class PluginManagerViewModel(
     fun removeRepository(url: String) {
         viewModelScope.launch {
             pluginService.removeRepository(url)
+            preferencesRepository.addPendingDeletedAddonUrl(url)
             loadPlugins()
+            SupabaseSyncManager.getInstance(getApplication()).scheduleSync()
         }
     }
 
     fun installAddon(url: String, onResult: (Boolean, String?) -> Unit) {
         viewModelScope.launch {
             val res = addonRepository.installAddon(url)
+            if (res.isSuccess) {
+                SupabaseSyncManager.getInstance(getApplication()).scheduleSync()
+            }
             withContext(Dispatchers.Main) {
                 if (res.isSuccess) {
                     onResult(true, res.getOrNull()?.manifest?.name)
@@ -395,6 +402,8 @@ class PluginManagerViewModel(
     fun removeAddon(manifestUrl: String) {
         viewModelScope.launch {
             addonRepository.removeAddon(manifestUrl)
+            preferencesRepository.addPendingDeletedAddonUrl(manifestUrl)
+            SupabaseSyncManager.getInstance(getApplication()).scheduleSync()
         }
     }
 

@@ -1,6 +1,9 @@
 package com.euthopiar.ui.details.downloads
 
+import android.content.Intent
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.snap
@@ -35,6 +38,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SheetState
 import androidx.compose.material3.Text
@@ -78,7 +82,9 @@ import com.euthopiar.core.streams.StreamsEmptyStateReason
 import com.euthopiar.core.streams.StreamsRepository
 import com.euthopiar.core.streams.sortedForGroupedDisplay
 import com.euthopiar.data.preferences.PreferencesRepository
+import com.euthopiar.download.DownloadEngine
 import com.euthopiar.download.DownloadRepository
+import com.euthopiar.download.StoragePreflightResult
 import com.euthopiar.ui.theme.AppFontFamily
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -112,6 +118,7 @@ fun DownloadSourcesSheet(
     val downloadRepository = remember { DownloadRepository.getInstance(context) }
     val preferencesRepository = remember { PreferencesRepository.getInstance(context) }
 
+    val customDownloadDir by preferencesRepository.customDownloadDir.collectAsState(initial = null)
     val isDebridEnabled by preferencesRepository.debridEnabled.collectAsState(initial = false)
     val activeDebridProvider by preferencesRepository.activeDebridProvider.collectAsState(initial = "NONE")
     val realDebridApiKey by preferencesRepository.realDebridApiKey.collectAsState(initial = "")
@@ -125,6 +132,8 @@ fun DownloadSourcesSheet(
 
     var pendingStreamToDownload by remember { mutableStateOf<Pair<StreamItem, String>?>(null) }
     var showFirstDownloadDialog by remember { mutableStateOf(false) }
+    var showSelectDirectoryDialog by remember { mutableStateOf(false) }
+    var insufficientStorageData by remember { mutableStateOf<Pair<Long, Long>?>(null) }
 
     val effectiveEpisode = remember(detail, episode) {
         if (detail.type == MediaType.TV_SERIES || detail.type == MediaType.ANIME) {
@@ -204,6 +213,33 @@ fun DownloadSourcesSheet(
         activeDownloadStreamId = cleanKey
         activeDownloadState = StreamDownloadState.STARTING
 
+        val handleEnqueueResult: suspend (StoragePreflightResult, String) -> Unit = { result, successMsg ->
+            when (result) {
+                is StoragePreflightResult.Sufficient -> {
+                    try {
+                        haptic.performHapticFeedback(HapticFeedbackType.Confirm)
+                    } catch (_: Throwable) {}
+                    activeDownloadState = StreamDownloadState.ADDED
+                    delay(DownloadTokens.DISMISS_DELAY_MS)
+                    onDownloadStarted(successMsg)
+                    try {
+                        sheetState.hide()
+                    } catch (_: Throwable) {}
+                    onDismiss()
+                }
+                is StoragePreflightResult.InsufficientSpace -> {
+                    activeDownloadState = StreamDownloadState.IDLE
+                    activeDownloadStreamId = null
+                    insufficientStorageData = Pair(result.requiredBytes, result.availableBytes)
+                }
+                is StoragePreflightResult.UnsupportedStream -> {
+                    activeDownloadState = StreamDownloadState.IDLE
+                    activeDownloadStreamId = null
+                    onDownloadStarted("Unsupported stream: ${result.reason}")
+                }
+            }
+        }
+
         coroutineScope.launch {
             try {
                 val cleanQuality = stream.quality ?: if (stream.isTorrentStream) "Torrent" else "Direct Stream"
@@ -263,95 +299,41 @@ fun DownloadSourcesSheet(
                                 url = resolvedSource.url,
                                 headers = resolvedSource.headers
                             )
-                            val enqueued = downloadRepository.enqueueFromStream(
+                            val preflight = downloadRepository.enqueueFromStream(
                                 detail = detail,
                                 episode = effectiveEpisode,
                                 stream = directStream
                             )
-                            if (enqueued) {
-                                try {
-                                    haptic.performHapticFeedback(HapticFeedbackType.Confirm)
-                                } catch (_: Throwable) {}
-                                activeDownloadState = StreamDownloadState.ADDED
-                                delay(DownloadTokens.DISMISS_DELAY_MS)
-                                onDownloadStarted("Downloading $cleanQuality...")
-                                try {
-                                    sheetState.hide()
-                                } catch (_: Throwable) {}
-                                onDismiss()
-                            } else {
-                                activeDownloadState = StreamDownloadState.IDLE
-                                activeDownloadStreamId = null
-                                onDownloadStarted("Failed to enqueue stream")
-                            }
+                            handleEnqueueResult(preflight, "Downloading $cleanQuality...")
                         } else {
                             val err = resolveResult.exceptionOrNull()?.message ?: "Debrid resolution failed"
                             onDownloadStarted("Debrid fallback to P2P: $err")
                             val torrentStream = stream.copy(url = magnet)
-                            val enqueued = downloadRepository.enqueueFromStream(
+                            val preflight = downloadRepository.enqueueFromStream(
                                 detail = detail,
                                 episode = effectiveEpisode,
                                 stream = torrentStream
                             )
-                            if (enqueued) {
-                                try {
-                                    haptic.performHapticFeedback(HapticFeedbackType.Confirm)
-                                } catch (_: Throwable) {}
-                                activeDownloadState = StreamDownloadState.ADDED
-                                delay(DownloadTokens.DISMISS_DELAY_MS)
-                                onDownloadStarted("Starting Native P2P Download...")
-                                try {
-                                    sheetState.hide()
-                                } catch (_: Throwable) {}
-                                onDismiss()
-                            } else {
-                                activeDownloadState = StreamDownloadState.IDLE
-                                activeDownloadStreamId = null
-                                onDownloadStarted("Failed to start torrent download")
-                            }
+                            handleEnqueueResult(preflight, "Starting Native P2P Download...")
                         }
                     } else {
                         // Direct Native P2P torrent download
                         val torrentStream = stream.copy(url = magnet)
-                        val enqueued = downloadRepository.enqueueFromStream(
+                        val preflight = downloadRepository.enqueueFromStream(
                             detail = detail,
                             episode = effectiveEpisode,
                             stream = torrentStream
                         )
-                        if (enqueued) {
-                            activeDownloadState = StreamDownloadState.ADDED
-                            delay(DownloadTokens.DISMISS_DELAY_MS)
-                            onDownloadStarted("Starting Native P2P Torrent Download...")
-                            try {
-                                sheetState.hide()
-                            } catch (_: Throwable) {}
-                            onDismiss()
-                        } else {
-                            activeDownloadState = StreamDownloadState.IDLE
-                            activeDownloadStreamId = null
-                            onDownloadStarted("Failed to start torrent download")
-                        }
+                        handleEnqueueResult(preflight, "Starting Native P2P Torrent Download...")
                     }
                 } else {
                     // Direct stream download
-                    val enqueued = downloadRepository.enqueueFromStream(
+                    val preflight = downloadRepository.enqueueFromStream(
                         detail = detail,
                         episode = effectiveEpisode,
                         stream = stream
                     )
-                    if (enqueued) {
-                        activeDownloadState = StreamDownloadState.ADDED
-                        delay(DownloadTokens.DISMISS_DELAY_MS)
-                        onDownloadStarted("Downloading $cleanQuality...")
-                        try {
-                            sheetState.hide()
-                        } catch (_: Throwable) {}
-                        onDismiss()
-                    } else {
-                        activeDownloadState = StreamDownloadState.IDLE
-                        activeDownloadStreamId = null
-                        onDownloadStarted("Failed to enqueue stream")
-                    }
+                    handleEnqueueResult(preflight, "Downloading $cleanQuality...")
                 }
             } catch (t: Throwable) {
                 activeDownloadState = StreamDownloadState.IDLE
@@ -361,8 +343,35 @@ fun DownloadSourcesSheet(
         }
     }
 
+    val folderPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            try {
+                val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                context.contentResolver.takePersistableUriPermission(uri, flags)
+            } catch (_: Exception) {}
+            val resolvedPath = DownloadEngine.resolveTreeUriToPath(uri)
+            coroutineScope.launch {
+                preferencesRepository.setCustomDownloadDir(resolvedPath)
+                preferencesRepository.setFirstDownloadAlertDismissed(true)
+                Toast.makeText(context, "Download location set to $resolvedPath", Toast.LENGTH_SHORT).show()
+                val pending = pendingStreamToDownload
+                pendingStreamToDownload = null
+                if (pending != null) {
+                    executeStreamDownload(pending.first, pending.second)
+                }
+            }
+        } else {
+            pendingStreamToDownload = null
+        }
+    }
+
     val handleStreamDownload: (StreamItem, String) -> Unit = { stream, streamKey ->
-        if (!firstDownloadAlertDismissed) {
+        if (customDownloadDir.isNullOrBlank()) {
+            pendingStreamToDownload = stream to streamKey
+            showSelectDirectoryDialog = true
+        } else if (!firstDownloadAlertDismissed) {
             pendingStreamToDownload = stream to streamKey
             showFirstDownloadDialog = true
         } else {
@@ -439,6 +448,42 @@ fun DownloadSourcesSheet(
             onDownloadClick = handleStreamDownload,
             onLongClick = onLongClickCopy,
             onRetry = onRetry
+        )
+    }
+
+    if (showSelectDirectoryDialog) {
+        VelvetAlertDialog(
+            onDismissRequest = {
+                showSelectDirectoryDialog = false
+                pendingStreamToDownload = null
+            },
+            title = "Choose Download Location",
+            message = "Before starting downloads, please choose a storage folder. You can select internal storage or an SD card.",
+            confirmText = "Select Folder",
+            dismissText = "Cancel",
+            icon = Icons.Outlined.Download,
+            onConfirm = {
+                showSelectDirectoryDialog = false
+                folderPickerLauncher.launch(null)
+            },
+            onDismiss = {
+                showSelectDirectoryDialog = false
+                pendingStreamToDownload = null
+            }
+        )
+    }
+
+    if (insufficientStorageData != null) {
+        val (required, available) = insufficientStorageData!!
+        VelvetAlertDialog(
+            onDismissRequest = { insufficientStorageData = null },
+            title = "Insufficient Storage",
+            message = "This download requires ${DownloadRepository.formatBytes(required)}, but only ${DownloadRepository.formatBytes(available)} is available on your download drive (including a 500 MB system buffer).\n\nPlease free up space or choose a different storage location in Settings.",
+            confirmText = "Understood",
+            dismissText = null,
+            icon = Icons.Outlined.ErrorOutline,
+            onConfirm = { insufficientStorageData = null },
+            onDismiss = { insufficientStorageData = null }
         )
     }
 

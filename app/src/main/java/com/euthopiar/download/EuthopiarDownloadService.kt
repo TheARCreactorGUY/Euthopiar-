@@ -26,11 +26,7 @@ class EuthopiarDownloadService : Service() {
     override fun onTimeout(startId: Int) {
         super.onTimeout(startId)
         try {
-            val repository = DownloadRepository.getInstance(this)
-            val downloading = repository.downloads.value.filter { it.state == DownloadState.DOWNLOADING }
-            for (item in downloading) {
-                repository.pauseDownload(item.id)
-            }
+            DownloadRepository.getInstance(this).pauseAllDownloadsForTimeout()
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf(startId)
         } catch (_: Exception) {
@@ -85,9 +81,9 @@ class EuthopiarDownloadService : Service() {
 
     override fun onTimeout(startId: Int, fgsType: Int) {
         super.onTimeout(startId, fgsType)
-        android.util.Log.w("DownloadService", "Foreground service timed out for startId=$startId, fgsType=$fgsType. Pausing active downloads.")
+        android.util.Log.w("DownloadService", "Foreground service timed out for startId=$startId, fgsType=$fgsType. Pausing active downloads for timeout.")
         try {
-            DownloadRepository.getInstance(this).pauseAllDownloads()
+            DownloadRepository.getInstance(this).pauseAllDownloadsForTimeout()
         } catch (_: Exception) {}
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf(startId)

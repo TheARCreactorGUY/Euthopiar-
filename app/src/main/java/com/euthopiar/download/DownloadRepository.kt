@@ -7,6 +7,7 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.os.Environment
 import android.os.StatFs
+import androidx.core.util.AtomicFile
 import androidx.media3.datasource.DataSource
 import com.euthopiar.core.model.DownloadOption
 import com.euthopiar.core.model.EpisodeItem
@@ -34,6 +35,7 @@ class DownloadRepository private constructor(private val context: Context) {
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = false }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val metadataFile = File(context.filesDir, "download_metadata.json")
+    private val atomicMetadataFile = AtomicFile(metadataFile)
 
     private val preferencesRepository = PreferencesRepository.getInstance(context)
     private val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
@@ -49,6 +51,20 @@ class DownloadRepository private constructor(private val context: Context) {
         loadPersistedMetadata()
         observeWifiOnlyPreference()
         registerNetworkCallback()
+        cleanupOrphanedP2pScratchDirs()
+    }
+
+    private fun cleanupOrphanedP2pScratchDirs() {
+        scope.launch {
+            try {
+                val activeHashes = _downloads.value.mapNotNull { item ->
+                    com.euthopiar.core.p2p.extractP2pStreamRequest(item.streamUrl)?.infoHash?.let {
+                        com.euthopiar.core.p2p.canonicalP2pInfoHash(it)
+                    }
+                }.toSet()
+                engine.cleanupOrphanedP2pWorkDirs(activeHashes)
+            } catch (_: Throwable) {}
+        }
     }
 
     private fun observeWifiOnlyPreference() {
@@ -59,7 +75,7 @@ class DownloadRepository private constructor(private val context: Context) {
                     if (!wifiOnly) {
                         resumeWaitingDownloads()
                     } else if (isNetworkMeteredOrCellular()) {
-                        pauseActiveDownloadsForWifi()
+                        pauseActiveDownloadsForNetwork("Waiting for Wi-Fi")
                     }
                 }
             } catch (_: Throwable) {}
@@ -138,11 +154,25 @@ class DownloadRepository private constructor(private val context: Context) {
     }
 
     internal fun handleNetworkStateChange() {
-        if (!isWifiOnlyEnabled()) return
-        if (!isNetworkMeteredOrCellular()) {
-            resumeWaitingDownloads()
+        val wifiOnly = isWifiOnlyEnabled()
+        val isMetered = isNetworkMeteredOrCellular()
+        val cm = connectivityManager
+        val hasInternet = try {
+            val net = cm?.activeNetwork
+            if (net != null) {
+                cm.getNetworkCapabilities(net)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+            } else false
+        } catch (_: Throwable) { false }
+
+        if (!hasInternet) {
+            pauseActiveDownloadsForNetwork("Waiting for network")
+            return
+        }
+
+        if (wifiOnly && isMetered) {
+            pauseActiveDownloadsForNetwork("Waiting for Wi-Fi")
         } else {
-            pauseActiveDownloadsForWifi()
+            resumeWaitingDownloads()
         }
     }
 
@@ -160,13 +190,13 @@ class DownloadRepository private constructor(private val context: Context) {
         }
     }
 
-    private fun pauseActiveDownloadsForWifi() {
-        val active = _downloads.value.filter { it.state == DownloadState.DOWNLOADING }
+    private fun pauseActiveDownloadsForNetwork(reason: String) {
+        val active = _downloads.value.filter { it.state == DownloadState.DOWNLOADING || it.state == DownloadState.QUEUED }
         for (item in active) {
             engine.pauseDownload(item.id)
             _downloads.update { list ->
                 list.map {
-                    if (it.id == item.id) it.copy(state = DownloadState.PAUSED, failureReason = "Waiting for Wi-Fi", speed = null)
+                    if (it.id == item.id) it.copy(state = DownloadState.PAUSED, failureReason = reason, speed = null)
                     else it
                 }
             }
@@ -179,7 +209,8 @@ class DownloadRepository private constructor(private val context: Context) {
 
     private fun resumeWaitingDownloads() {
         val waiting = _downloads.value.filter {
-            it.state == DownloadState.PAUSED && it.failureReason == "Waiting for Wi-Fi"
+            it.state == DownloadState.PAUSED &&
+            (it.failureReason == "Waiting for Wi-Fi" || it.failureReason == "Waiting for network")
         }
         for (item in waiting) {
             resumeDownload(item.id)
@@ -189,24 +220,38 @@ class DownloadRepository private constructor(private val context: Context) {
     private fun loadPersistedMetadata() {
         scope.launch {
             try {
-                if (metadataFile.exists()) {
-                    val content = metadataFile.readText()
-                    if (content.isNotBlank()) {
-                        val items = json.decodeFromString<List<DownloadItem>>(content)
-                        // Verify existing local files for completed items
-                        val verifiedItems = items.map { item ->
-                            if (item.state == DownloadState.COMPLETED && item.localFilePath != null) {
-                                val f = File(item.localFilePath)
-                                if (!f.exists()) {
-                                    item.copy(state = DownloadState.FAILED, failureReason = "File removed from storage")
-                                } else {
-                                    item
-                                }
+                val content = if (metadataFile.exists() || File(metadataFile.parentFile, "${metadataFile.name}.bak").exists()) {
+                    try {
+                        atomicMetadataFile.readFully().toString(Charsets.UTF_8)
+                    } catch (_: Exception) {
+                        metadataFile.takeIf { it.exists() }?.readText().orEmpty()
+                    }
+                } else ""
+
+                if (content.isNotBlank()) {
+                    val items = json.decodeFromString<List<DownloadItem>>(content)
+                    // Verify existing local files for completed items
+                    val verifiedItems = items.map { item ->
+                        if (item.state == DownloadState.COMPLETED && item.localFilePath != null) {
+                            val f = File(item.localFilePath)
+                            if (!f.exists()) {
+                                item.copy(state = DownloadState.FAILED, failureReason = "File removed from storage")
                             } else {
                                 item
                             }
+                        } else {
+                            item
                         }
-                        _downloads.value = verifiedItems
+                    }
+                    _downloads.value = verifiedItems
+
+                    // Auto-recover zombie or interrupted downloads from previous process run
+                    val zombieOrPending = verifiedItems.filter {
+                        it.state == DownloadState.DOWNLOADING || it.state == DownloadState.QUEUED ||
+                        (it.state == DownloadState.PAUSED && (it.failureReason == "Waiting for network" || it.failureReason == "Waiting for Wi-Fi"))
+                    }
+                    for (item in zombieOrPending) {
+                        resumeDownload(item.id)
                     }
                 }
             } catch (e: Exception) {
@@ -219,23 +264,60 @@ class DownloadRepository private constructor(private val context: Context) {
         scope.launch {
             try {
                 val data = json.encodeToString(_downloads.value)
-                metadataFile.writeText(data)
+                val fos = atomicMetadataFile.startWrite()
+                try {
+                    fos.write(data.toByteArray(Charsets.UTF_8))
+                    atomicMetadataFile.finishWrite(fos)
+                } catch (writeErr: Exception) {
+                    atomicMetadataFile.failWrite(fos)
+                    throw writeErr
+                }
             } catch (e: Exception) {
                 // Ignore persist error
             }
         }
     }
 
+    fun checkStorageCapacity(estimatedBytes: Long): StoragePreflightResult {
+        if (estimatedBytes <= 0L) return StoragePreflightResult.Sufficient
+        val downloadDir = engine.getDownloadDirectory()
+        val availableBytes = try {
+            StatFs(downloadDir.path).availableBytes
+        } catch (_: Exception) {
+            try {
+                StatFs(context.filesDir.path).availableBytes
+            } catch (_: Exception) {
+                0L
+            }
+        }
+        val usableBytes = (availableBytes - SAFETY_STORAGE_BUFFER_BYTES).coerceAtLeast(0L)
+        if (estimatedBytes > usableBytes) {
+            return StoragePreflightResult.InsufficientSpace(
+                requiredBytes = estimatedBytes,
+                availableBytes = availableBytes
+            )
+        }
+        return StoragePreflightResult.Sufficient
+    }
+
     fun enqueueFromStream(
         detail: MediaDetail,
         episode: EpisodeItem? = null,
         stream: StreamItem
-    ): Boolean {
+    ): StoragePreflightResult {
         var downloadUrl = stream.playableDirectUrl
             ?: (if (stream.isTorrentStream) stream.effectiveMagnetOrHash else null)
-            ?: return false
+            ?: return StoragePreflightResult.UnsupportedStream("Missing playable stream URL")
 
-        if (!stream.isTorrentStream && !stream.isSupportedDownloadUrl()) return false
+        if (!stream.isTorrentStream && !stream.isSupportedDownloadUrl()) {
+            return StoragePreflightResult.UnsupportedStream("Unsupported stream URL scheme")
+        }
+
+        val estimatedBytes = parseEstimatedBytes(stream.size)
+        val preflight = checkStorageCapacity(estimatedBytes)
+        if (preflight is StoragePreflightResult.InsufficientSpace) {
+            return preflight
+        }
 
         if (stream.isTorrentStream && !downloadUrl.startsWith("http", ignoreCase = true)) {
             val s = episode?.seasonNumber
@@ -271,7 +353,7 @@ class DownloadRepository private constructor(private val context: Context) {
         )
 
         startDownload(detail, episode, option)
-        return true
+        return StoragePreflightResult.Sufficient
     }
 
     fun updateDownloadUrl(id: String, newUrl: String, newHeaders: Map<String, String>) {
@@ -424,19 +506,36 @@ class DownloadRepository private constructor(private val context: Context) {
                 checkStopService()
             },
             onError = { errorMessage ->
+                val isNetworkWait = errorMessage.contains("Waiting for network", ignoreCase = true) ||
+                        errorMessage.contains("Waiting for Wi-Fi", ignoreCase = true)
+                val isRecoverable = isNetworkWait ||
+                        errorMessage.contains("connection lost", ignoreCase = true) ||
+                        errorMessage.contains("connection interrupted", ignoreCase = true) ||
+                        errorMessage.contains("timeout", ignoreCase = true)
+
                 _downloads.update { list ->
                     list.map {
                         if (it.id == id) {
-                            it.copy(
-                                state = DownloadState.FAILED,
-                                failureReason = errorMessage,
-                                speed = null
-                            )
+                            if (isRecoverable) {
+                                it.copy(
+                                    state = DownloadState.PAUSED,
+                                    failureReason = if (isNetworkWait) errorMessage else "Waiting for network",
+                                    speed = null
+                                )
+                            } else {
+                                it.copy(
+                                    state = DownloadState.FAILED,
+                                    failureReason = errorMessage,
+                                    speed = null
+                                )
+                            }
                         } else it
                     }
                 }
                 persistMetadata()
-                EuthopiarDownloadJobService.cancelUidtJob(context, id)
+                if (!isRecoverable) {
+                    EuthopiarDownloadJobService.cancelUidtJob(context, id)
+                }
                 checkStopService()
             }
         )
@@ -489,6 +588,24 @@ class DownloadRepository private constructor(private val context: Context) {
                 list.map {
                     if (it.id == item.id && it.state != DownloadState.COMPLETED) {
                         it.copy(state = DownloadState.PAUSED, failureReason = null, speed = null)
+                    } else it
+                }
+            }
+        }
+        if (active.isNotEmpty()) {
+            persistMetadata()
+            checkStopService()
+        }
+    }
+
+    fun pauseAllDownloadsForTimeout() {
+        val active = _downloads.value.filter { it.state == DownloadState.DOWNLOADING || it.state == DownloadState.QUEUED }
+        for (item in active) {
+            engine.pauseDownload(item.id)
+            _downloads.update { list ->
+                list.map {
+                    if (it.id == item.id && it.state != DownloadState.COMPLETED) {
+                        it.copy(state = DownloadState.PAUSED, failureReason = "Waiting for network", speed = null)
                     } else it
                 }
             }
@@ -639,7 +756,7 @@ class DownloadRepository private constructor(private val context: Context) {
                 }
             } catch (_: Exception) {}
         }
-        engine.removeDownload(id)
+        engine.removeDownload(id, target?.streamUrl)
         EuthopiarDownloadJobService.cancelUidtJob(context, id)
         _downloads.update { list -> list.filterNot { it.id == id } }
         persistMetadata()
@@ -748,7 +865,11 @@ class DownloadRepository private constructor(private val context: Context) {
     suspend fun getStorageStats(): StorageStats = withContext(Dispatchers.IO) {
         val downloadDir = engine.getDownloadDirectory()
         val appUsed = try {
-            downloadDir.walkTopDown().filter { it.isFile }.map { it.length() }.sum()
+            downloadDir.walkTopDown()
+                .onEnter { dir -> !dir.name.startsWith(".") }
+                .filter { it.isFile && !it.name.startsWith(".") && !it.name.endsWith(".part") && !it.name.endsWith(".download") && !it.name.endsWith(".tmp") }
+                .map { it.length() }
+                .sum()
         } catch (e: Exception) {
             0L
         }
@@ -787,24 +908,25 @@ class DownloadRepository private constructor(private val context: Context) {
         }
     }
 
-    private fun formatBytes(bytes: Long): String {
-        if (bytes <= 0L) return "0 MB"
-        val gb = bytes / (1024.0 * 1024.0 * 1024.0)
-        return if (gb >= 1.0) {
-            String.format("%.2f GB", gb)
-        } else {
-            val mb = bytes / (1024.0 * 1024.0)
-            if (mb < 10.0) {
-                String.format("%.1f MB", mb)
-            } else {
-                String.format("%.0f MB", mb)
-            }
-        }
-    }
-
     companion object {
+        const val SAFETY_STORAGE_BUFFER_BYTES = 500L * 1024L * 1024L // 500 MB
         @Volatile
         private var instance: DownloadRepository? = null
+
+        fun formatBytes(bytes: Long): String {
+            if (bytes <= 0L) return "0 MB"
+            val gb = bytes / (1024.0 * 1024.0 * 1024.0)
+            return if (gb >= 1.0) {
+                String.format(java.util.Locale.US, "%.2f GB", gb)
+            } else {
+                val mb = bytes / (1024.0 * 1024.0)
+                if (mb < 10.0) {
+                    String.format(java.util.Locale.US, "%.1f MB", mb)
+                } else {
+                    String.format(java.util.Locale.US, "%.0f MB", mb)
+                }
+            }
+        }
 
         fun getInstance(context: Context): DownloadRepository {
             return instance ?: synchronized(this) {

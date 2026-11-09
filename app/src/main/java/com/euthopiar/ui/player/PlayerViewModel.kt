@@ -1280,6 +1280,7 @@ class PlayerViewModel(
                 val isTransientIo = error.errorCode == PlaybackException.ERROR_CODE_IO_UNSPECIFIED ||
                         error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
                         error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ||
+                        error.errorCode == PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE ||
                         error.cause is java.io.EOFException ||
                         error.cause is java.net.SocketException ||
                         error.cause is java.net.SocketTimeoutException ||
@@ -1570,7 +1571,10 @@ class PlayerViewModel(
 
         // 1. Cancel previous stream collection, clear player items, and reset cues
         try {
-            com.euthopiar.core.p2p.P2pStreamingEngine.stopStream()
+            com.euthopiar.core.network.PlayerPlaybackNetworking.cancelLoopbackPlaybackCalls()
+        } catch (_: Throwable) {}
+        try {
+            com.euthopiar.core.p2p.P2pStreamingEngine.stopStream(evictTorrent = false)
         } catch (_: Throwable) {}
         try {
             com.euthopiar.ui.player.sequential.SequentialStreamManager.releaseActiveSession()
@@ -2279,11 +2283,14 @@ class PlayerViewModel(
         val isOfflinePlayback = isOffline || _uiState.value.isOfflinePlayback
         val isDownloaded = isOfflinePlayback ||
                 downloadRepository.isMediaDownloaded(currentMediaId ?: "", currentEpisodeData)
+        val hostLower = uri.host.orEmpty().lowercase()
+        val isLoopback = hostLower == "127.0.0.1" || hostLower == "localhost" || hostLower == "::1" ||
+                urlLower.contains("://127.0.0.1") || urlLower.contains("://localhost") || urlLower.contains("://[::1]")
 
         val dataSourceFactory: androidx.media3.datasource.DataSource.Factory = when {
             isLocalFile -> DefaultDataSource.Factory(context)
             isOfflinePlayback -> downloadRepository.getOfflineCacheDataSourceFactory()
-            isDownloaded -> downloadRepository.getCacheDataSourceFactory(requestHeaders)
+            !isLoopback && isDownloaded -> downloadRepository.getCacheDataSourceFactory(requestHeaders)
             else -> DefaultDataSource.Factory(context, overridingDataSourceFactory)
         }
 
@@ -2481,6 +2488,17 @@ class PlayerViewModel(
                                 .setTsExtractorTimestampSearchBytes(1500 * TsExtractor.TS_PACKET_SIZE)
                         }
                     }
+                } else if (isLoopback) {
+                    android.util.Log.i("PlayerViewModel", "Using LoopbackMatroskaExtractorsFactory for loopback P2P torrent stream: $cleanStreamUrl")
+                    val torrentFileSize = com.euthopiar.core.p2p.P2pStreamingEngine.activeStreamFileSize
+                    com.euthopiar.ui.player.sequential.LoopbackMatroskaExtractorsFactory(
+                        totalContentLengthProvider = {
+                            if (torrentFileSize > 0L) torrentFileSize else (_uiState.value.durationMs * 1000L)
+                        },
+                        durationMsProvider = {
+                            _uiState.value.durationMs
+                        }
+                    )
                 } else {
                     DefaultExtractorsFactory()
                         .setConstantBitrateSeekingEnabled(true)
@@ -2514,6 +2532,9 @@ class PlayerViewModel(
         seekToPosition: Long? = null,
         isOffline: Boolean = false
     ) {
+        try {
+            com.euthopiar.core.network.PlayerPlaybackNetworking.cancelLoopbackPlaybackCalls()
+        } catch (_: Throwable) {}
         sourcePrepJob?.cancel()
         sourcePrepJob = null
         fastStartJob?.cancel()
@@ -3512,6 +3533,8 @@ class PlayerViewModel(
                         val phase = when {
                             st.peers == 0 && st.seeds == 0 -> "Searching DHT & trackers for peers..."
                             st.bufferProgress < 0.05f && st.downloadSpeed <= 0L -> "Retrieving torrent metadata..."
+                            _uiState.value.isBuffering && _uiState.value.currentPositionMs == 0L && st.bufferProgress < 0.05f ->
+                                if (st.seeds > 0) "Preparing stream index (${st.seeds} seeds)..." else "Preparing stream index..."
                             else -> "Pre-buffering video pieces · ${(st.bufferProgress * 100).toInt()}%"
                         }
                         _uiState.update {
@@ -4099,7 +4122,12 @@ class PlayerViewModel(
 
         // 2. Stop P2P streaming and release SequentialStreamManager active session
         try {
-            com.euthopiar.core.p2p.P2pStreamingEngine.stopStream()
+            com.euthopiar.core.network.PlayerPlaybackNetworking.cancelLoopbackPlaybackCalls()
+        } catch (_: Throwable) {}
+        val isTargetP2p = serverOption.isTorrent
+        try {
+            // Evict torrent when switching away from P2P to a CDN/HLS stream to eliminate background swarm downloading
+            com.euthopiar.core.p2p.P2pStreamingEngine.stopStream(evictTorrent = !isTargetP2p)
         } catch (_: Throwable) {}
         p2pStateJob?.cancel()
         p2pStateJob = null
@@ -5857,7 +5885,10 @@ class PlayerViewModel(
         fastStartJob?.cancel()
         streamJob?.cancel()
         try {
-            com.euthopiar.core.p2p.P2pStreamingEngine.stopStream()
+            com.euthopiar.core.network.PlayerPlaybackNetworking.cancelLoopbackPlaybackCalls()
+        } catch (_: Throwable) {}
+        try {
+            com.euthopiar.core.p2p.P2pStreamingEngine.stopStream(evictTorrent = true)
         } catch (_: Throwable) {}
         p2pStateJob?.cancel()
         tickerJob?.cancel()

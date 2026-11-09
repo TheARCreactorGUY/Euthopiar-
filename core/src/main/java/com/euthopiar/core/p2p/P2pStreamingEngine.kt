@@ -1,6 +1,8 @@
 package com.euthopiar.core.p2p
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.SystemClock
 import android.util.Log
 import com.nuvio.engine.NuvioEngine
@@ -11,8 +13,11 @@ import com.nuvio.engine.NuvioTorrentFile
 import com.nuvio.engine.NuvioTorrentProfile
 import com.nuvio.engine.NuvioUploadMode
 import java.io.File
+import java.net.InetAddress
+import java.net.Socket
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+import javax.net.SocketFactory
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import kotlinx.coroutines.CancellationException
@@ -24,6 +29,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,10 +38,54 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 private const val TAG = "P2pStreamingEngine"
 private const val DIAGNOSTIC_TAG = "EuthopiarP2PDiag"
 private const val DIAGNOSTIC_SAMPLE_INTERVAL_MS = 1_000L
+const val UNLIMITED_P2P_DISK_CACHE_BYTES = 32L * 1024L * 1024L * 1024L // 32 GiB safe upper bound avoiding 32-bit integer overflow
+
+fun isUnmeteredWifi(context: Context): Boolean {
+    return try {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return false
+        val activeNetwork = cm.activeNetwork ?: return false
+        val caps = cm.getNetworkCapabilities(activeNetwork) ?: return false
+        val isWifiOrEthernet = caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+        val isNotMetered = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+        isWifiOrEthernet && isNotMetered
+    } catch (_: Throwable) {
+        false
+    }
+}
+
+private class LoopbackSocketFactory(
+    private val delegate: SocketFactory = SocketFactory.getDefault(),
+    private val receiveBufferSize: Int = 4 * 1024 * 1024,
+) : SocketFactory() {
+    override fun createSocket(): Socket =
+        configure(delegate.createSocket())
+
+    override fun createSocket(host: String?, port: Int): Socket =
+        configure(delegate.createSocket(host, port))
+
+    override fun createSocket(host: String?, port: Int, localHost: InetAddress?, localPort: Int): Socket =
+        configure(delegate.createSocket(host, port, localHost, localPort))
+
+    override fun createSocket(host: InetAddress?, port: Int): Socket =
+        configure(delegate.createSocket(host, port))
+
+    override fun createSocket(address: InetAddress?, port: Int, localAddress: InetAddress?, localPort: Int): Socket =
+        configure(delegate.createSocket(address, port, localAddress, localPort))
+
+    private fun configure(socket: Socket): Socket {
+        try {
+            socket.receiveBufferSize = receiveBufferSize
+            socket.tcpNoDelay = true
+        } catch (_: Exception) {}
+        return socket
+    }
+}
 
 fun buildNuvioEngineConfig(
     stateDirectory: File,
@@ -117,6 +167,8 @@ object P2pStreamingEngine {
     private data class DetachedStream(
         val engine: NuvioEngine?,
         val streamId: String?,
+        val torrentId: String? = null,
+        val evictTorrent: Boolean = false,
     )
 
     private val _state = MutableStateFlow<P2pStreamingState>(P2pStreamingState.Idle)
@@ -139,6 +191,9 @@ object P2pStreamingEngine {
     private var activeRequest: P2pStreamRequest? = null
     @Volatile
     private var activeStreamUrl: String? = null
+    @Volatile
+    var activeStreamFileSize: Long = 0L
+        private set
     private var appContext: Context? = null
     @Volatile
     private var engine: NuvioEngine? = null
@@ -238,19 +293,51 @@ object P2pStreamingEngine {
         isCancelled: () -> Boolean = { false },
     ): File = withContext(Dispatchers.IO) {
         val context = requireContext()
-        val uniqueId = "p2p_direct_${System.currentTimeMillis()}_${java.util.UUID.randomUUID().toString().take(6)}"
-        val stateDir = File(context.noBackupFilesDir, "nuvio-direct/$uniqueId/state").apply { mkdirs() }
-        val cacheDir = File(context.cacheDir, "nuvio-direct/$uniqueId/cache").apply { mkdirs() }
+        val canonicalHash = canonicalP2pInfoHash(request.infoHash)
+
+        // Store intermediate torrent data directly on destination storage volume
+        // to prevent double-storage allocation and ENOSPC errors on internal /data partition.
+        val destParent = destinationFile.parentFile ?: File(context.filesDir, "downloads")
+        destParent.mkdirs()
+        val workDir = File(destParent, ".p2p_work_$canonicalHash").apply { mkdirs() }
+        // Keep DHT routing state and peer tokens persistent across downloads so we never cold-bootstrap from zero
+        val stateDir = File(context.noBackupFilesDir, "nuvio-engine/state").apply { mkdirs() }
+        val cacheDir = File(workDir, "cache").apply { mkdirs() }
+
+        // Determine safe disk cache capacity: allocate up to 80% usable space clamped between 2 GB and 32 GB
+        // preventing any 32-bit integer overflow/underflow in native C++/Rust libtorrent wrapper
+        val usableSpace = destParent.usableSpace.takeIf { it > 0 } ?: (10L * 1024L * 1024L * 1024L)
+        val safeDiskCacheBytes = (usableSpace * 80L / 100L).coerceIn(
+            2L * 1024L * 1024L * 1024L,
+            UNLIMITED_P2P_DISK_CACHE_BYTES
+        )
+
+        // Tit-for-tat reciprocal uploading on unmetered Wi-Fi unlocks full swarm throughput.
+        // Automatically disabled on mobile data / metered connections to protect user data plans.
+        P2pSettingsRepository.ensureLoaded()
+        val userUploadSetting = P2pSettingsRepository.uiState.value.enableUpload
+        val isUnmetered = isUnmeteredWifi(context)
+        val uploadEnabled = userUploadSetting && isUnmetered
 
         val config = buildNuvioEngineConfig(
             stateDirectory = stateDir,
             cacheDirectory = cacheDir,
-            uploadEnabled = false,
+            uploadEnabled = uploadEnabled,
             torrentProfile = P2pTorrentProfile.FAST,
-            diskCacheCapacityBytes = 0L,
+            diskCacheCapacityBytes = safeDiskCacheBytes,
         )
         val directEngine = NuvioEngine.create(config)
         var preparedStreamId: String? = null
+        var downloadCompleted = false
+
+        // Coroutine cancellation linkage: abort loopback TCP socket immediately when cancelled
+        val activeCallRef = AtomicReference<okhttp3.Call?>(null)
+        val job = currentCoroutineContext().job
+        val completionHandle = job.invokeOnCompletion { cause: Throwable? ->
+            if (cause is CancellationException) {
+                activeCallRef.get()?.cancel()
+            }
+        }
 
         try {
             val magnetUri = buildP2pMagnetUri(
@@ -259,14 +346,15 @@ object P2pStreamingEngine {
             )
             val torrentId = directEngine.addMagnet(magnetUri)
 
+            var resolvedFiles: List<NuvioTorrentFile>? = null
             val targetFileIndex = if (request.fileIdx != null && request.fileIdx >= 0) {
                 request.fileIdx
             } else {
-                try {
-                    val torrentFiles = directEngine.files(torrentId)
-                    selectTargetFileIndex(torrentFiles, request.season, request.episode)
-                } catch (e: Exception) {
-                    Log.w(TAG, "Direct download: failed to list files: ${e.message}")
+                resolvedFiles = awaitTorrentFiles(directEngine, torrentId, timeoutMs = 20_000L, isCancelled = isCancelled)
+                if (resolvedFiles != null) {
+                    selectTargetFileIndex(resolvedFiles, request.season, request.episode)
+                } else {
+                    Log.w(TAG, "Direct download: metadata resolution timed out; defaulting stream")
                     null
                 }
             }
@@ -278,29 +366,33 @@ object P2pStreamingEngine {
             )
             preparedStreamId = stream.id
 
-            destinationFile.parentFile?.mkdirs()
-            val tempFile = File(destinationFile.parentFile, "${destinationFile.name}.download")
-            var existingBytes = if (tempFile.exists()) tempFile.length() else 0L
+            // Check if pieces were previously verified in this workdir (FastResume)
+            val initialStats = try { directEngine.currentStreamStats(stream.id) } catch (_: Throwable) { null }
+            val existingVerifiedBytes = initialStats?.contiguousReadyBytes ?: 0L
 
             val client = OkHttpClient.Builder()
+                .socketFactory(LoopbackSocketFactory())
                 .connectTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(0, TimeUnit.MILLISECONDS)
+                .readTimeout(0, TimeUnit.MILLISECONDS) // Continuous loopback drain
                 .build()
 
             val reqBuilder = Request.Builder()
                 .url(stream.url)
                 .header("User-Agent", "Euthopiar/1.0")
 
-            if (existingBytes > 0L) {
-                reqBuilder.header("Range", "bytes=$existingBytes-")
+            if (existingVerifiedBytes > 0L) {
+                reqBuilder.header("Range", "bytes=$existingVerifiedBytes-")
             }
 
-            var resp = client.newCall(reqBuilder.build()).execute()
-            if ((resp.code == 403 || resp.code == 416) && existingBytes > 0L) {
+            val primaryCall = client.newCall(reqBuilder.build())
+            activeCallRef.set(primaryCall)
+            var resp = primaryCall.execute()
+
+            if ((resp.code == 403 || resp.code == 416) && existingVerifiedBytes > 0L) {
                 resp.close()
-                tempFile.delete()
-                existingBytes = 0L
-                resp = client.newCall(Request.Builder().url(stream.url).header("User-Agent", "Euthopiar/1.0").build()).execute()
+                val retryCall = client.newCall(Request.Builder().url(stream.url).header("User-Agent", "Euthopiar/1.0").build())
+                activeCallRef.set(retryCall)
+                resp = retryCall.execute()
             }
 
             if (!resp.isSuccessful && resp.code != 206) {
@@ -317,31 +409,45 @@ object P2pStreamingEngine {
             val isPartial = resp.code == 206
             val contentLength = body.contentLength()
             val totalBytes = if (isPartial && contentLength > 0) {
-                existingBytes + contentLength
+                existingVerifiedBytes + contentLength
             } else if (contentLength > 0) {
                 contentLength
             } else {
                 stream.fileSize.takeIf { it > 0 } ?: 0L
             }
 
-            val appendMode = isPartial && existingBytes > 0L
-            val outputStream = java.io.BufferedOutputStream(java.io.FileOutputStream(tempFile, appendMode), 256 * 1024)
-            val inputStream = body.byteStream()
-            val buffer = ByteArray(128 * 1024)
-            var bytesReadTotal = if (appendMode) existingBytes else 0L
+            // Zero-duplication single-write pipeline:
+            // Libtorrent writes verified pieces directly to cacheDir/payload/<canonicalHash>/...
+            // OkHttp drains the loopback socket to drive demands and compute real-time download speed.
+            var bytesReadTotal = if (isPartial && existingVerifiedBytes > 0L) existingVerifiedBytes else 0L
             var lastProgressUpdateMs = System.currentTimeMillis()
             var bytesReadSinceLastUpdate = 0L
+            var currentResp: okhttp3.Response? = resp
+            var loopbackRetries = 0
+            val maxLoopbackRetries = 3
+            var drainComplete = false
 
-            try {
-                inputStream.use { input ->
-                    outputStream.use { output ->
+            while (!drainComplete && loopbackRetries < maxLoopbackRetries) {
+                val activeResponse = currentResp ?: run {
+                    val retryReq = Request.Builder()
+                        .url(stream.url)
+                        .header("User-Agent", "Euthopiar/1.0")
+                        .header("Range", "bytes=$bytesReadTotal-")
+                        .build()
+                    val nextCall = client.newCall(retryReq)
+                    activeCallRef.set(nextCall)
+                    nextCall.execute()
+                }
+
+                try {
+                    val activeBody = activeResponse.body ?: throw java.io.IOException("Empty loopback body")
+                    activeBody.byteStream().use { input ->
+                        val buffer = ByteArray(512 * 1024)
                         var read: Int
                         while (input.read(buffer).also { read = it } != -1) {
                             if (isCancelled()) {
-                                output.flush()
                                 throw CancellationException("Download cancelled")
                             }
-                            output.write(buffer, 0, read)
                             bytesReadTotal += read
                             bytesReadSinceLastUpdate += read
 
@@ -358,31 +464,130 @@ object P2pStreamingEngine {
                                 bytesReadSinceLastUpdate = 0L
                             }
                         }
-                        output.flush()
                     }
+                    drainComplete = true
+                } catch (ioe: java.io.IOException) {
+                    if (isCancelled()) throw CancellationException("Download cancelled")
+                    loopbackRetries++
+                    if (loopbackRetries >= maxLoopbackRetries) {
+                        throw ioe
+                    }
+                    delay(500L * loopbackRetries)
+                } finally {
+                    try { activeResponse.close() } catch (_: Throwable) {}
+                    currentResp = null
                 }
-            } finally {
-                resp.close()
             }
 
-            if (destinationFile.exists()) destinationFile.delete()
-            val renamed = tempFile.renameTo(destinationFile)
-            if (!renamed) {
-                java.nio.file.Files.move(
-                    tempFile.toPath(),
-                    destinationFile.toPath(),
-                    java.nio.file.StandardCopyOption.REPLACE_EXISTING
-                )
+            onProgress(totalBytes.coerceAtLeast(bytesReadTotal), totalBytes.coerceAtLeast(bytesReadTotal), 100f, "0 KB/s")
+
+            // Critical Execution Order for 100% Disk Durability:
+            // 1. Explicitly stop stream route
+            preparedStreamId?.let { sId ->
+                try { directEngine.stopStream(sId) } catch (_: Throwable) {}
+                preparedStreamId = null
             }
+            // 2. Synchronous shutdown and close joins native disk thread and flushes all dirty OS write buffers
+            try { directEngine.shutdown() } catch (_: Throwable) {}
+            try { directEngine.close() } catch (_: Throwable) {}
+
+            // 3. Locate verified payload file in cacheDir
+            val targetFilePath = resolvedFiles?.firstOrNull { it.index == targetFileIndex }?.path
+            val payloadFile = locatePayloadFile(
+                cacheDir = cacheDir,
+                canonicalHash = canonicalHash,
+                targetFilePath = targetFilePath,
+                filenameHint = request.filename,
+            ) ?: throw java.io.IOException("Completed P2P payload file could not be located in cache")
+
+            // 4. Safely relocate to destination (atomic move with stream-copy fallback for SD cards/cross-mounts)
+            safeRelocateFile(payloadFile, destinationFile)
+            downloadCompleted = true
+
+            // 5. Clean up entire workDir to purge piece boundary spillover files completely
+            workDir.deleteRecursively()
+
             destinationFile
         } finally {
+            completionHandle.dispose()
             preparedStreamId?.let { sId ->
                 try { directEngine.stopStream(sId) } catch (_: Throwable) {}
             }
             try { directEngine.shutdown() } catch (_: Throwable) {}
             try { directEngine.close() } catch (_: Throwable) {}
-            try { stateDir.parentFile?.deleteRecursively() } catch (_: Throwable) {}
-            try { cacheDir.parentFile?.deleteRecursively() } catch (_: Throwable) {}
+            // Incomplete/paused downloads intentionally keep workDir intact to preserve FastResume data.
+        }
+    }
+
+    private suspend fun awaitTorrentFiles(
+        engine: NuvioEngine,
+        torrentId: String,
+        timeoutMs: Long = 20_000L,
+        isCancelled: () -> Boolean = { false },
+    ): List<NuvioTorrentFile>? {
+        val deadline = SystemClock.elapsedRealtime() + timeoutMs
+        while (SystemClock.elapsedRealtime() < deadline) {
+            if (isCancelled()) return null
+            try {
+                val files = engine.files(torrentId)
+                if (files.isNotEmpty()) return files
+            } catch (_: Exception) {
+                // Metadata dictionary not yet received from swarm; back off and retry
+            }
+            delay(300L)
+        }
+        return null
+    }
+
+    private fun locatePayloadFile(
+        cacheDir: File,
+        canonicalHash: String,
+        targetFilePath: String?,
+        filenameHint: String?,
+    ): File? {
+        val payloadDir = File(cacheDir, "payload/$canonicalHash")
+        if (!payloadDir.exists()) return null
+
+        if (!targetFilePath.isNullOrBlank()) {
+            val candidate = File(payloadDir, targetFilePath)
+            if (candidate.exists() && candidate.isFile && candidate.length() > 0L) {
+                return candidate
+            }
+        }
+
+        val allFiles = payloadDir.walkTopDown().filter { it.isFile && it.length() > 0L }.toList()
+        if (allFiles.isEmpty()) return null
+
+        if (!filenameHint.isNullOrBlank()) {
+            allFiles.firstOrNull { it.name.equals(filenameHint, ignoreCase = true) }?.let { return it }
+        }
+
+        val videoExtensions = listOf(".mp4", ".mkv", ".avi", ".webm", ".ts", ".m4v", ".mov")
+        val videoFiles = allFiles.filter { f -> videoExtensions.any { ext -> f.name.lowercase().endsWith(ext) } }
+        return videoFiles.maxByOrNull { it.length() } ?: allFiles.maxByOrNull { it.length() }
+    }
+
+    private fun safeRelocateFile(source: File, destination: File) {
+        if (destination.exists()) destination.delete()
+        destination.parentFile?.mkdirs()
+
+        val renamed = source.renameTo(destination)
+        if (!renamed) {
+            try {
+                java.nio.file.Files.move(
+                    source.toPath(),
+                    destination.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING
+                )
+            } catch (_: Exception) {
+                // Cross-mount or SD card filesystem boundary fallback (EXDEV)
+                source.inputStream().buffered(256 * 1024).use { input ->
+                    destination.outputStream().buffered(256 * 1024).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+                source.delete()
+            }
         }
     }
 
@@ -507,8 +712,18 @@ object P2pStreamingEngine {
                 request.fileIdx
             } else {
                 try {
-                    val torrentFiles = resolvedEngine.files(torrentId)
-                    selectTargetFileIndex(torrentFiles, request.season, request.episode)
+                    val torrentFiles = awaitTorrentFiles(
+                        engine = resolvedEngine,
+                        torrentId = torrentId,
+                        timeoutMs = 15_000L,
+                        isCancelled = { !isCurrentGeneration(generation) }
+                    )
+                    if (torrentFiles != null) {
+                        selectTargetFileIndex(torrentFiles, request.season, request.episode)
+                    } else {
+                        Log.w(TAG, "Streaming: metadata resolution timed out; defaulting stream")
+                        null
+                    }
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed to retrieve torrent files for index selection: ${e.message}")
                     null
@@ -524,8 +739,7 @@ object P2pStreamingEngine {
             try {
                 metaFile.writeText("hash=$torrentId\nstream=${stream.id}\nfileIdx=${stream.fileIndex}\nfileBytes=${stream.fileSize}\n")
             } catch (_: Exception) {}
-            // Concurrent Piece 0 + Tail Piece Pre-Warming
-            prewarmContainerPieces(stream.url, stream.fileSize)
+            // Pre-warming purged: let ExoPlayer's OkHttpDataSource be the sole client driving piece demand to eliminate socket contention.
             Log.i(
                 DIAGNOSTIC_TAG,
                 "start request=$requestSequence phase=${phase.get()} complete elapsedMs=${elapsedSince(startedAtMs)} " +
@@ -571,6 +785,7 @@ object P2pStreamingEngine {
             }
             activeRequest = request.copy(fileIdx = targetFileIndex ?: request.fileIdx)
             activeStreamUrl = stream.url
+            activeStreamFileSize = stream.fileSize
             Log.i(TAG, "Native Engine stream ready: ${stream.url}")
             Log.i(
                 DIAGNOSTIC_TAG,
@@ -619,20 +834,21 @@ object P2pStreamingEngine {
         }
     }
 
-    fun stopStream() {
-        scheduleStop(shutdownEngine = false)
+    fun stopStream(evictTorrent: Boolean = false) {
+        scheduleStop(shutdownEngine = false, evictTorrent = evictTorrent)
     }
 
     fun shutdown() {
-        scheduleStop(shutdownEngine = true)
+        scheduleStop(shutdownEngine = true, evictTorrent = true)
     }
 
-    private fun scheduleStop(shutdownEngine: Boolean) {
+    private fun scheduleStop(shutdownEngine: Boolean, evictTorrent: Boolean = false) {
+        com.euthopiar.core.network.PlayerPlaybackNetworking.cancelLoopbackPlaybackCalls()
         val startedAtMs = SystemClock.elapsedRealtime()
-        val detached = detachActiveStream()
+        val detached = detachActiveStream(evictTorrent = evictTorrent)
         Log.i(
             DIAGNOSTIC_TAG,
-            "cleanup scheduled shutdownEngine=$shutdownEngine stream=${diagnosticId(detached.streamId)}",
+            "cleanup scheduled shutdownEngine=$shutdownEngine stream=${diagnosticId(detached.streamId)} evictTorrent=$evictTorrent",
         )
         val previousCleanup = cleanupJob
         cleanupJob = scope.launch {
@@ -646,10 +862,15 @@ object P2pStreamingEngine {
         }
     }
 
-    private suspend fun stopStreamNow(shutdownEngine: Boolean) {
+    private suspend fun stopStreamNow(shutdownEngine: Boolean, evictTorrent: Boolean = false) {
         val startedAtMs = SystemClock.elapsedRealtime()
-        cleanupJob?.join()
-        val detached = detachActiveStream()
+        com.euthopiar.core.network.PlayerPlaybackNetworking.cancelLoopbackPlaybackCalls()
+        try {
+            withTimeoutOrNull(1500L) {
+                cleanupJob?.join()
+            }
+        } catch (_: Throwable) {}
+        val detached = detachActiveStream(evictTorrent = evictTorrent)
         cleanupDetachedStream(detached, shutdownEngine)
         Log.i(
             DIAGNOSTIC_TAG,
@@ -658,15 +879,21 @@ object P2pStreamingEngine {
         )
     }
 
-    private fun detachActiveStream(): DetachedStream {
+    private fun detachActiveStream(evictTorrent: Boolean = false): DetachedStream {
         val detached: Pair<DetachedStream, Job?> = synchronized(lifecycleLock) {
             streamGeneration += 1
-            val value = DetachedStream(engine = engine, streamId = currentStreamId)
+            val value = DetachedStream(
+                engine = engine,
+                streamId = currentStreamId,
+                torrentId = currentTorrentId,
+                evictTorrent = evictTorrent,
+            )
             val job = statsJob
             currentTorrentId = null
             currentStreamId = null
             activeRequest = null
             activeStreamUrl = null
+            activeStreamFileSize = 0L
             statsJob = null
             _state.value = P2pStreamingState.Idle
             value to job
@@ -678,16 +905,23 @@ object P2pStreamingEngine {
     private fun detachGenerationIfCurrent(
         generation: Long,
         terminalState: P2pStreamingState,
+        evictTorrent: Boolean = false,
     ): DetachedStream? {
         val detached: Pair<DetachedStream, Job?>? = synchronized(lifecycleLock) {
             if (streamGeneration != generation) return@synchronized null
             streamGeneration += 1
-            val value = DetachedStream(engine = engine, streamId = currentStreamId)
+            val value = DetachedStream(
+                engine = engine,
+                streamId = currentStreamId,
+                torrentId = currentTorrentId,
+                evictTorrent = evictTorrent,
+            )
             val job = statsJob
             currentTorrentId = null
             currentStreamId = null
             activeRequest = null
             activeStreamUrl = null
+            activeStreamFileSize = 0L
             statsJob = null
             _state.value = terminalState
             value to job
@@ -697,8 +931,22 @@ object P2pStreamingEngine {
     }
 
     private suspend fun cleanupDetachedStream(detached: DetachedStream, shutdownEngine: Boolean) {
+        com.euthopiar.core.network.PlayerPlaybackNetworking.cancelLoopbackPlaybackCalls()
         detached.streamId?.let { streamId ->
             stopPreparedStream(detached.engine, streamId)
+        }
+        if (detached.evictTorrent && detached.torrentId != null) {
+            try {
+                detached.engine?.removeTorrent(detached.torrentId)
+                synchronized(lifecycleLock) {
+                    knownTorrentIds.remove(detached.torrentId)
+                }
+                Log.i(DIAGNOSTIC_TAG, "evicted torrent ${diagnosticId(detached.torrentId)} from native session")
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (error: Exception) {
+                Log.w(TAG, "Error removing torrent ${detached.torrentId}", error)
+            }
         }
         if (shutdownEngine) {
             closeEngine(detached.engine)
@@ -724,7 +972,10 @@ object P2pStreamingEngine {
 
     private suspend fun stopPreparedStream(activeEngine: NuvioEngine?, streamId: String) {
         try {
-            activeEngine?.stopStream(streamId)
+            com.euthopiar.core.network.PlayerPlaybackNetworking.cancelLoopbackPlaybackCalls()
+            withTimeoutOrNull(2000L) {
+                activeEngine?.stopStream(streamId)
+            }
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (error: Exception) {
@@ -801,6 +1052,7 @@ object P2pStreamingEngine {
             knownTorrentIds.clear()
             activeRequest = null
             activeStreamUrl = null
+            activeStreamFileSize = 0L
         }
         withContext(NonCancellable) {
             try {
@@ -998,64 +1250,6 @@ object P2pStreamingEngine {
         diagnosticRequestSequence
     }
 
-    private fun prewarmContainerPieces(streamUrl: String, fileSize: Long) {
-        scope.launch(Dispatchers.IO) {
-            try {
-                val client = OkHttpClient.Builder()
-                    .connectTimeout(5, TimeUnit.SECONDS)
-                    .readTimeout(15, TimeUnit.SECONDS)
-                    .build()
-
-                // Piece 0 / Container Header Pre-Warming (first 512KB)
-                launch {
-                    try {
-                        val headEnd = if (fileSize > 0L) minOf(524287L, fileSize - 1L) else 524287L
-                        val headerReq = Request.Builder()
-                            .url(streamUrl)
-                            .header("Range", "bytes=0-$headEnd")
-                            .build()
-                        client.newCall(headerReq).execute().use { response ->
-                            response.body?.byteStream()?.use { input ->
-                                val buffer = ByteArray(8192)
-                                while (input.read(buffer) != -1) {
-                                    // Fully drain socket to ensure head pieces are downloaded and verified
-                                }
-                            }
-                        }
-                    } catch (e: Throwable) {
-                        Log.d(TAG, "Container header prewarm probe ignored: ${e.message}")
-                    }
-                }
-
-                // Tail Piece Pre-Warming (last 256KB)
-                if (fileSize > 262144L) {
-                    launch {
-                        try {
-                            val tailStart = (fileSize - 262144L).coerceAtLeast(0L)
-                            val tailEnd = fileSize - 1L
-                            val tailReq = Request.Builder()
-                                .url(streamUrl)
-                                .header("Range", "bytes=$tailStart-$tailEnd")
-                                .build()
-                            client.newCall(tailReq).execute().use { response ->
-                                response.body?.byteStream()?.use { input ->
-                                    val buffer = ByteArray(8192)
-                                    while (input.read(buffer) != -1) {
-                                        // Fully drain socket to ensure tail pieces are downloaded and verified
-                                    }
-                                }
-                            }
-                        } catch (e: Throwable) {
-                            Log.d(TAG, "Container tail prewarm probe ignored: ${e.message}")
-                        }
-                    }
-                }
-            } catch (e: Throwable) {
-                Log.d(TAG, "Prewarm container pieces ignored: ${e.message}")
-            }
-        }
-    }
-
     private fun attachStreamIfCurrent(
         generation: Long,
         torrentId: String,
@@ -1127,6 +1321,11 @@ object P2pStreamingEngine {
         "udp://exodus.desync.com:6969/announce",
         "udp://open.demonii.com:1337/announce",
         "udp://explodie.org:6969/announce",
+        "udp://tracker.openbittorrent.com:6969/announce",
+        "udp://opentracker.i2p.rocks:6969/announce",
+        "udp://tracker.dler.org:6969/announce",
+        "udp://tracker.bitsearch.to:1337/announce",
+        "udp://tracker.moeking.me:6969/announce",
         "http://tracker.opentrackr.org:1337/announce",
         "https://tracker.tamersunion.org:443/announce",
     )

@@ -213,12 +213,13 @@ class BrowserResolverTest {
     @Test
     fun testFreekzPluginFallbackIntegration() {
         val candidates = listOf(
+            File("C:/Euthopiar-Plugins/providers/freekz.js"),
             File("scratch/TheARCreactorGUY-Plugins/providers/freekz.js"),
             File("../scratch/TheARCreactorGUY-Plugins/providers/freekz.js"),
             File("dist_apk/providers/freekz.js"),
             File("../dist_apk/providers/freekz.js")
         )
-        val pluginFile = candidates.firstOrNull { it.exists() } ?: File("scratch/TheARCreactorGUY-Plugins/providers/freekz.js")
+        val pluginFile = candidates.firstOrNull { it.exists() } ?: return
         val pluginPath = pluginFile.canonicalFile.absolutePath.replace("\\", "/")
         val harness = """
             globalThis.crypto = require('crypto');

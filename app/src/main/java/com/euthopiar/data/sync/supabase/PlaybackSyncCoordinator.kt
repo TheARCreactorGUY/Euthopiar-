@@ -8,8 +8,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Two-Tier Playback Sync Coordinator.
  *
  * Tier 1 (Local): Ultra high-frequency (2-second) Room persistence to guarantee zero progress loss locally.
- * Tier 2 (Cloud): Throttled network replication to Supabase:
- *  - 3-minute coalesced heartbeat during active playback
+ * Tier 2 (Cloud): Event-driven replication to Supabase:
+ *  - 15-minute coalesced emergency heartbeat during uninterrupted active playback (prevents Postgres MVCC table bloat)
  *  - 3-second debounce on seek or pause
  *  - 0-ms immediate flush on player exit or completion
  *
@@ -67,7 +67,7 @@ class PlaybackSyncCoordinator(
         heartbeatJob?.cancel()
         heartbeatJob = scope.launch {
             while (isActive && isSessionActive.get()) {
-                delay(3 * 60 * 1000L) // 3-minute coalesced heartbeat
+                delay(15 * 60 * 1000L) // 15-minute coalesced heartbeat to prevent DB update bloat
                 try {
                     syncManager.syncPlaybackDirty()
                 } catch (_: Exception) {

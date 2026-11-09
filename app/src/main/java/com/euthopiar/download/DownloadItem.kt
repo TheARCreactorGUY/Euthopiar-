@@ -46,3 +46,11 @@ data class StorageStats(
     val freeBytes: Long,
     val totalBytes: Long
 )
+
+sealed class StoragePreflightResult {
+    object Sufficient : StoragePreflightResult()
+    data class InsufficientSpace(val requiredBytes: Long, val availableBytes: Long) : StoragePreflightResult()
+    data class UnsupportedStream(val reason: String = "Unsupported stream format") : StoragePreflightResult()
+
+    val isSuccessful: Boolean get() = this is Sufficient
+}

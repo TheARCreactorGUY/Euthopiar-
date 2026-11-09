@@ -138,3 +138,14 @@ data class CloudUserAccount(
     @SerialName("active_profile_id") val activeProfileId: String = "default_user",
     @SerialName("client_updated_at_ms") val clientUpdatedAtMs: Long = System.currentTimeMillis()
 )
+
+@Serializable
+data class CloudUserAddon(
+    @SerialName("user_id") val userId: String,
+    @SerialName("manifest_url") val manifestUrl: String,
+    @SerialName("addon_type") val addonType: String = "stremio", // "stremio" or "js_repo"
+    val name: String? = null,
+    @SerialName("is_deleted") val isDeleted: Boolean = false,
+    @SerialName("client_updated_at_ms") val clientUpdatedAtMs: Long = System.currentTimeMillis(),
+    @SerialName("updated_at") val updatedAt: String? = null
+)

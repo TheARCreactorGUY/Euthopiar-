@@ -14,8 +14,8 @@ android {
         applicationId = "com.euthopiar"
         minSdk = 26
         targetSdk = 35
-        versionCode = 10
-        versionName = "1.0.9-Stable"
+        versionCode = 11
+        versionName = "1.1.0-Stable"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -81,7 +81,7 @@ ksp {
 
 dependencies {
     implementation(project(":core"))
-    implementation(files(rootProject.file("core/libs/lib-nuvio-engine-android-0.1.4.aar")))
+    implementation(files(rootProject.file("core/libs/lib-nuvio-engine-android-0.1.6.aar")))
 
     // AndroidX & Lifecycle
     implementation(libs.androidx.core.ktx)
