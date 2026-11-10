@@ -37,7 +37,7 @@
 <p align="center">
   <a href="#-screenshots">Screenshots</a> ·
   <a href="#-features">Features</a> ·
-  <a href="#-nuvio-plugins">Nuvio Plugins</a> ·
+  <a href="#-plugin-system">Plugins</a> ·
   <a href="#-install-in-60-seconds">Install</a> ·
   <a href="#-build-from-source">Build</a> ·
   <a href="#-roadmap">Roadmap</a> ·
@@ -123,34 +123,28 @@ Precision 2.0px Lucide iconography, 3-tier dynamic card scaling (`Compact`, `Bal
 
 <br/>
 
-## 🔌 Nuvio Plugins
+## 🔌 Plugin System
 
 <div align="center">
 
-### ✅ Euthopiar works with Nuvio Plugins out of the box!
+### ✅ Modular & Extensible Architecture
 
-**👇 Copy the manifest link and add it inside the app 👇**
+Euthopiar provides a flexible plugin engine supporting custom and community-maintained provider manifests. You can connect your manifest directly within the app:
 
-```
-https://raw.githubusercontent.com/TheARCreactorGUY/Plugins/main/manifest.json
-```
-
-[![Plugin Manifest](https://img.shields.io/badge/🔗%20OPEN%20PLUGIN%20MANIFEST-E50914?style=for-the-badge)](https://raw.githubusercontent.com/TheARCreactorGUY/Plugins/main/manifest.json)
+**Settings → Plugins → Add Manifest**
 
 </div>
 
 ```mermaid
 flowchart LR
-    A([📱 Euthopiar]) -->|adds manifest URL| B[🔌 Nuvio Plugin Manifest]
-    B --> C[(🌐 Third-party sources)]
-    C -->|results| A
-    A --> D[▶️ Watch]
-    A --> E[📥 Download]
+    A([📱 Euthopiar]) -->|configures manifest| B[🔌 Plugin Engine]
+    B --> C[(🌐 Custom Providers)]
+    C -->|metadata & streams| A
+    A --> D[▶️ Player]
     style A fill:#E50914,stroke:#fff,color:#fff
     style B fill:#141414,stroke:#E50914,color:#fff
     style C fill:#141414,stroke:#E50914,color:#fff
     style D fill:#141414,stroke:#3DDC84,color:#fff
-    style E fill:#141414,stroke:#3DDC84,color:#fff
 ```
 
 <br/>
@@ -241,11 +235,11 @@ Yes. Free and open source, no strings attached.
 </details>
 
 <details>
-<summary><b>Where do I get sources?</b></summary>
+<summary><b>How do I configure provider plugins?</b></summary>
 
 <br/>
 
-Euthopiar works with Nuvio-compatible plugins. Add the manifest link from the [Nuvio Plugins](#-nuvio-plugins) section inside the app.
+Euthopiar works with Nuvio-compatible plugins. Add the manifest link in **Settings → Plugins → Add Manifest**.
 
 </details>
 
