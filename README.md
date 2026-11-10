@@ -273,6 +273,8 @@ Not right now. Android is live, and **Android TV** is next on the list.
 
 > Euthopiar does **not** host or store any media. Content is provided by third-party plugins/sources added by the user. Please respect copyright laws in your country.
 
+> *Euthopiar uses Trakt but is not endorsed or certified by Trakt.*
+
 <br/>
 
 ## ☕ Support the Project
