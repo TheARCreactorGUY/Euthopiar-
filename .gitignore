@@ -22,6 +22,8 @@ local.properties
 !app/src/main/ic_launcher-playstore.png
 !screenshots/**
 !App logo/**
+!auth/trakt/index.html
+!privacy/index.html
 cinemaos_line_*.json
 *.html
 *.sqlite
