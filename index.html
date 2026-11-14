@@ -1,0 +1,1224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#000000">
+    <title>Euthopiar: Open-Source Android Cinema &amp; Tracking Client</title>
+    <meta name="description" content="An open-source Android cinema client built on Media3, two-way Trakt & Simkl sync, modular plugins, and offline downloads.">
+    <link rel="icon" type="image/png" href="./App%20logo/Official_Application_logo.png">
+    <link rel="preconnect" href="https://api.fontshare.com">
+    <link rel="preconnect" href="https://cdn.fontshare.com" crossorigin>
+    <link href="https://api.fontshare.com/v2/css?f[]=general-sans@400,500,600,700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #000000;
+            --surface: #0c0c0c;
+            --surface-alt: #161616;
+            --surface-hover: #222222;
+            --ink: #ffffff;
+            --ink-body: #e5e5e5;
+            --muted: #9e9e9e;
+            --accent: #e50914;
+            --pill-bg: #ffffff;
+            --pill-ink: #000000;
+            --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+            /* Strict 5-step type system */
+            --step-small: 0.875rem;
+            --step-body: 1.0625rem;
+            --step-lead: clamp(1.1875rem, 1.1rem + 0.4vw, 1.375rem);
+            --step-head: clamp(1.5rem, 1.2rem + 1.2vw, 2.25rem);
+            --step-display: clamp(2.5rem, 1.7rem + 3vw, 4.125rem);
+            --gutter: clamp(20px, 4vw, 56px);
+            --radius-btn: 999px;
+            --radius-card: 16px;
+        }
+
+        *, *::before, *::after {
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        html {
+            scroll-behavior: smooth;
+            background-color: var(--bg);
+            color: var(--ink);
+            scrollbar-color: rgba(255, 255, 255, 0.22) var(--bg);
+        }
+
+        body {
+            margin: 0;
+            background-color: var(--bg);
+            color: var(--ink-body);
+            font-family: "General Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            font-size: var(--step-body);
+            line-height: 1.58;
+            -webkit-font-smoothing: antialiased;
+            overflow-x: clip;
+        }
+
+        ::selection {
+            background-color: var(--accent);
+            color: #ffffff;
+        }
+
+        a {
+            color: inherit;
+            text-decoration: none;
+            touch-action: manipulation;
+        }
+
+        button {
+            font: inherit;
+            color: inherit;
+            cursor: pointer;
+            border: 0;
+            touch-action: manipulation;
+        }
+
+        a:focus-visible,
+        button:focus-visible,
+        input:focus-visible {
+            outline: 2px solid #ffffff;
+            outline-offset: 3px;
+        }
+
+        /* Solid top bar */
+        .site-header {
+            position: sticky;
+            top: 0;
+            z-index: 30;
+            background-color: var(--bg);
+        }
+
+        .header-inner {
+            max-width: 1320px;
+            margin: 0 auto;
+            padding: 16px var(--gutter);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+        }
+
+        .brand {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            font-weight: 700;
+            font-size: var(--step-lead);
+            color: var(--ink);
+            letter-spacing: -0.015em;
+            white-space: nowrap;
+        }
+
+        .brand img {
+            width: 30px;
+            height: 30px;
+            border-radius: 8px;
+            display: block;
+            object-fit: cover;
+            flex-shrink: 0;
+        }
+
+        .nav-links {
+            display: flex;
+            align-items: center;
+            gap: 24px;
+            font-size: var(--step-small);
+            color: var(--muted);
+            font-weight: 500;
+        }
+
+        .nav-links a {
+            white-space: nowrap;
+            transition: color 160ms var(--ease-out);
+            padding: 6px 2px;
+        }
+
+        .nav-links a:hover {
+            color: var(--ink);
+        }
+
+        .nav-cta {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background-color: var(--pill-bg);
+            color: var(--pill-ink);
+            font-weight: 600;
+            font-size: var(--step-small);
+            padding: 10px 18px;
+            border-radius: var(--radius-btn);
+            white-space: nowrap;
+            flex-shrink: 0;
+            transition: transform 140ms var(--ease-out), opacity 140ms var(--ease-out);
+        }
+
+        .nav-cta:hover {
+            opacity: 0.92;
+        }
+
+        .nav-cta:active {
+            transform: scale(0.97);
+        }
+
+        /* Split Stage: Hero + Scroll Showcase */
+        .split-section {
+            max-width: 1320px;
+            margin: 0 auto;
+            padding: 0 var(--gutter) clamp(56px, 8vh, 88px);
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+            gap: clamp(32px, 5vw, 72px);
+            align-items: start;
+        }
+
+        .split-reading,
+        .split-stage {
+            min-width: 0;
+        }
+
+        .split-reading {
+            padding-top: clamp(32px, 5vh, 64px);
+        }
+
+        .hero-block {
+            padding-bottom: clamp(48px, 7vh, 80px);
+        }
+
+        h1 {
+            margin: 0 0 20px;
+            font-size: var(--step-display);
+            font-weight: 700;
+            line-height: 1.02;
+            letter-spacing: -0.03em;
+            color: var(--ink);
+            max-width: 13ch;
+        }
+
+        .hero-copy {
+            margin: 0 0 28px;
+            font-size: var(--step-lead);
+            color: var(--ink-body);
+            max-width: 44ch;
+            line-height: 1.48;
+        }
+
+        .hero-actions {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .btn-primary {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            background-color: var(--pill-bg);
+            color: var(--pill-ink);
+            font-weight: 600;
+            font-size: var(--step-body);
+            padding: 13px 24px;
+            border-radius: var(--radius-btn);
+            white-space: nowrap;
+            transition: transform 140ms var(--ease-out), opacity 140ms var(--ease-out);
+        }
+
+        .btn-primary:hover {
+            opacity: 0.92;
+        }
+
+        .btn-primary:active {
+            transform: scale(0.97);
+        }
+
+        .btn-secondary {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            background-color: var(--surface-alt);
+            color: var(--ink);
+            font-weight: 500;
+            font-size: var(--step-body);
+            padding: 13px 22px;
+            border-radius: var(--radius-btn);
+            white-space: nowrap;
+            transition: transform 140ms var(--ease-out), background-color 160ms var(--ease-out);
+        }
+
+        .btn-secondary:hover {
+            background-color: var(--surface-hover);
+        }
+
+        .btn-secondary:active {
+            transform: scale(0.97);
+        }
+
+        .meta-line {
+            margin: 22px 0 0;
+            font-size: var(--step-small);
+            color: var(--muted);
+        }
+
+        /* Editorial Open Chapters (no card boxes — crisp whitespace + red bar indicator) */
+        .chapters {
+            display: flex;
+            flex-direction: column;
+            gap: clamp(40px, 6vh, 64px);
+        }
+
+        .chapter {
+            padding: 8px 0 8px 20px;
+            border-left: 3px solid rgba(255, 255, 255, 0.12);
+            transition: border-color 220ms var(--ease-out), opacity 220ms var(--ease-out);
+            cursor: pointer;
+            opacity: 0.72;
+        }
+
+        .chapter.is-active,
+        .chapter:hover {
+            border-left-color: var(--accent);
+            opacity: 1;
+        }
+
+        .chapter h2 {
+            margin: 0 0 10px;
+            font-size: var(--step-head);
+            font-weight: 600;
+            line-height: 1.15;
+            letter-spacing: -0.02em;
+            color: var(--ink);
+        }
+
+        .chapter p {
+            margin: 0;
+            color: var(--ink-body);
+            max-width: 46ch;
+        }
+
+        /* Sticky Right Stage */
+        .split-stage {
+            position: sticky;
+            top: 84px;
+            height: calc(100svh - 108px);
+            min-height: 540px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+            background-color: var(--surface);
+            border-radius: 20px;
+            margin-top: clamp(20px, 3vh, 36px);
+        }
+
+        .stage-tabs {
+            display: flex;
+            flex-wrap: nowrap;
+            justify-content: center;
+            gap: 6px;
+            margin-bottom: 18px;
+            max-width: 100%;
+            overflow-x: auto;
+            scrollbar-width: none;
+        }
+
+        .stage-tabs::-webkit-scrollbar {
+            display: none;
+        }
+
+        .stage-tab {
+            background: transparent;
+            color: var(--muted);
+            font-size: var(--step-small);
+            font-weight: 500;
+            padding: 7px 14px;
+            border-radius: var(--radius-btn);
+            white-space: nowrap;
+            flex-shrink: 0;
+            transition: color 160ms var(--ease-out), background-color 160ms var(--ease-out), transform 140ms var(--ease-out);
+        }
+
+        .stage-tab:hover {
+            color: var(--ink);
+        }
+
+        .stage-tab:active {
+            transform: scale(0.96);
+        }
+
+        .stage-tab[aria-selected="true"] {
+            background-color: var(--pill-bg);
+            color: var(--pill-ink);
+            font-weight: 600;
+        }
+
+        .phone-frame {
+            position: relative;
+            height: min(64svh, 580px);
+            max-width: 100%;
+            aspect-ratio: 460 / 1024;
+            border-radius: 24px;
+            overflow: hidden;
+            background-color: #000000;
+        }
+
+        .phone-frame img {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            opacity: 0;
+            transform: scale(1.015);
+            transition: opacity 260ms var(--ease-out), transform 360ms var(--ease-out);
+            pointer-events: none;
+        }
+
+        .phone-frame img.is-visible {
+            opacity: 1;
+            transform: scale(1);
+        }
+
+        .stage-caption {
+            margin: 14px 0 0;
+            font-size: var(--step-small);
+            color: var(--muted);
+            text-align: center;
+        }
+
+        /* Screen Filmstrip Gallery (raw visible product shots, no card boxes) */
+        .gallery-section {
+            max-width: 1320px;
+            margin: 0 auto;
+            padding: clamp(24px, 4vh, 48px) var(--gutter) clamp(64px, 9vh, 104px);
+        }
+
+        .gallery-head {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 16px;
+            margin-bottom: 28px;
+        }
+
+        .gallery-head h2 {
+            margin: 0;
+            font-size: var(--step-head);
+            font-weight: 700;
+            letter-spacing: -0.025em;
+            line-height: 1.1;
+            color: var(--ink);
+        }
+
+        .gallery-head p {
+            margin: 0;
+            color: var(--muted);
+            font-size: var(--step-body);
+        }
+
+        .gallery-grid {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: clamp(14px, 2vw, 22px);
+        }
+
+        .screen-shot {
+            margin: 0;
+            padding: 0;
+            cursor: pointer;
+            transition: transform 200ms var(--ease-out);
+        }
+
+        .screen-shot:hover {
+            transform: translateY(-4px);
+        }
+
+        .screen-shot img {
+            width: 100%;
+            height: auto;
+            display: block;
+            border-radius: 14px;
+            aspect-ratio: 460 / 1024;
+            object-fit: cover;
+        }
+
+        .screen-shot figcaption {
+            margin-top: 10px;
+            font-size: var(--step-small);
+            font-weight: 500;
+            color: var(--ink-body);
+            text-align: center;
+        }
+
+        /* Full-width Workflow Break Section */
+        .band-section {
+            background-color: var(--surface);
+        }
+
+        .band-inner {
+            max-width: 1320px;
+            margin: 0 auto;
+            padding: clamp(64px, 10vh, 104px) var(--gutter);
+        }
+
+        .workflow-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+            gap: clamp(32px, 5vw, 72px);
+            align-items: start;
+        }
+
+        .workflow-heading {
+            margin: 0 0 16px;
+            font-size: var(--step-head);
+            font-weight: 700;
+            line-height: 1.12;
+            letter-spacing: -0.025em;
+            color: var(--ink);
+            max-width: 18ch;
+        }
+
+        .workflow-lead {
+            margin: 0 0 28px;
+            color: var(--ink-body);
+            max-width: 44ch;
+        }
+
+        .stage-slider-wrap {
+            margin-top: 24px;
+        }
+
+        .stage-range {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 100%;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.16);
+            border-radius: 999px;
+            cursor: pointer;
+        }
+
+        .stage-range::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            background: var(--accent);
+            border: 3px solid #ffffff;
+            cursor: pointer;
+            transition: transform 140ms var(--ease-out);
+        }
+
+        .stage-range::-webkit-slider-thumb:hover {
+            transform: scale(1.1);
+        }
+
+        .stage-stops {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 8px;
+            margin-top: 16px;
+        }
+
+        .stop-btn {
+            text-align: left;
+            background: transparent;
+            padding: 8px 4px;
+            font-size: var(--step-small);
+            color: var(--muted);
+            font-weight: 500;
+            transition: color 160ms var(--ease-out);
+        }
+
+        .stop-btn.is-active {
+            color: var(--ink);
+            font-weight: 600;
+        }
+
+        .workflow-detail {
+            background-color: var(--bg);
+            border-radius: var(--radius-card);
+            padding: clamp(24px, 3vw, 36px);
+        }
+
+        .workflow-detail h3 {
+            margin: 0 0 12px;
+            font-size: var(--step-lead);
+            font-weight: 600;
+            letter-spacing: -0.015em;
+            color: var(--ink);
+        }
+
+        .workflow-detail p {
+            margin: 0 0 24px;
+            color: var(--ink-body);
+        }
+
+        .spec-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: var(--step-small);
+        }
+
+        .spec-table tr:nth-child(odd) {
+            background-color: var(--surface);
+        }
+
+        .spec-table td {
+            padding: 12px 14px;
+        }
+
+        .spec-table td:first-child {
+            color: var(--muted);
+        }
+
+        .spec-table td:last-child {
+            color: var(--ink);
+            font-weight: 500;
+            text-align: right;
+        }
+
+        /* Privacy & FAQ Section */
+        .section-wrap {
+            max-width: 1320px;
+            margin: 0 auto;
+            padding: clamp(64px, 10vh, 104px) var(--gutter);
+        }
+
+        .faq-layout {
+            display: grid;
+            grid-template-columns: minmax(0, 0.36fr) minmax(0, 1fr);
+            gap: clamp(32px, 5vw, 72px);
+            align-items: start;
+        }
+
+        .faq-aside h2 {
+            margin: 0 0 14px;
+            font-size: var(--step-head);
+            font-weight: 700;
+            line-height: 1.15;
+            letter-spacing: -0.02em;
+            color: var(--ink);
+        }
+
+        .faq-aside p {
+            margin: 0 0 22px;
+            color: var(--ink-body);
+            max-width: 32ch;
+        }
+
+        .faq-columns {
+            columns: 2;
+            column-gap: clamp(28px, 4vw, 56px);
+        }
+
+        .faq-item {
+            margin: 0 0 24px;
+            break-inside: avoid;
+            color: var(--ink-body);
+            font-size: var(--step-body);
+            line-height: 1.62;
+        }
+
+        .faq-item strong {
+            color: var(--ink);
+            font-weight: 600;
+        }
+
+        .faq-link {
+            color: #ff4d57;
+            font-weight: 500;
+        }
+
+        .faq-link:hover {
+            text-decoration: underline;
+        }
+
+        /* Closing CTA */
+        .cta-band {
+            background-color: var(--surface);
+        }
+
+        .cta-inner {
+            max-width: 1320px;
+            margin: 0 auto;
+            padding: clamp(64px, 9vh, 100px) var(--gutter);
+            display: flex;
+            flex-wrap: wrap;
+            align-items: flex-end;
+            justify-content: space-between;
+            gap: 32px;
+        }
+
+        .cta-inner h2 {
+            margin: 0 0 12px;
+            font-size: var(--step-head);
+            font-weight: 700;
+            line-height: 1.08;
+            letter-spacing: -0.025em;
+            color: var(--ink);
+            max-width: 16ch;
+        }
+
+        .cta-inner p {
+            margin: 0;
+            color: var(--ink-body);
+            max-width: 44ch;
+        }
+
+        /* Quiet Footer Strip */
+        .site-footer {
+            background-color: var(--bg);
+        }
+
+        .footer-inner {
+            max-width: 1320px;
+            margin: 0 auto;
+            padding: 32px var(--gutter);
+            display: grid;
+            grid-template-columns: 1fr auto 1fr;
+            align-items: center;
+            gap: 20px;
+            font-size: var(--step-small);
+            color: var(--muted);
+        }
+
+        .footer-links {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 24px;
+            color: var(--ink);
+            font-weight: 500;
+        }
+
+        .footer-links a:hover {
+            text-decoration: underline;
+            text-underline-offset: 4px;
+        }
+
+        .footer-notice {
+            text-align: right;
+        }
+
+        /* Scroll reveal transitions */
+        .reveal {
+            transition: opacity 420ms var(--ease-out), transform 420ms var(--ease-out);
+        }
+
+        .reveal.is-pending {
+            opacity: 0;
+            transform: translateY(18px);
+        }
+
+        /* Responsive */
+        @media (max-width: 960px) {
+            .split-section {
+                grid-template-columns: minmax(0, 1fr);
+                gap: 28px;
+            }
+
+            .split-stage {
+                position: relative;
+                top: 0;
+                height: auto;
+                min-height: 0;
+                margin-top: 8px;
+                padding: 20px 16px;
+            }
+
+            .stage-tabs {
+                justify-content: flex-start;
+            }
+
+            .phone-frame {
+                height: auto;
+                width: min(72vw, 300px);
+            }
+
+            .gallery-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .workflow-grid,
+            .faq-layout {
+                grid-template-columns: minmax(0, 1fr);
+            }
+
+            .faq-columns {
+                columns: 1;
+            }
+
+            .footer-inner {
+                grid-template-columns: minmax(0, 1fr);
+                text-align: left;
+            }
+
+            .footer-links {
+                justify-content: flex-start;
+            }
+
+            .footer-notice {
+                text-align: left;
+            }
+        }
+
+        @media (max-width: 820px) {
+            .nav-links {
+                display: none;
+            }
+
+            .stage-stops {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            html {
+                scroll-behavior: auto;
+            }
+            .phone-frame img,
+            .chapter,
+            .btn-primary,
+            .btn-secondary,
+            .reveal,
+            .screen-shot {
+                transition: none;
+                transform: none;
+                opacity: 1;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header class="site-header">
+        <div class="header-inner">
+            <a href="#top" class="brand">
+                <img src="./App%20logo/Official_Application_logo.png" width="30" height="30" alt="Euthopiar logo">
+                <span>Euthopiar</span>
+            </a>
+
+            <nav class="nav-links" aria-label="Primary navigation">
+                <a href="#features">Features</a>
+                <a href="#screens">Screens</a>
+                <a href="#workflow">Workflow</a>
+                <a href="#faq">FAQ</a>
+                <a href="./privacy/">Privacy</a>
+                <a href="https://github.com/TheARCreactorGUY/Euthopiar">GitHub</a>
+            </nav>
+
+            <a class="nav-cta" href="https://github.com/TheARCreactorGUY/Euthopiar/releases/latest">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <polygon points="6 3 20 12 6 21 6 3"></polygon>
+                </svg>
+                <span>Download APK</span>
+            </a>
+        </div>
+    </header>
+
+    <main id="top">
+        <section class="split-section" aria-label="Application overview and screen showcase">
+            <div class="split-reading">
+                <div class="hero-block">
+                    <h1>Cinema without clutter.</h1>
+                    <p class="hero-copy">
+                        An open-source Android media client built with Jetpack Compose and Media3.
+                        Manage your personal watchlist, sync two-way with Trakt and Simkl, and watch smoothly online or offline.
+                    </p>
+                    <div class="hero-actions">
+                        <a class="btn-primary" href="https://github.com/TheARCreactorGUY/Euthopiar/releases/latest">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                <polygon points="6 3 20 12 6 21 6 3"></polygon>
+                            </svg>
+                            <span>Download Latest APK</span>
+                        </a>
+                        <a class="btn-secondary" href="https://github.com/TheARCreactorGUY/Euthopiar">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"></path>
+                            </svg>
+                            <span>View Source</span>
+                        </a>
+                    </div>
+                    <p class="meta-line">Android 8.0+ · Kotlin &amp; Compose · On-device privacy · Zero ads or telemetry</p>
+                </div>
+
+                <div class="chapters" id="features">
+                    <article class="chapter is-active reveal" data-screen="home" tabindex="0">
+                        <h2>Spotlight &amp; Home Feed</h2>
+                        <p>
+                            Full-bleed theatrical hero banners lead into curated catalogs across All, Movies, and TV tabs,
+                            enriched with TMDB artwork and 3-tier dynamic card scaling.
+                        </p>
+                    </article>
+
+                    <article class="chapter reveal" data-screen="trending" tabindex="0">
+                        <h2>Daily Top 10 &amp; Trending</h2>
+                        <p>
+                            Browse ranked daily global charts, IMDb and Rotten Tomatoes rating badges, and genre carousels
+                            rendered on an OLED black canvas with hardware-accelerated scrolling.
+                        </p>
+                    </article>
+
+                    <article class="chapter reveal" data-screen="details" tabindex="0">
+                        <h2>Media3 Player &amp; Seeking</h2>
+                        <p>
+                            Built for instant seeking with a 2.0px Lucide player HUD. HTTP Range acceleration jumps directly
+                            to timestamps while local EBML chunk caching, SubDL captions, Smart Failover, and PiP keep playback smooth.
+                        </p>
+                    </article>
+
+                    <article class="chapter reveal" data-screen="search" tabindex="0">
+                        <h2>Search &amp; Plugin Engine</h2>
+                        <p>
+                            Search across movies, series, and anime from one field by media type, genre, or year,
+                            powered by an isolated QuickJS runtime supporting Stremio and custom provider manifests.
+                        </p>
+                    </article>
+
+                    <article class="chapter reveal" data-screen="library" tabindex="0">
+                        <h2>Trakt, Simkl &amp; Library</h2>
+                        <p>
+                            Authenticate directly with Trakt.tv and Simkl using OAuth 2.0 PKCE. Watchlists, episode resume points,
+                            background MP4/HLS saves, and optional cloud backup stay synchronized without developer servers.
+                        </p>
+                    </article>
+                </div>
+            </div>
+
+            <aside class="split-stage" aria-label="Interactive Android app preview">
+                <div class="stage-tabs" role="tablist" aria-label="App screen selector">
+                    <button class="stage-tab" type="button" role="tab" aria-selected="true" data-screen="home">Home</button>
+                    <button class="stage-tab" type="button" role="tab" aria-selected="false" data-screen="trending">Trending</button>
+                    <button class="stage-tab" type="button" role="tab" aria-selected="false" data-screen="details">Details</button>
+                    <button class="stage-tab" type="button" role="tab" aria-selected="false" data-screen="search">Search</button>
+                    <button class="stage-tab" type="button" role="tab" aria-selected="false" data-screen="library">Library</button>
+                </div>
+
+                <div class="phone-frame" data-ui>
+                    <img src="./screenshots/home.jpg" width="460" height="1024" alt="Euthopiar Home Spotlight interface" class="is-visible" data-screen="home">
+                    <img src="./screenshots/trending.jpg" width="460" height="1024" alt="Euthopiar Top 10 and Trending carousels" data-screen="trending" loading="lazy">
+                    <img src="./screenshots/details.jpg" width="460" height="1024" alt="Euthopiar Media Details with cast, ratings, and download controls" data-screen="details" loading="lazy">
+                    <img src="./screenshots/search.jpg" width="460" height="1024" alt="Euthopiar Unified Search screen" data-screen="search" loading="lazy">
+                    <img src="./screenshots/library.jpg" width="460" height="1024" alt="Euthopiar Library, Saved items, and Offline Downloads" data-screen="library" loading="lazy">
+                </div>
+
+                <p class="stage-caption" id="stage-caption">Home: Featured Spotlight &amp; discovery rows</p>
+            </aside>
+        </section>
+
+        <section class="gallery-section" id="screens" aria-labelledby="screens-title">
+            <div class="gallery-head reveal">
+                <h2 id="screens-title">Inside Euthopiar</h2>
+                <p>Tap any screen to focus it in the preview above.</p>
+            </div>
+            <div class="gallery-grid">
+                <figure class="screen-shot reveal" data-screen="home" tabindex="0">
+                    <img src="./screenshots/home.jpg" width="460" height="1024" alt="Euthopiar Home screen with hero spotlight banner" loading="lazy">
+                    <figcaption>Spotlight Home</figcaption>
+                </figure>
+                <figure class="screen-shot reveal" data-screen="trending" tabindex="0">
+                    <img src="./screenshots/trending.jpg" width="460" height="1024" alt="Euthopiar Trending and Top 10 daily carousels" loading="lazy">
+                    <figcaption>Top 10 Charts</figcaption>
+                </figure>
+                <figure class="screen-shot reveal" data-screen="details" tabindex="0">
+                    <img src="./screenshots/details.jpg" width="460" height="1024" alt="Euthopiar Media Details with IMDb rating and cast row" loading="lazy">
+                    <figcaption>Rich Details</figcaption>
+                </figure>
+                <figure class="screen-shot reveal" data-screen="search" tabindex="0">
+                    <img src="./screenshots/search.jpg" width="460" height="1024" alt="Euthopiar Search page with filters" loading="lazy">
+                    <figcaption>Instant Search</figcaption>
+                </figure>
+                <figure class="screen-shot reveal" data-screen="library" tabindex="0">
+                    <img src="./screenshots/library.jpg" width="460" height="1024" alt="Euthopiar Library saved wall and offline mode toggle" loading="lazy">
+                    <figcaption>Offline Library</figcaption>
+                </figure>
+            </div>
+        </section>
+
+        <section class="band-section" id="workflow" aria-labelledby="workflow-title">
+            <div class="band-inner">
+                <div class="workflow-grid">
+                    <div class="reveal">
+                        <h2 class="workflow-heading" id="workflow-title">Setup in four steps.</h2>
+                        <p class="workflow-lead">
+                            Slide through how Euthopiar runs on your phone with zero centralized backend tracking your watch history.
+                        </p>
+
+                        <div class="stage-slider-wrap">
+                            <input
+                                type="range"
+                                id="workflow-slider"
+                                class="stage-range"
+                                min="0"
+                                max="3"
+                                step="1"
+                                value="0"
+                                aria-label="Setup workflow stage">
+                            <div class="stage-stops">
+                                <button type="button" class="stop-btn is-active" data-step="0">Install APK</button>
+                                <button type="button" class="stop-btn" data-step="1">Add Manifest</button>
+                                <button type="button" class="stop-btn" data-step="2">Link Trakt</button>
+                                <button type="button" class="stop-btn" data-step="3">Watch Offline</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="workflow-detail reveal" id="workflow-panel" data-ui>
+                        <h3 id="wf-step-title">Install the signed Android APK</h3>
+                        <p id="wf-step-desc">
+                            Download the latest open-source release directly from GitHub Releases. Built with native Kotlin and Jetpack Compose for responsive scrolling on Android 8.0 and higher.
+                        </p>
+                        <table class="spec-table">
+                            <tbody>
+                                <tr>
+                                    <td>Distribution</td>
+                                    <td id="wf-spec-1">GitHub Releases (Signed APK)</td>
+                                </tr>
+                                <tr>
+                                    <td>Architecture</td>
+                                    <td id="wf-spec-2">arm64-v8a / Universal APK</td>
+                                </tr>
+                                <tr>
+                                    <td>Telemetry</td>
+                                    <td id="wf-spec-3">None, 100% client-side</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="section-wrap" id="faq" aria-labelledby="faq-title">
+            <div class="faq-layout">
+                <div class="faq-aside reveal">
+                    <h2 id="faq-title">Questions &amp; Answers</h2>
+                    <p>
+                        Everything you need to know about privacy, integrations, and plugin architecture before installing.
+                    </p>
+                    <a class="btn-secondary" href="./privacy/">Read Privacy Policy</a>
+                </div>
+
+                <div class="faq-columns">
+                    <p class="faq-item reveal">
+                        <strong>Is Euthopiar free and open source?</strong> Yes. Euthopiar is completely free, contains zero advertisements, and its source code is publicly auditable on GitHub.
+                    </p>
+                    <p class="faq-item reveal">
+                        <strong>How does Trakt and Simkl synchronization work?</strong> Connections use official OAuth 2.0 PKCE flows directly between your phone and Trakt or Simkl servers. OAuth tokens remain in local private app storage and never pass through third-party proxies.
+                    </p>
+                    <p class="faq-item reveal">
+                        <strong>Does Euthopiar host or distribute video streams?</strong> No. Euthopiar is strictly a media manager and player interface. Users configure their own custom or community provider manifests in Settings under Plugins.
+                    </p>
+                    <p class="faq-item reveal">
+                        <strong>Does Euthopiar track what I watch?</strong> No. Playback progress, watchlist caches, and app preferences stay locally on your device. Read our dedicated <a href="./privacy/" class="faq-link">Privacy Policy</a> for complete details.
+                    </p>
+                    <p class="faq-item reveal">
+                        <strong>Can I save movies and episodes for offline travel?</strong> Yes. The built-in download manager supports background downloads, pause and resume queue recovery, and an Offline-Only toggle in the Library tab.
+                    </p>
+                    <p class="faq-item reveal">
+                        <strong>What Android version is required?</strong> Euthopiar runs on Android 8.0 (Oreo) and higher across modern phones and tablets, with Media3 ExoPlayer hardware decoding and Picture-in-Picture support.
+                    </p>
+                </div>
+            </div>
+        </section>
+
+        <section class="cta-band" aria-labelledby="cta-title">
+            <div class="cta-inner">
+                <div class="reveal">
+                    <h2 id="cta-title">Ready to install Euthopiar?</h2>
+                    <p>Grab the latest Android build on GitHub Releases or inspect the open-source codebase yourself.</p>
+                </div>
+                <div class="hero-actions reveal">
+                    <a class="btn-primary" href="https://github.com/TheARCreactorGUY/Euthopiar/releases/latest">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                            <polygon points="6 3 20 12 6 21 6 3"></polygon>
+                        </svg>
+                        <span>Download Latest Release</span>
+                    </a>
+                    <a class="btn-secondary" href="https://github.com/TheARCreactorGUY/Euthopiar">GitHub Repository</a>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="site-footer">
+        <div class="footer-inner">
+            <span>Euthopiar Open-Source Android Client</span>
+            <nav class="footer-links" aria-label="Footer navigation">
+                <a href="https://github.com/TheARCreactorGUY/Euthopiar">GitHub</a>
+                <a href="https://github.com/TheARCreactorGUY/Euthopiar/releases">Releases</a>
+                <a href="./privacy/">Privacy Policy</a>
+                <a href="https://github.com/TheARCreactorGUY/Euthopiar/issues">Issues</a>
+            </nav>
+            <span class="footer-notice">Euthopiar uses Trakt but is not endorsed or certified by Trakt.</span>
+        </div>
+    </footer>
+
+    <script>
+        (function () {
+            var captions = {
+                home: "Home: Featured Spotlight & discovery rows",
+                trending: "Trending: Daily Top 10 & genre carousels",
+                details: "Details: Cast, IMDb/RT ratings & offline queue",
+                search: "Search: Unified filter across movies, series & anime",
+                library: "Library: Saved wall, downloads & Trakt sync"
+            };
+
+            var tabs = document.querySelectorAll(".stage-tab");
+            var imgs = document.querySelectorAll(".phone-frame img");
+            var chapters = document.querySelectorAll(".chapter");
+            var shots = document.querySelectorAll(".screen-shot");
+            var captionEl = document.getElementById("stage-caption");
+
+            function activateScreen(key) {
+                if (!captions[key]) return;
+                tabs.forEach(function (t) {
+                    t.setAttribute("aria-selected", t.dataset.screen === key ? "true" : "false");
+                });
+                imgs.forEach(function (img) {
+                    img.classList.toggle("is-visible", img.dataset.screen === key);
+                });
+                chapters.forEach(function (ch) {
+                    ch.classList.toggle("is-active", ch.dataset.screen === key);
+                });
+                captionEl.textContent = captions[key];
+            }
+
+            tabs.forEach(function (tab) {
+                tab.addEventListener("click", function () {
+                    activateScreen(tab.dataset.screen);
+                });
+            });
+
+            chapters.forEach(function (ch) {
+                ch.addEventListener("click", function () {
+                    activateScreen(ch.dataset.screen);
+                });
+                ch.addEventListener("keydown", function (e) {
+                    if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        activateScreen(ch.dataset.screen);
+                    }
+                });
+            });
+
+            shots.forEach(function (fig) {
+                fig.addEventListener("click", function () {
+                    activateScreen(fig.dataset.screen);
+                    document.querySelector(".split-stage").scrollIntoView({ behavior: "smooth", block: "center" });
+                });
+                fig.addEventListener("keydown", function (e) {
+                    if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        activateScreen(fig.dataset.screen);
+                        document.querySelector(".split-stage").scrollIntoView({ behavior: "smooth", block: "center" });
+                    }
+                });
+            });
+
+            if ("IntersectionObserver" in window && window.innerWidth > 960) {
+                var screenObserver = new IntersectionObserver(function (entries) {
+                    entries.forEach(function (entry) {
+                        if (entry.isIntersecting) {
+                            activateScreen(entry.target.dataset.screen);
+                        }
+                    });
+                }, { rootMargin: "-35% 0px -45% 0px", threshold: 0.1 });
+
+                chapters.forEach(function (ch) { screenObserver.observe(ch); });
+            }
+
+            /* Progressive scroll reveal */
+            var reveals = document.querySelectorAll(".reveal");
+            if ("IntersectionObserver" in window && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+                reveals.forEach(function (el) {
+                    var rect = el.getBoundingClientRect();
+                    if (rect.top > window.innerHeight * 0.95) {
+                        el.classList.add("is-pending");
+                    }
+                });
+                var revealObserver = new IntersectionObserver(function (entries) {
+                    entries.forEach(function (entry) {
+                        if (entry.isIntersecting) {
+                            entry.target.classList.remove("is-pending");
+                            revealObserver.unobserve(entry.target);
+                        }
+                    });
+                }, { threshold: 0.08 });
+                reveals.forEach(function (el) { revealObserver.observe(el); });
+            }
+
+            /* Interactive 4-stage workflow slider */
+            var workflowSteps = [
+                {
+                    title: "Install the signed Android APK",
+                    desc: "Download the latest open-source release directly from GitHub Releases. Built with native Kotlin and Jetpack Compose for responsive scrolling on Android 8.0 and higher.",
+                    s1: "GitHub Releases (Signed APK)",
+                    s2: "arm64-v8a / Universal APK",
+                    s3: "None, 100% client-side"
+                },
+                {
+                    title: "Configure plugin manifests",
+                    desc: "Open Settings, Plugins, and Add Manifest to connect compatible community or custom JavaScript providers running inside an isolated QuickJS sandbox.",
+                    s1: "Sandboxed QuickJS Engine",
+                    s2: "Stremio & Custom Manifests",
+                    s3: "HTTP Redirect & Smart Failover"
+                },
+                {
+                    title: "Connect Trakt.tv & Simkl via PKCE",
+                    desc: "Authorize your account securely in your browser using OAuth 2.0 PKCE. Playback scrobbles, episode resume points, and watchlists stay synchronized automatically.",
+                    s1: "OAuth 2.0 PKCE (No Client Secret)",
+                    s2: "Two-way Watchlist & History",
+                    s3: "Direct device-to-API sync"
+                },
+                {
+                    title: "Stream or watch offline",
+                    desc: "Media3 ExoPlayer handles instant HTTP Range seeking and EBML local chunk caching, or queue episodes for offline playback anywhere with zero data usage.",
+                    s1: "Media3 ExoPlayer + Range Seek",
+                    s2: "SubDL & Embedded Captions",
+                    s3: "Offline-Only Library Mode"
+                }
+            ];
+
+            var slider = document.getElementById("workflow-slider");
+            var stopBtns = document.querySelectorAll(".stop-btn");
+            var wfTitle = document.getElementById("wf-step-title");
+            var wfDesc = document.getElementById("wf-step-desc");
+            var wf1 = document.getElementById("wf-spec-1");
+            var wf2 = document.getElementById("wf-spec-2");
+            var wf3 = document.getElementById("wf-spec-3");
+
+            function setWorkflowStep(idx) {
+                var s = workflowSteps[idx];
+                if (!s) return;
+                slider.value = idx;
+                wfTitle.textContent = s.title;
+                wfDesc.textContent = s.desc;
+                wf1.textContent = s.s1;
+                wf2.textContent = s.s2;
+                wf3.textContent = s.s3;
+                stopBtns.forEach(function (btn, i) {
+                    btn.classList.toggle("is-active", i === idx);
+                });
+            }
+
+            slider.addEventListener("input", function () {
+                setWorkflowStep(parseInt(slider.value, 10));
+            });
+
+            stopBtns.forEach(function (btn) {
+                btn.addEventListener("click", function () {
+                    setWorkflowStep(parseInt(btn.dataset.step, 10));
+                });
+            });
+        })();
+    </script>
+</body>
+</html>
