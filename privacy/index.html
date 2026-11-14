@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Privacy Policy — Euthopiar</title>
+    <style>
+        :root {
+            --bg: #0b0b0d;
+            --surface: #141418;
+            --border: rgba(255, 255, 255, 0.09);
+            --text: #f3f4f6;
+            --muted: #a1a1aa;
+            --accent: #e50914;
+            --accent-soft: rgba(229, 9, 20, 0.12);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 40px 20px 64px;
+            background-color: var(--bg);
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, Helvetica, Arial, sans-serif;
+            line-height: 1.65;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .container {
+            max-width: 740px;
+            margin: 0 auto;
+        }
+
+        .header {
+            margin-bottom: 32px;
+            padding-bottom: 24px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .brand {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 13px;
+            font-weight: 700;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: var(--accent);
+            margin-bottom: 12px;
+            text-decoration: none;
+        }
+
+        h1 {
+            margin: 0 0 8px;
+            font-size: clamp(26px, 4vw, 34px);
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+
+        .updated {
+            margin: 0;
+            font-size: 14px;
+            color: var(--muted);
+        }
+
+        .lead {
+            margin: 0 0 28px;
+            padding: 18px 20px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            color: #e4e4e7;
+            font-size: 15px;
+        }
+
+        section {
+            margin-bottom: 24px;
+            padding: 22px 24px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+        }
+
+        h2 {
+            margin: 0 0 14px;
+            font-size: 18px;
+            font-weight: 600;
+            color: #ffffff;
+        }
+
+        h3 {
+            margin: 18px 0 8px;
+            font-size: 15px;
+            font-weight: 600;
+            color: #ffffff;
+        }
+
+        p {
+            margin: 0 0 12px;
+            color: #d4d4d8;
+            font-size: 15px;
+        }
+
+        p:last-child {
+            margin-bottom: 0;
+        }
+
+        ul, ol {
+            margin: 8px 0 0;
+            padding-left: 20px;
+            color: #d4d4d8;
+            font-size: 15px;
+        }
+
+        li {
+            margin-bottom: 8px;
+        }
+
+        li:last-child {
+            margin-bottom: 0;
+        }
+
+        strong {
+            color: #ffffff;
+            font-weight: 600;
+        }
+
+        code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 0.88em;
+            padding: 2px 6px;
+            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid var(--border);
+            color: #f4f4f5;
+        }
+
+        a {
+            color: #ff4d57;
+            text-decoration: none;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+
+        .notice {
+            margin-top: 14px;
+            padding: 12px 14px;
+            background: var(--accent-soft);
+            border: 1px solid rgba(229, 9, 20, 0.25);
+            border-radius: 8px;
+            font-size: 14px;
+            color: #fecaca;
+        }
+
+        .footer {
+            margin-top: 32px;
+            padding-top: 20px;
+            border-top: 1px solid var(--border);
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            gap: 12px;
+            font-size: 13px;
+            color: var(--muted);
+        }
+    </style>
+</head>
+<body>
+    <main class="container">
+        <header class="header">
+            <a class="brand" href="https://github.com/TheARCreactorGUY/Euthopiar">EUTHOPIAR</a>
+            <h1>Privacy Policy</h1>
+            <p class="updated">Last updated: November 14, 2026</p>
+        </header>
+
+        <p class="lead">
+            <strong>Euthopiar</strong> is an open-source, client-side Android application designed for media discovery,
+            personal watchlist management, and viewing history tracking. We respect your privacy and operate with
+            strictly on-device storage and direct service connections.
+        </p>
+
+        <section>
+            <h2>1. Information Collection &amp; Storage</h2>
+            <ul>
+                <li><strong>Zero Personal Data Collection:</strong> Euthopiar does not collect, log, sell, or transmit your personal information, IP addresses, or viewing history to any developer-operated analytics or tracking servers.</li>
+                <li><strong>On-Device Storage:</strong> All app preferences, cached artwork metadata, and local playback progress remain strictly on your device's local storage.</li>
+                <li><strong>Open-Source Transparency:</strong> The application source code is publicly auditable on <a href="https://github.com/TheARCreactorGUY/Euthopiar">GitHub</a>.</li>
+            </ul>
+        </section>
+
+        <section>
+            <h2>2. Third-Party Integrations &amp; Authentication</h2>
+            <p>You may optionally connect third-party tracking and metadata services directly from your device:</p>
+
+            <h3>A. Trakt.tv Integration</h3>
+            <ul>
+                <li><strong>Authentication (OAuth 2.0 PKCE):</strong> Connecting your Trakt.tv account uses Trakt's official OAuth 2.0 PKCE flow. Euthopiar never collects or stores your Trakt password.</li>
+                <li><strong>Token Storage:</strong> Your Trakt OAuth access and refresh tokens are stored locally on your device in private application storage solely to authorize requests you initiate.</li>
+                <li><strong>Direct API Requests:</strong> Watchlist synchronization, history updates, and playback scrobbles are transmitted directly from your device to Trakt's official API (<code>https://api.trakt.tv</code>).</li>
+            </ul>
+            <p class="notice">Euthopiar uses Trakt but is not endorsed or certified by Trakt.</p>
+
+            <h3>B. Simkl Integration</h3>
+            <ul>
+                <li><strong>Authentication:</strong> Uses Simkl's official OAuth 2.0 PKCE authorization flow.</li>
+                <li><strong>Data Transmission:</strong> Watch progress and lists sync directly between your device and Simkl's official API.</li>
+            </ul>
+
+            <h3>C. Metadata &amp; Optional Cloud Backup</h3>
+            <ul>
+                <li><strong>TMDB &amp; Subtitles:</strong> Media posters, descriptions, and optional subtitles are fetched directly from third-party APIs (such as The Movie Database) based on titles you browse or watch.</li>
+                <li><strong>Optional User-Initiated Backup:</strong> If you choose to sign in for personal cloud library sync, synchronization runs only for your personal account data.</li>
+            </ul>
+        </section>
+
+        <section>
+            <h2>3. Revoking Access &amp; Deleting Data</h2>
+            <p>You stay in full control of your data and can disconnect at any time:</p>
+            <ol>
+                <li><strong>Inside Euthopiar:</strong> Go to <strong>Settings &rarr; Integrations</strong> and tap <strong>Disconnect</strong> to immediately remove stored OAuth tokens from your device.</li>
+                <li><strong>From Trakt.tv:</strong> Revoke access at any time from your <a href="https://trakt.tv/oauth/authorized_applications">Trakt Connected Apps</a> settings page.</li>
+                <li><strong>Local Data:</strong> Clearing app data or uninstalling Euthopiar removes all locally stored preferences, cache, and tokens.</li>
+            </ol>
+        </section>
+
+        <section>
+            <h2>4. Contact &amp; Inquiries</h2>
+            <p>
+                If you have questions or requests regarding this privacy policy, please open an issue on our
+                <a href="https://github.com/TheARCreactorGUY/Euthopiar/issues">GitHub Issues</a> page.
+            </p>
+        </section>
+
+        <footer class="footer">
+            <span>&copy; 2026 Euthopiar Open Source Project</span>
+            <span><a href="https://github.com/TheARCreactorGUY/Euthopiar">View Repository on GitHub</a></span>
+        </footer>
+    </main>
+</body>
+</html>
